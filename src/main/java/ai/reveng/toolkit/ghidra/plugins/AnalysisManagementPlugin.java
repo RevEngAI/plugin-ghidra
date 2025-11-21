@@ -271,30 +271,59 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 .buildAndInstall(tool);
 	}
 
-	@Override
-	protected void programActivated(Program program) {
-		super.programActivated(program);
-
+    @Override
+    protected void programOpened(Program program) {
+        super.programOpened(program);
+        // When a program is opened, we check if it has an associated analysis (not necessarily finished yet)
         var knownProgram = revengService.getKnownProgram(program);
         if (knownProgram.isPresent()) {
-            log.info("Activated known program: {}", knownProgram.get());
-        } else {
-            // Program is not known yet
-            var maybeBinID = revengService.getBinaryIDFor(program);
-            if (maybeBinID.isEmpty()){
-                Msg.info(this, "Program has no saved binary ID");
-                return;
-            }
-            var binID = maybeBinID.get();
-            AnalysisStatus status = revengService.pollStatus(binID);
-            var analysisID = revengService.getApi().getAnalysisIDfromBinaryID(binID);
-            tool.firePluginEvent(
-                    new RevEngAIAnalysisStatusChangedEvent(
-                            "programActivated",
-                            new GhidraRevengService.ProgramWithBinaryID(program, binID, analysisID),
-                            status));
-        }
+            log.info("Opened known program: {}", knownProgram.get());
+            var analysedProgram = revengService.getAnalysedProgram(program);
+            if (analysedProgram.isPresent()) {
+                // Nothing to do, we already have loaded the function IDs and similar
+                log.info("Loaded analysed program: {}", analysedProgram);
+            } else {
+                // There is an associated program that hasn't been fully loaded yet
+                // This can happen if the analysis was started in a previous session but hadn't finished when closing Ghidra
+                // Either the analysis is finished already now, or we want to actively wait for it to finish
+                log.info("Detected known program that hasn't been fully loaded yet: {}", knownProgram.get());
+                var status = revengService.getApi().status(knownProgram.get().analysisID());
+                switch (status) {
+                    case Complete -> {
+                        tool.firePluginEvent(
+                                new RevEngAIAnalysisStatusChangedEvent(
+                                        "programOpened",
+                                        knownProgram.get(),
+                                        status));
+                    }
+                    case Queued, Processing -> {
+                        // This is the same code as above, but it has the implicit assumption that someone
+                        /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
+                        tool.firePluginEvent(
+                                new RevEngAIAnalysisStatusChangedEvent(
+                                        "programOpened",
+                                        knownProgram.get(),
+                                        status));
+                    }
 
+
+                    case Error -> {
+                        // The analysis failed on the server side
+                        Msg.showError(this, null, "Analysis Error",
+                                "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                    }
+                }
+            }
+        } else {
+            log.info("Opened unknown program: {}", program.getName());
+        }
+    }
+
+    @Override
+	protected void programActivated(Program program) {
+		super.programActivated(program);
+        // Any ComponentProviders that need to refresh based on the current program should be notified here
+        analysisLogComponent.programActivated(program);
 	}
 
     @Override
