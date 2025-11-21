@@ -3,7 +3,6 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 import java.io.FileNotFoundException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import ai.reveng.model.*;
@@ -29,26 +28,27 @@ import ai.reveng.invoker.ApiException;
  */
 public interface TypedApiInterface {
     // Analysis
-    BinaryID analyse(AnalysisOptionsBuilder binHash) throws ApiException;
+//    @Deprecated
+//    BinaryID legacyAnalyse(AnalysisOptionsBuilder binHash) throws ApiException;
 
-
-    default Object delete(BinaryID binID) {
-        throw new UnsupportedOperationException("delete not implemented yet");
+    default AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+        throw new UnsupportedOperationException("analyse not implemented yet");
     }
 
-
-    default AnalysisStatus status(AnalysisID analysisID) {
+    default AnalysisStatus status(AnalysisID analysisID) throws ApiException {
         throw new UnsupportedOperationException("status not implemented yet");
     }
 
-    default List<FunctionInfo> getFunctionInfo(BinaryID binaryID) throws ApiException {
+    default List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
     }
 
-    default List<LegacyAnalysisResult> recentAnalyses() {
-        throw new UnsupportedOperationException("recentAnalyses not implemented yet");
+    @Deprecated
+    default List<FunctionInfo> getFunctionInfo(BinaryID binID) throws ApiException {
+        return getFunctionInfo(getAnalysisIDfromBinaryID(binID));
     }
 
+    @Deprecated
     default AnalysisStatus status(BinaryID binID) throws ApiException {
         throw new UnsupportedOperationException("status not implemented yet");
     };
@@ -56,6 +56,7 @@ public interface TypedApiInterface {
     /**
      * https://docs.reveng.ai/#/Utility/get_search
      */
+    @Deprecated
     default List<LegacyAnalysisResult> search(BinaryHash hash) {
         throw new UnsupportedOperationException("search not implemented yet");
     }
@@ -98,6 +99,7 @@ public interface TypedApiInterface {
     }
 
 
+    @Deprecated
     default AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
         throw new UnsupportedOperationException("getAnalysisIDfromBinaryID not implemented yet");
     }

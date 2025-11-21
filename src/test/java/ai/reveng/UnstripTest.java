@@ -1,5 +1,6 @@
 package ai.reveng;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
@@ -37,13 +38,8 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
             }
 
             @Override
-            public BinaryID analyse(AnalysisOptionsBuilder binHash) {
-                return new BinaryID(1);
-            }
-
-            @Override
-            public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-                return new AnalysisID(binaryID.value());
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
             }
 
             @Override
@@ -52,7 +48,7 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
             }
 
             @Override
-            public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
                 return List.of(new FunctionInfo(new FunctionID(1), "default_function_info_name",  "default_function_info_name_mangled",0x1000L, 10));
             }
         });
@@ -117,13 +113,8 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
             }
 
             @Override
-            public BinaryID analyse(AnalysisOptionsBuilder binHash) {
-                return new BinaryID(1);
-            }
-
-            @Override
-            public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-                return new AnalysisID(binaryID.value());
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
             }
 
             @Override
@@ -132,7 +123,7 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
             }
 
             @Override
-            public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
                 // the function info will return a name, but it will _not_ be the unstripped name
                 return List.of(new FunctionInfo(new FunctionID(1), "default_function_info_name", "default_function_info_name_mangled",0x1000L, 10));
             }

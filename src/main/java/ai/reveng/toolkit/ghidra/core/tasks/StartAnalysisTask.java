@@ -48,9 +48,9 @@ public class StartAnalysisTask extends Task {
 
         monitor.setMessage("Sending Analysis Request");
 
-        GhidraRevengService.ProgramWithBinaryID programWithBinaryID;
+        GhidraRevengService.ProgramWithID programWithID;
         try {
-        programWithBinaryID = reService.startAnalysis(program, options);
+        programWithID = reService.startAnalysis(program, options);
         } catch (ApiException e) {
             monitor.setMessage("Analysis Request Failed");
             return;
@@ -58,7 +58,7 @@ public class StartAnalysisTask extends Task {
 
         tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(
                 "StartAnalysisTask",
-                programWithBinaryID,
+                programWithID,
                 AnalysisStatus.Queued)
         );
     }

@@ -62,6 +62,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
 
     // Cache for binary ID to analysis ID mappings
+    @Deprecated
     private final Map<BinaryID, AnalysisID> binaryToAnalysisCache = new HashMap<>();
 
     // Cache for analysis basic info to avoid repeated API calls
@@ -139,6 +140,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     Not all parameters are required, for example /search?search=sha_256_hash:<hash> only searches for binaries and collection with hashes like <hash>.
 
      */
+    @Deprecated
     public List<LegacyAnalysisResult> search(BinaryHash hash) {
         Map<String, String> params = new HashMap<>();
         params.put("sha256_hash", hash.sha256());
@@ -195,13 +197,13 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public BinaryID analyse(AnalysisOptionsBuilder builder) throws ApiException {
-        var analysisRequest = builder.toAnalysisCreateRequest();
+    public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+        var analysisRequest = options.toAnalysisCreateRequest();
         var result = this.analysisCoreApi.createAnalysis(analysisRequest);
-
-        return new BinaryID(result.getData().getBinaryId());
+        return new AnalysisID(result.getData().getAnalysisId());
     }
 
+    @Deprecated
     @Override
     public AnalysisStatus status(BinaryID binaryID) throws ApiException {
         var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
@@ -212,18 +214,20 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public AnalysisStatus status(AnalysisID analysisID) {
-        var request = requestBuilderForEndpoint("analyses/%s/status".formatted(analysisID.id()))
-                .GET()
-                .build();
-        return AnalysisStatus.valueOf(sendVersion2Request(request).getJsonData().getString("analysis_status"));
+    public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
+        var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
+        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
     }
 
     @Override
-    public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) throws ApiException {
-        var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
+    public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
 
-        var response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+        BaseResponseAnalysisFunctions response = null;
+        try {
+            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+        } catch (ApiException e) {
+            throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+        }
 
         return response.getData().getFunctions().stream().map(f -> (
                 new FunctionInfo(
@@ -340,6 +344,7 @@ public class TypedApiImplementation implements TypedApiInterface {
      * @return the analysis id
      */
     @Override
+    @Deprecated
     public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID){
         // Check cache first
         AnalysisID cachedResult = binaryToAnalysisCache.get(binaryID);
@@ -505,11 +510,19 @@ public class TypedApiImplementation implements TypedApiInterface {
      */
     @Override
     public AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(id.id()))
-                .GET()
-                .build();
-        var response = sendVersion2Request(request);
-        return AnalysisResult.fromJSONObject(this, response.getJsonData());
+        try {
+            var response = analysisCoreApi.getAnalysisBasicInfo(id.id());
+            var data = response.getData();
+            if (data == null) {
+                throw new RuntimeException("Unexpected null data for analysis ID: " + id.id());
+            }
+            return new AnalysisResult(
+                    id,
+                    data
+            );
+        } catch (ApiException e) {
+            throw new IllegalArgumentException("Could not find analysis with ID: " + id.id());
+        }
     }
 
     /**

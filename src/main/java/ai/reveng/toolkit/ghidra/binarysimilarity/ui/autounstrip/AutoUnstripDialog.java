@@ -48,7 +48,7 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
         private record RenameResult(String virtualAddress, String originalName, String newName) {
     }
 
-    public AutoUnstripDialog(PluginTool tool, GhidraRevengService.ProgramWithBinaryID analysisID) {
+    public AutoUnstripDialog(PluginTool tool, GhidraRevengService.ProgramWithID analysisID) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip", true);
 
         this.analysisID = analysisID.analysisID();

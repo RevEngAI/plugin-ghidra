@@ -1,28 +1,20 @@
 import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ComputeTypeInfoTask;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.V2Response;
-import ai.reveng.toolkit.ghidra.core.services.api.mocks.TypeGenerationMock;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionDataTypeStatus;
+import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
+import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
-import ai.reveng.toolkit.ghidra.core.services.api.types.DataTypeList;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
 import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeDependencyException;
 import ghidra.program.model.data.Structure;
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
-import org.json.JSONObject;
 import org.junit.Ignore;
 import org.junit.Test;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -169,4 +161,60 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
 
     }
 
+    public static class TypeGenerationMock extends UnimplementedAPI {
+
+        Set<FunctionID> generatedFunctions = new HashSet<>();
+        @Override
+        public DataTypeList generateFunctionDataTypes(AnalysisID analysisID, List<FunctionID> functionIDS) {
+            var statuses = functionIDS.stream()
+                    .map(id -> new FunctionDataTypeStatus(
+                            false,
+                            Optional.empty(),
+                            "UNKNOWN",
+                            null,
+                            id
+                    ))
+                    .toList();
+            return new DataTypeList(
+                    functionIDS.size(), 0, statuses.toArray(new FunctionDataTypeStatus[0])
+            );
+        }
+
+        @Override
+        public DataTypeList getFunctionDataTypes(List<FunctionID> functionIDS) {
+            for (FunctionID functionID : functionIDS) {
+                if (generatedFunctions.contains(functionID)) continue;
+                generatedFunctions.add(functionID);
+                break;
+            }
+
+            var statuses = functionIDS.stream()
+                    .map(id -> new FunctionDataTypeStatus(
+                            generatedFunctions.contains(id),
+                            Optional.empty(),
+                            generatedFunctions.contains(id) ? "completed" : "UNKNOWN",
+                            null,
+                            id
+                    ))
+                    .toList();
+
+            return new DataTypeList(
+                    functionIDS.size(), 0, statuses.toArray(new FunctionDataTypeStatus[0])
+            );
+        }
+
+        @Override
+        public FunctionDetails getFunctionDetails(FunctionID id) {
+            return new FunctionDetails(
+                    id,
+                    "placeholder_for_%s".formatted(id),
+                    0L,
+                    10L,
+                    new AnalysisID(1337),
+                    "placeholder_for_%s".formatted(id),
+                    new BinaryHash("placeholder_for_%s".formatted(id)),
+                    "demangled_placeholder_for_%s".formatted(id)
+            );
+        }
+    }
 }

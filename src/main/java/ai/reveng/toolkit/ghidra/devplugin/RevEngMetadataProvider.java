@@ -17,7 +17,6 @@ import java.util.Optional;
 public class RevEngMetadataProvider extends ComponentProviderAdapter {
     private final JPanel panel;
     private final JTextField serverField;
-    BinaryID binaryID;
     AnalysisID analysisID;
     FunctionID functionID;
     Function function;
@@ -69,7 +68,6 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
     }
 
     private void clear() {
-        binaryID = null;
         analysisID = null;
         functionID = null;
         function = null;
@@ -82,8 +80,7 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
 
         var kProg = api.getKnownProgram(program);
         kProg.ifPresent(p -> {
-            binaryID = p.binaryID();
-            analysisID = api.getApi().getAnalysisIDfromBinaryID(binaryID);
+            analysisID = p.analysisID();
         });
         refresh();
 
@@ -93,7 +90,6 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
      * Updates the component with the latest information
      */
     private void refresh() {
-        binaryIDField.setText(binaryID == null ? "" : binaryID.toString());
         analysisIDField.setText(analysisID == null ? "" : analysisID.toString());
         functionIDField.setText(functionID == null ? "" : functionID.toString());
         functionField.setText(function == null ? "" : function.toString());

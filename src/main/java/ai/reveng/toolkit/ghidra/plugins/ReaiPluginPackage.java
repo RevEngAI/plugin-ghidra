@@ -22,12 +22,16 @@ public class ReaiPluginPackage extends PluginPackage {
 	public static final String OPTION_KEY_HOSTNAME = PREFIX + "Hostname";
 	public static final String OPTION_KEY_PORTAL_HOSTNAME = PREFIX + "Portal Hostname";
 	public static final String OPTION_KEY_MODEL = PREFIX + "Model";
+    @Deprecated
 	public static final String OPTION_KEY_BINID = PREFIX + "Binary ID";
+    public static final String OPTION_KEY_ANALYSIS_ID = PREFIX + "Analysis ID";
 
     public static final String REAI_OPTIONS_CATEGORY = "RevEngAI Options";
 
 
+    @Deprecated
 	public static final Integer INVALID_BINARY_ID = -1;
+    public static final Integer INVALID_ANALYSIS_ID = -1;
 
 	public static final Icon REVENG_16 = ResourceManager.loadImage("images/reveng_16.png");
 

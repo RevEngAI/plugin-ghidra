@@ -50,7 +50,7 @@ public class DevPlugin extends ProgramPlugin {
 				.onAction(e -> {
 					GhidraRevengService reAIService = tool.getService(GhidraRevengService.class);
 					var api = reAIService.getApi();
-					AnalysisID analysisID = reAIService.getAnalysisIDFor(currentProgram).get();
+					AnalysisID analysisID = reAIService.getAnalysedProgram(currentProgram).orElseThrow().analysisID();
 					var functionMap = reAIService.getFunctionMap(currentProgram);
 					var task = new Task("Generate Signatures", true, true, true) {
 						@Override

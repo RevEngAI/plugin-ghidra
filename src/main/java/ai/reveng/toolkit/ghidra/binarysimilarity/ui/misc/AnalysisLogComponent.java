@@ -105,11 +105,11 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     }
 
     @Override
-    public void consumeLogs(String logs, GhidraRevengService.ProgramWithBinaryID programWithBinaryID) {
-        storedLogs.put(programWithBinaryID.program(), logs);
+    public void consumeLogs(String logs, GhidraRevengService.ProgramWithID programWithID) {
+        storedLogs.put(programWithID.program(), logs);
         // If this is the currently active program, update the log display
 
-        if (activeProgram == programWithBinaryID.program()) {
+        if (activeProgram == programWithID.program()) {
             setLogs(logs);
         }
     }
@@ -117,12 +117,12 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
 
     class AnalysisMonitoringTask extends Task {
 
-        private final GhidraRevengService.ProgramWithBinaryID program;
+        private final GhidraRevengService.ProgramWithID program;
         private final AnalysisLogConsumer logConsumer;
 
-        public AnalysisMonitoringTask(GhidraRevengService.ProgramWithBinaryID programWithBinaryID, AnalysisLogConsumer logConsumer) {
-            super(programWithBinaryID.toString(), true, false, false);
-            program = programWithBinaryID;
+        public AnalysisMonitoringTask(GhidraRevengService.ProgramWithID programWithID, AnalysisLogConsumer logConsumer) {
+            super(programWithID.toString(), true, false, false);
+            program = programWithID;
             this.logConsumer = logConsumer;
         }
 

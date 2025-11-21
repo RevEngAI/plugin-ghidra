@@ -1,6 +1,5 @@
 package ai.reveng;
 
-import ai.reveng.model.FunctionsDetailResponse;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
@@ -9,7 +8,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ghidra.program.database.ProgramBuilder;
-import ghidra.program.model.data.TypeDef;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
@@ -35,7 +33,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         var tool = env.getTool();
         addMockedService(tool, new UnimplementedAPI() {
             @Override
-            public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
                 return List.of(
                         new FunctionInfo(new FunctionID(1), "portal_name_demangled", "portal_name_mangled", 0x4000L, 0x100)
                 );
@@ -92,7 +90,6 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                         0x4000L,
                         0x100L,
                         new AnalysisID(1),
-                        new BinaryID(1),
                         "binary_name",
                         new BinaryHash("dummyhash"),
                         "portal_name_demangled"
@@ -122,9 +119,9 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
 
         waitForSwing();
 
-        var id = new GhidraRevengService.ProgramWithBinaryID(program, new BinaryID(1), new AnalysisID(1));
+        var id = new GhidraRevengService.ProgramWithID(program, new AnalysisID(1));
         var service = defaultTool.getService(GhidraRevengService.class);
-        service.addBinaryIDtoProgramOptions(program, id.binaryID());
+        service.addAnalysisIDtoProgramOptions(program, id.analysisID());
 
         // Register a listener for the results loaded event, to verify that has been fired later
         AtomicBoolean receivedResultsLoadedEvent = new AtomicBoolean(false);

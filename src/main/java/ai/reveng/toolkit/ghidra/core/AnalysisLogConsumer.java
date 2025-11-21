@@ -4,5 +4,5 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 
 public interface AnalysisLogConsumer {
 
-    void consumeLogs(String logs, GhidraRevengService.ProgramWithBinaryID programWithBinaryID);
+    void consumeLogs(String logs, GhidraRevengService.ProgramWithID programWithID);
 }

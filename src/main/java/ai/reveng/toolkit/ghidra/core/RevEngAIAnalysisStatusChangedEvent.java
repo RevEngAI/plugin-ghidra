@@ -21,38 +21,35 @@ import ghidra.program.model.listing.Program;
  */
 public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
     private final AnalysisStatus status;
-    private final GhidraRevengService.ProgramWithBinaryID programWithBinaryID;
+    private final GhidraRevengService.ProgramWithID programWithID;
 
-    public RevEngAIAnalysisStatusChangedEvent(String sourceName, GhidraRevengService.ProgramWithBinaryID programWithBinaryID, AnalysisStatus status) {
+    public RevEngAIAnalysisStatusChangedEvent(String sourceName, GhidraRevengService.ProgramWithID programWithID, AnalysisStatus status) {
         super(sourceName, "RevEngAI Analysis Finished");
-        if (status == null || programWithBinaryID == null) {
+        if (status == null || programWithID == null) {
             throw new IllegalArgumentException("args cannot be null");
         }
         this.status = status;
-        this.programWithBinaryID = programWithBinaryID;
+        this.programWithID = programWithID;
     }
 
     public AnalysisStatus getStatus() {
         return status;
     }
 
-    public GhidraRevengService.ProgramWithBinaryID getProgramWithBinaryID() {
-        return programWithBinaryID;
+    public GhidraRevengService.ProgramWithID getProgramWithBinaryID() {
+        return programWithID;
     }
 
     public Program getProgram() {
-        return programWithBinaryID.program();
+        return programWithID.program();
     }
 
-    public BinaryID getBinaryID() {
-        return programWithBinaryID.binaryID();
-    }
 
     @Override
     public String toString() {
         return "RevEngAIAnalysisStatusChangedEvent{" +
                 "status=" + status +
-                ", programWithBinaryID=" + programWithBinaryID +
+                ", programWithBinaryID=" + programWithID +
                 '}';
     }
 }

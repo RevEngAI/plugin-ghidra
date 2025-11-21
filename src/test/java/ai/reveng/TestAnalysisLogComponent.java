@@ -20,13 +20,12 @@ import static org.junit.Assert.*;
 
 public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTest {
 
-    private GhidraRevengService.ProgramWithBinaryID getPlaceHolderID() throws Exception{
+    private GhidraRevengService.ProgramWithID getPlaceHolderID() throws Exception{
         var builder = new ghidra.program.database.ProgramBuilder("mock", ProgramBuilder._8051, this);
         // Add an example function
         var program = builder.getProgram();
-        return new GhidraRevengService.ProgramWithBinaryID(
+        return new GhidraRevengService.ProgramWithID(
                 program,
-                new BinaryID(1),
                 new AnalysisID(1)
         );
     }
@@ -92,7 +91,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
                     }
 
                     @Override
-                    public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+                    public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
                         return List.of();
                     }
                 }

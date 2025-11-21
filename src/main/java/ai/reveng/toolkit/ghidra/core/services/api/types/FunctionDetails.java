@@ -11,7 +11,6 @@ public record FunctionDetails(
         Long functionVaddr,
         Long functionSize,
         AnalysisID analysisId,
-        BinaryID binaryId,
         String binaryName,
         BinaryHash sha256Hash,
         String demangledName
@@ -25,7 +24,6 @@ public record FunctionDetails(
                 response.getFunctionVaddr(),
                 response.getFunctionSize().longValue(),
                 new AnalysisID(response.getAnalysisId()),
-                new BinaryID(response.getBinaryId()),
                 response.getBinaryName(),
                 new BinaryHash(response.getSha256Hash()),
                 response.getFunctionName()

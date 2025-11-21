@@ -64,7 +64,8 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
                         if ("Analysis ID".equals(columnName)) {
                             LegacyAnalysisResult result = recentAnalysesTable.getModel().getRowObject(row);
                             if (result != null) {
-                                ghidraRevengService.openPortalFor(result);
+                                var analysisID = ghidraRevengService.getApi().getAnalysisIDfromBinaryID(result.binary_id());
+                                ghidraRevengService.openPortalFor(analysisID);
                             }
                         }
                     }
@@ -97,7 +98,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private void pickAnalysis(LegacyAnalysisResult result) {
         var service = tool.getService(GhidraRevengService.class);
         var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-        var programWithID = new GhidraRevengService.ProgramWithBinaryID(program, result.binary_id(), analysisID);
+        var programWithID = new GhidraRevengService.ProgramWithID(program, analysisID);
 
         tool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(

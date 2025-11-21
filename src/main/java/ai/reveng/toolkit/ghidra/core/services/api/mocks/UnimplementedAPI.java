@@ -29,11 +29,6 @@ public class UnimplementedAPI implements TypedApiInterface {
     }
 
     @Override
-    public BinaryID analyse(AnalysisOptionsBuilder binHash) {
-        return new BinaryID(1337);
-    }
-
-    @Override
     public String getAnalysisLogs(AnalysisID analysisID) {
         return "ANALYSIS LOGS";
     }
@@ -60,10 +55,5 @@ public class UnimplementedAPI implements TypedApiInterface {
             throw new RuntimeException(e);
         }
 
-    }
-
-    @Override
-    public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-        return new AnalysisID(1337);
     }
 }

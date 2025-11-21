@@ -48,6 +48,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.OPTION_KEY_ANALYSIS_ID;
+
 
 /**
  * Implements a Ghidra compatible interface on top of the RevEngAI REST API
@@ -65,7 +67,7 @@ import java.util.stream.Collectors;
 public class GhidraRevengService {
     private static final String REAI_FUNCTION_PROP_MAP = "RevEngAI_FunctionID_Map";
     private static final String REAI_FUNCTION_MANGLED_MAP = "RevEngAI_FunctionMangledNames_Map";
-    private Map<BinaryID, AnalysisStatus> statusCache = new HashMap<>();
+    private Map<AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
     private TypedApiInterface api;
     private ApiInfo apiInfo;
@@ -94,25 +96,32 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
-    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) {
-        var status = api.status(programWithBinaryID.analysisID);
+    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID, TaskMonitor monitor) {
+        var status = status(programWithID);
         if (!status.equals(AnalysisStatus.Complete)){
             throw new IllegalStateException("Analysis %s is not complete yet, current status: %s"
-                    .formatted(programWithBinaryID.analysisID(), status));
+                    .formatted(programWithID.analysisID(), status));
         }
-        statusCache.put(programWithBinaryID.binaryID(), AnalysisStatus.Complete);
+        statusCache.put(programWithID.analysisID, AnalysisStatus.Complete);
 
-        var analysedProgram = associateFunctionInfo(programWithBinaryID);
+        var analysedProgram = associateFunctionInfo(programWithID);
         pullFunctionInfoFromAnalysis(analysedProgram, monitor);
         return analysedProgram;
     }
 
-    public ProgramWithBinaryID addBinaryIDtoProgramOptions(Program program, BinaryID binID){
+    @Deprecated
+    public ProgramWithID addBinaryIDtoProgramOptions(Program program, BinaryID binID){
+        var analysisID = api.getAnalysisIDfromBinaryID(binID);
+        return addAnalysisIDtoProgramOptions(program, analysisID);
+    }
+
+    ///  This method is only for mocking purposes
+    public ProgramWithID addAnalysisIDtoProgramOptions(Program program, AnalysisID analysisID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
         program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
-                .setLong(ReaiPluginPackage.OPTION_KEY_BINID, binID.value());
+                .setLong(OPTION_KEY_ANALYSIS_ID, analysisID.id());
         program.endTransaction(transactionId, true);
-        return new ProgramWithBinaryID(program, binID, api.getAnalysisIDfromBinaryID(binID));
+        return new ProgramWithID(program, analysisID);
     }
 
     /**
@@ -122,26 +131,62 @@ public class GhidraRevengService {
      * @param program
      * @return
      */
+    @Deprecated
     public Optional<BinaryID> getBinaryIDFor(Program program) {
-        Optional<BinaryID> binID;
-        try {
-            binID = getBinaryIDfromOptions(program);
-        } catch (InvalidBinaryID e) {
-            Msg.error(this, "Invalid Binary ID found in program options: %s".formatted(e.getMessage()));
+        return getBinaryIDfromOptions(program);
+    }
+
+    private Optional<AnalysisID> getAnalysisIDFor(Program program){
+        var optAnalysisID = getAnalysisIDFromOptions(program);
+        if (optAnalysisID.isPresent()){
+            return optAnalysisID;
+        }
+        // Fallback to getting it from the BinaryID, if one exists
+        var legacyBinaryID = getBinaryIDFor(program);
+        if (legacyBinaryID.isPresent()) {
+            // We have a legacy binary ID, upgrade to AnalysisID
+            var analysisID = api.getAnalysisIDfromBinaryID(legacyBinaryID.get());
+            addAnalysisIDtoProgramOptions(program, analysisID);
+            program.withTransaction("Remove legacy BinaryID from program options", () ->
+                    program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
+                    .setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID)
+            );
+            return Optional.of(analysisID);
+        }
+        return Optional.empty();
+    }
+    private Optional<AnalysisID> getAnalysisIDFromOptions(
+            Program program
+    ) {
+        long bid = program.getOptions(
+                ReaiPluginPackage.REAI_OPTIONS_CATEGORY).getLong(OPTION_KEY_ANALYSIS_ID,
+                ReaiPluginPackage.INVALID_ANALYSIS_ID);
+        if (bid == ReaiPluginPackage.INVALID_ANALYSIS_ID) {
             return Optional.empty();
         }
-        return binID;
+        var analysisID = new AnalysisID((int) bid);
+        if (!statusCache.containsKey(analysisID)) {
+            // Check that it's really valid in the context of the currently configured API
+            try {
+                var status = api.status(analysisID);
+                statusCache.put(analysisID, status);
+            } catch (APIAuthenticationException | ApiException e) {
+                Msg.showError(this, null, "Invalid Analysis ID",
+                        ("The Analysis ID %s stored in the program options is invalid for the currently configured RevEng.AI server %s. "
+                                + "This could be an intermittent error, or you switched the servers")
+                                .formatted(analysisID, this.apiInfo.hostURI()), e);
+                return Optional.empty();
+            }
+            // Now it's certain that it is a valid binary ID
+        }
 
+        return Optional.of(analysisID);
     }
 
-    public Optional<AnalysisID> getAnalysisIDFor(Program program){
-        return getBinaryIDFor(program).map(binID -> api.getAnalysisIDfromBinaryID(binID));
-    }
-
-
-    public Optional<BinaryID> getBinaryIDfromOptions(
+    @Deprecated
+    private Optional<BinaryID> getBinaryIDfromOptions(
             Program program
-    ) throws InvalidBinaryID {
+    ) {
         long bid = program.getOptions(
                 ReaiPluginPackage.REAI_OPTIONS_CATEGORY).getLong(ReaiPluginPackage.OPTION_KEY_BINID,
                 ReaiPluginPackage.INVALID_BINARY_ID);
@@ -149,16 +194,21 @@ public class GhidraRevengService {
             return Optional.empty();
         }
         var binID = new BinaryID((int) bid);
-        if (!statusCache.containsKey(binID)) {
-            // Check that it's really valid in the context of the currently configured API
-            try {
-                var status = api.status(binID);
-                statusCache.put(binID, status);
-            } catch (APIAuthenticationException | ApiException e) {
-                throw new InvalidBinaryID(binID, this.apiInfo);
-            }
-            // Now it's certain that it is a valid binary ID
+        // Check that it's really valid in the context of the currently configured API
+        AnalysisStatus status;
+        try {
+            status = api.status(binID);
+        } catch (APIAuthenticationException | ApiException e) {
+            Msg.showError(this, null, "Invalid Binary ID",
+                    ("The Binary ID %s stored in the program options is invalid for the currently configured RevEng.AI server %s. "
+                            + "This could be an intermittent error, or you switched servers")
+                            .formatted(binID, this.apiInfo.hostURI()), e);
+            return Optional.empty();
         }
+        var analysisID = api.getAnalysisIDfromBinaryID(binID);
+        statusCache.put(analysisID, status);
+
+        // Now it's certain that it is a valid binary ID
 
         return Optional.of(binID);
     }
@@ -167,17 +217,13 @@ public class GhidraRevengService {
     /// This method should only concern itself with associating the FunctionID with the Ghidra Function
     /// This property is immutable within an Analysis: The function ID will never change unless an entirely different
     /// analysis is associated with the program
-    /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(ProgramWithBinaryID,TaskMonitor)]
+    /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(AnalysedProgram ,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private AnalysedProgram associateFunctionInfo(ProgramWithBinaryID knownProgram) {
-        var binID = knownProgram.binaryID();
+    private AnalysedProgram associateFunctionInfo(ProgramWithID knownProgram) {
+        var analysisID = knownProgram.analysisID();
         var program = knownProgram.program();
         List<FunctionInfo> functionInfo = null;
-        try {
-            functionInfo = api.getFunctionInfo(binID);
-        } catch (ApiException e) {
-            throw new RuntimeException(e);
-        }
+        functionInfo = api.getFunctionInfo(analysisID);
         var transactionID = program.startTransaction("Associate Function Info");
 
         // Create the FunctionID map
@@ -227,7 +273,7 @@ public class GhidraRevengService {
         program.endTransaction(transactionID, true);
 
 
-        var analysedProgram = new AnalysedProgram(program, binID, api.getAnalysisIDfromBinaryID(binID));
+        var analysedProgram = new AnalysedProgram(program, analysisID);
         AtomicInteger ghidraFunctionCount = new AtomicInteger();
         program.getFunctionManager().getFunctions(true).forEach(
                 func -> {
@@ -261,7 +307,7 @@ public class GhidraRevengService {
     /// * the type signature of the function
     ///
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
-    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithBinaryID)}
+    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
     ///
     public void pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
         var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
@@ -437,40 +483,29 @@ public class GhidraRevengService {
         return Optional.ofNullable(func);
     }
 
+    @Deprecated
     public List<LegacyAnalysisResult> searchForHash(BinaryHash hash){
         return api.search(hash);
     }
 
-    public boolean isKnownProgram(Program program){
-        var storedBinID = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY).getLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
-        return storedBinID != ReaiPluginPackage.INVALID_BINARY_ID;
-    }
-
     public void removeProgramAssociation(Program program){
-        BinaryID binID;
-        try {
-            var maybebinID = getBinaryIDfromOptions(program);
-            if (maybebinID.isEmpty()){
-                Msg.warn(this, "No binary ID found for program, cannot remove association");
-                return;
-            }
-            binID = maybebinID.get();
-        } catch (InvalidBinaryID e) {
-            // The program has an invalid binary ID, which can happen if the server was changed
-            // This is a very good reason to remove the association, so we unpack the id from the error
-            binID = e.getBinaryID();
-        }
         // Clear all function ID data
-
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
-        statusCache.remove(binID);
-        program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY).setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
+        var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
+        reaiOptions.setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
+        reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
+        // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
+        // because this method should still work even if the analysis ID or binary ID that was associated is invalid
+        statusCache.clear();
+
     }
 
-    /// @deprecated use {@link GhidraRevengService#getAnalysedProgram(Program)} instead
-    @Deprecated
-    public boolean isProgramAnalysed(Program program){
+    /// This method is private to the service, because it only concerns itself with how the service determines
+    /// this internally
+    /// Plugin code that wants to know if a program is known should use {@link #getAnalysedProgram(Program)} and check
+    /// if the result is present
+    private boolean isProgramAnalysed(Program program){
         return program.getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP) != null &&
                 program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP) != null;
     }
@@ -531,6 +566,7 @@ public class GhidraRevengService {
         }
     }
 
+    @Deprecated
     public AnalysisStatus pollStatus(BinaryID bid) {
         try {
             return api.status(bid);
@@ -538,6 +574,22 @@ public class GhidraRevengService {
             throw new RuntimeException(e);
         }
     }
+
+    ///  Use this method if you just have an AnalysisID and it is not clear yet if it can be accessed
+    public AnalysisStatus pollStatus(AnalysisID id) throws ApiException {
+        return api.status(id);
+    }
+
+    public AnalysisStatus status(ProgramWithID program) {
+        try {
+            return api.status(program.analysisID());
+        } catch (ApiException e) {
+            // This should never happen given that `ProgramWithID` guarantees a valid analysis ID
+            throw new RuntimeException(e);
+        }
+    }
+
+
 
     public String decompileFunctionViaAI(FunctionWithID functionWithID, TaskMonitor monitor, AIDecompilationdWindow window) {
         monitor.setMaximum(100 * 50);
@@ -594,32 +646,32 @@ public class GhidraRevengService {
         var finalStatus = waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
         // TODO: Check final status for errors, and do something appropriate on failure
         var analysedProgram = registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
+        if (getKnownProgram(program).isEmpty()){
+            throw new IllegalStateException("Program is not known after finished analysis. Something seriously went wrong.");
+        }
         return analysedProgram;
     }
 
-    /// Get the ProgramWithBinaryID for a known program
+    /// Get the {@link ProgramWithID} for a known program
     /// This only guarantees an associated analysis, not that it is finished
-    public Optional<ProgramWithBinaryID> getKnownProgram(Program program) {
-        return getBinaryIDFor(program).map(binID -> {
-                    var analysisID = api.getAnalysisIDfromBinaryID(binID);
-                    return new ProgramWithBinaryID(program, binID, analysisID);
-                }
-        );
+    public Optional<ProgramWithID> getKnownProgram(Program program) {
+        var analysisID = getAnalysisIDFor(program);
+        return analysisID.map(id -> new ProgramWithID(program, id));
     }
 
-    ///  {@link GhidraRevengService#isProgramAnalysed(Program)} and if so, return an AnalysedProgram
+    /// Get the {@link AnalysedProgram} for a known and analysed program
     public Optional<AnalysedProgram> getAnalysedProgram(Program program) {
         var kProg = getKnownProgram(program);
         if (kProg.isEmpty()){
             return Optional.empty();
         }
         if (isProgramAnalysed(kProg.get().program())){
-            return Optional.of(new AnalysedProgram(kProg.get().program(), kProg.get().binaryID(), kProg.get().analysisID()));
+            return Optional.of(new AnalysedProgram(kProg.get().program(), kProg.get().analysisID()));
         }
         return Optional.empty();
     }
 
-    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(ProgramWithBinaryID program, FunctionID functionID) {
+    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(ProgramWithID program, FunctionID functionID) {
         return api.getFunctionDataTypes(program.analysisID(), functionID).flatMap(FunctionDataTypeStatus::data_types);
     }
 
@@ -820,11 +872,15 @@ public class GhidraRevengService {
     }
 
     public void openPortalFor(AnalysisResult analysisResult) {
-        openPortal("analyses", String.valueOf(analysisResult.analysisID().id()));
+        openPortalFor(analysisResult.analysisID());
     }
 
-    public void openPortalFor(LegacyAnalysisResult analysisResult) {
-        openPortal("analyses", String.valueOf(analysisResult.binary_id().value()));
+    public void openPortalFor(ProgramWithID programWithID) {
+        openPortalFor(programWithID.analysisID());
+    }
+
+    public void openPortalFor(AnalysisID analysisID) {
+        openPortal("analyses", String.valueOf(analysisID.id()));
     }
 
     public void openPortal(String... subPath) {
@@ -889,7 +945,7 @@ public class GhidraRevengService {
      */
     public AnalysisStatus waitForFinishedAnalysis(
             TaskMonitor monitor,
-            ProgramWithBinaryID programWithID,
+            ProgramWithID programWithID,
             @Nullable AnalysisLogConsumer logger,
             @Nullable PluginTool tool
 
@@ -899,7 +955,7 @@ public class GhidraRevengService {
         // TODO: In the future this can be made smarter and e.g. wait longer if the analysis log hasn't changed
         AnalysisStatus lastStatus = null;
         while (true) {
-            AnalysisStatus currentStatus = this.api.status(programWithID.analysisID());
+            AnalysisStatus currentStatus = this.status(programWithID);
             if (currentStatus != AnalysisStatus.Queued) {
                 // Analysis log endpoint only starts to return data after the analysis is processing
                 String logs = this.getAnalysisLog(programWithID.analysisID());
@@ -930,9 +986,9 @@ public class GhidraRevengService {
         }
     }
 
-    public ProgramWithBinaryID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
-        var binaryID = api.analyse(analysisOptionsBuilder);
-        return addBinaryIDtoProgramOptions(program, binaryID);
+    public ProgramWithID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
+        var analysisID = api.analyse(analysisOptionsBuilder);
+        return addAnalysisIDtoProgramOptions(program, analysisID);
     }
 
     public Map<GhidraFunctionMatch, BoxPlot> getNameScores(java.util.Collection<GhidraFunctionMatch> values) {
@@ -1039,9 +1095,8 @@ public class GhidraRevengService {
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished
     /// The id of this should also be stored in the program options, but this is currently not enforced yet to allow easier testing
-    public record ProgramWithBinaryID(
+    public record ProgramWithID(
             Program program,
-            BinaryID binaryID,
             AnalysisID analysisID
     ){}
 
@@ -1056,18 +1111,16 @@ public class GhidraRevengService {
     public static class AnalysedProgram {
 
         private final Program program;
-        private final BinaryID binaryID;
         private final AnalysisID analysisID;
 
 
-        /// The constructor is private to enforce the use of the static factory method and from the outer class
+        /// The constructor is private to enforce that only the GhidraRevengService class
+        /// can create instances of this class, ensuring the guarantees hold
         private AnalysedProgram(
                 Program program,
-                BinaryID binaryID,
                 AnalysisID analysisID
         ) {
             this.program = program;
-            this.binaryID = binaryID;
             this.analysisID = analysisID;
 
         }
@@ -1086,13 +1139,6 @@ public class GhidraRevengService {
                 throw new IllegalStateException("Function ID property map not found for supposedly known program %s".formatted(program.program().getName()));
             }
             return map;
-        }
-
-        public static AnalysedProgram fromAnalysisResult(LegacyAnalysisResult analysisResult, Program program) {
-            if (analysisResult.status() != AnalysisStatus.Complete) {
-                throw new IllegalArgumentException("AnalysisResult must have status Complete to create ProgramWithBinaryID");
-            }
-            return new AnalysedProgram(program, analysisResult.binary_id(), analysisResult.analysis_id());
         }
 
         /// Only returns Optional.Empty if the function is not known on the server (e.g. because it's a thunk)

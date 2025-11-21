@@ -77,7 +77,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
         // If no program, or not attached to a complete analysis, do not trigger location change events
         var program = loc.getProgram();
-        if (program == null || !apiService.isKnownProgram(program) || !apiService.isProgramAnalysed(program)) {
+        if (program == null || apiService.getAnalysedProgram(program).isEmpty()) {
             return;
         }
 
@@ -119,7 +119,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .enabledWhen(context -> {
                             var program = tool.getService(ProgramManager.class).getCurrentProgram();
                             if (program != null) {
-                                return apiService.isKnownProgram(program);
+                                return apiService.getKnownProgram(program).isPresent();
                             } else {
                                 return false;
                             }
@@ -151,7 +151,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .enabledWhen(context -> {
                             var program = tool.getService(ProgramManager.class).getCurrentProgram();
                             if (program != null) {
-                                return apiService.isKnownProgram(program);
+                                return apiService.getAnalysedProgram(program).isPresent();
                             } else {
                                 return false;
                             }
