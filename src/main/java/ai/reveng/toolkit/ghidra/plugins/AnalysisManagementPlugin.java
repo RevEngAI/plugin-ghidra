@@ -44,6 +44,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskBuilder;
+import ghidra.util.task.TaskMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -308,7 +309,9 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 // If the analysis is complete, we refresh the function signatures from the server
                 var program = analysisEvent.getProgramWithBinaryID();
                 try {
-                    revengService.registerFinishedAnalysisForProgram(program);
+                    // TODO: Can we get a better taskmonitor here?
+                    // Or should we never do something here that warrants a monitor in the first place?
+                    revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
                 } catch (Exception e) {
                     Msg.error(this, "Error registering finished analysis for program " + program, e);
                     return;
