@@ -3,7 +3,6 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.CollectionSelectionPanel;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.BinarySelectionPanel;
@@ -28,7 +27,7 @@ import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_
 
 public abstract class AbstractFunctionMatchingDialog extends RevEngDialogComponentProvider {
     protected final GhidraRevengService revengService;
-    protected final ProgramWithBinaryID programWithBinaryID;
+    protected final GhidraRevengService.AnalysedProgram analyzedProgram;
 
     // UI Components
     protected JPanel contentPanel;
@@ -77,16 +76,16 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected AbstractFunctionMatchingDialog(String title, Boolean isModal, GhidraRevengService revengService,
-                                           ProgramWithBinaryID programWithBinaryID) {
+                                           GhidraRevengService.AnalysedProgram analyzedProgram) {
         super(title, isModal);
         this.revengService = revengService;
-        this.programWithBinaryID = programWithBinaryID;
+        this.analyzedProgram = analyzedProgram;
         this.taskMonitorComponent = new TaskMonitorComponent(false, true);
         this.functionMatchResults = new ArrayList<>();
         this.filteredFunctionMatchResults = new ArrayList<>();
 
         try {
-            this.analysisBasicInfo = revengService.getBasicDetailsForAnalysis(programWithBinaryID.analysisID());
+            this.analysisBasicInfo = revengService.getBasicDetailsForAnalysis(analyzedProgram.analysisID());
         } catch (Exception e) {
             JOptionPane.showMessageDialog(null,
                     "Failed to fetch analysis details: " + e.getMessage(),
@@ -126,7 +125,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected void processFunctionMatchingResults(FunctionMatchingBatchResponse response) {
         functionMatchResults.clear();
 
-        var functionMap = revengService.getFunctionMap(programWithBinaryID.program());
+        var functionMap = revengService.getFunctionMap(analyzedProgram.program());
 
         response.getMatches().forEach(matchResult -> {
             // Process each matched function in this result
@@ -807,7 +806,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected void importFunctionNames(List<FunctionMatchResult> functionMatches) {
-        var program = programWithBinaryID.program();
+        var program = analyzedProgram.program();
         var mangledNameMapOpt = revengService.getFunctionMangledNamesMap(program);
         var functionMap = revengService.getFunctionMap(program);
 

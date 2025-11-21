@@ -13,7 +13,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
@@ -95,22 +94,25 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
-    public void registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) throws ApiException {
+    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) throws ApiException {
+        var status = api.status(programWithBinaryID.analysisID);
+        if (!status.equals(AnalysisStatus.Complete)){
+            throw new IllegalStateException("Analysis %s is not complete yet, current status: %s"
+                    .formatted(programWithBinaryID.analysisID(), status));
+        }
         statusCache.put(programWithBinaryID.binaryID(), AnalysisStatus.Complete);
 
-        // Add the binary to the program before loading the function info. Checking that a function is present requires
-        // the binary ID to be present in the program options.
-        addBinaryIDtoProgramOptions(programWithBinaryID.program(), programWithBinaryID.binaryID());
-
-        associateFunctionInfo(programWithBinaryID.program(), programWithBinaryID.binaryID());
-        pullFunctionInfoFromAnalysis(programWithBinaryID, monitor);
+        var analysedProgram = associateFunctionInfo(programWithBinaryID);
+        pullFunctionInfoFromAnalysis(analysedProgram, monitor);
+        return analysedProgram;
     }
 
-    public void addBinaryIDtoProgramOptions(Program program, BinaryID binID){
+    public ProgramWithBinaryID addBinaryIDtoProgramOptions(Program program, BinaryID binID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
         program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
                 .setLong(ReaiPluginPackage.OPTION_KEY_BINID, binID.value());
         program.endTransaction(transactionId, true);
+        return new ProgramWithBinaryID(program, binID, api.getAnalysisIDfromBinaryID(binID));
     }
 
     /**
@@ -167,7 +169,9 @@ public class GhidraRevengService {
     /// analysis is associated with the program
     /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(ProgramWithBinaryID,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private void associateFunctionInfo(Program program, BinaryID binID) throws ApiException {
+    private AnalysedProgram associateFunctionInfo(ProgramWithBinaryID knownProgram) throws ApiException {
+        var binID = knownProgram.binaryID();
+        var program = knownProgram.program();
         List<FunctionInfo> functionInfo = api.getFunctionInfo(binID);
         var transactionID = program.startTransaction("Associate Function Info");
 
@@ -214,28 +218,34 @@ public class GhidraRevengService {
             ghidraBoundariesMatchedFunction++;
         }
 
+
+        program.endTransaction(transactionID, true);
+
+
+        var analysedProgram = new AnalysedProgram(program, binID, api.getAnalysisIDfromBinaryID(binID));
         AtomicInteger ghidraFunctionCount = new AtomicInteger();
         program.getFunctionManager().getFunctions(true).forEach(
                 func -> {
                     if (!func.isExternal() && !func.isThunk()){
                         ghidraFunctionCount.getAndIncrement();
 
-                        if (getFunctionIDFor(func).isEmpty()) {
+                        if (analysedProgram.getIDForFunction(func).isEmpty()) {
                             Msg.info(this, "Function %s not found in RevEng.AI".formatted(func.getSymbol().getName(false)));
                         }
                     }
                 }
         );
-        program.endTransaction(transactionID, true);
-
         // Print summary
         Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary",
-            ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
-                "boundaries. For better results, please start a new analysis from this plugin.").formatted(
-                functionInfo.size(),
-                ghidraBoundariesMatchedFunction,
-                ghidraFunctionCount.get()
-        ));
+                ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
+                        "boundaries. For better results, please start a new analysis from this plugin.").formatted(
+                        functionInfo.size(),
+                        ghidraBoundariesMatchedFunction,
+                        ghidraFunctionCount.get()
+                ));
+
+        return analysedProgram;
+
     }
 
 
@@ -246,12 +256,12 @@ public class GhidraRevengService {
     /// * the type signature of the function
     ///
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
-    /// The initial association happens in {@link #associateFunctionInfo(Program, BinaryID)}
+    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithBinaryID)}
     ///
-    public void pullFunctionInfoFromAnalysis(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) {
-        var transactionId = programWithBinaryID.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
+    public void pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
+        var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
 
-        StringPropertyMap mangledNameMap = programWithBinaryID.program()
+        StringPropertyMap mangledNameMap = analysedProgram.program()
                 .getUsrPropertyManager()
                 .getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
 
@@ -260,7 +270,7 @@ public class GhidraRevengService {
         ghidraRenamedFunctions = 0;
 
         int failedRenames = 0;
-        for (Function function : programWithBinaryID.program().getFunctionManager().getFunctions(true)) {
+        for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
             if (monitor.isCancelled()) {
                 continue;
             }
@@ -271,14 +281,14 @@ public class GhidraRevengService {
                 continue;
             }
 
-            var fID = getFunctionIDFor(function);
+            var fID = analysedProgram.getIDForFunction(function);
             if (fID.isEmpty()) {
                 Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
                 continue;
             }
 
             // Get the current name on  the server side
-            FunctionDetails details = api.getFunctionDetails(fID.get());
+            FunctionDetails details = api.getFunctionDetails(fID.get().functionID);
             var serverMangledName = details.functionName();
 
             // Extract the mangled name from Ghidra
@@ -295,8 +305,8 @@ public class GhidraRevengService {
 
             // Get the type information on the server side
             Optional<FunctionDefinitionDataType> functionSignatureMessageOpt = api.getFunctionDataTypes(
-                            programWithBinaryID.analysisID(),
-                            fID.get()
+                            analysedProgram.analysisID(),
+                            fID.get().functionID()
                     )
                     // Try getting the data types if they are available
                     .flatMap(FunctionDataTypeStatus::data_types)
@@ -333,7 +343,7 @@ public class GhidraRevengService {
                         if (!function.getSymbol().getName(false).equals(serverMangledName)) {
                             Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
                             var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
-                                    .applyTo(programWithBinaryID.program());
+                                    .applyTo(analysedProgram.program());
                             if (success) {
                                 ghidraRenamedFunctions++;
                             } else {
@@ -352,7 +362,7 @@ public class GhidraRevengService {
                                 function.getEntryPoint(),
                                 functionSignatureMessageOpt.get(),
                                 SourceType.ANALYSIS
-                        ).applyTo(programWithBinaryID.program(), monitor);
+                        ).applyTo(analysedProgram.program(), monitor);
                         if (success) {
                             ghidraRenamedFunctions++;
                         } else {
@@ -366,7 +376,7 @@ public class GhidraRevengService {
 
         }
         // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-        programWithBinaryID.program().endTransaction(transactionId, ghidraRenamedFunctions > 0);
+        analysedProgram.program().endTransaction(transactionId, ghidraRenamedFunctions > 0);
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
                     ("Failed to update %d functions from RevEng.AI. Please check the error log for details.").formatted(
@@ -377,26 +387,16 @@ public class GhidraRevengService {
 
     /**
      * Get the FunctionID for a Ghidra Function, if there is one
-     *
      * There are two cases where a function ID is missing:
      * 1. Either the whole program has not been analyzed
-     * 2. Or the function was not found as part of the analysis on the server
      * (because its bounds were not included when the analysis was triggered)
+     *
+     * @deprecated Use {@link AnalysedProgram#getIDForFunction(Function)} instead. It forces the caller to prove that they know that the {@link Program} is indeed known on the server and associated by having to provide a {@link AnalysedProgram} instance.
      */
+    @Deprecated
     public Optional<FunctionID> getFunctionIDFor(Function function){
-        return getKnownProgram(function.getProgram())
-                .flatMap(knownProgram -> getFunctionIDFor(knownProgram, function));
-    }
-
-    public Optional<FunctionID> getFunctionIDFor(ProgramWithBinaryID knownProgram, Function function){
-        Optional<LongPropertyMap> functionIDMap = getFunctionIDPropertyMap(knownProgram);
-        return functionIDMap
-                .flatMap(map -> Optional.ofNullable(map.get(function.getEntryPoint())))
-                .map(FunctionID::new);
-    }
-
-    private Optional<LongPropertyMap> getFunctionIDPropertyMap(ProgramWithBinaryID program){
-        return Optional.ofNullable(program.program().getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP));
+        return getAnalysedProgram(function.getProgram())
+                .flatMap(knownProgram -> knownProgram.getIDForFunction(function).map(fidWithStatus -> fidWithStatus.functionID));
     }
 
     public Optional<StringPropertyMap> getFunctionMangledNamesMap(Program program) {
@@ -464,13 +464,11 @@ public class GhidraRevengService {
         program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY).setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
     }
 
+    /// @deprecated use {@link GhidraRevengService#getAnalysedProgram(Program)} instead
+    @Deprecated
     public boolean isProgramAnalysed(Program program){
         return program.getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP) != null &&
                 program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP) != null;
-    }
-
-    public boolean isKnownFunction(Function function){
-        return getFunctionIDFor(function).isPresent();
     }
 
     public static List<FunctionBoundary> exportFunctionBoundaries(Program program){
@@ -537,11 +535,11 @@ public class GhidraRevengService {
         }
     }
 
-    public String decompileFunctionViaAI(Function function, TaskMonitor monitor, AIDecompilationdWindow window) {
+    public String decompileFunctionViaAI(FunctionWithID functionWithID, TaskMonitor monitor, AIDecompilationdWindow window) {
         monitor.setMaximum(100 * 50);
-        var fID = getFunctionIDFor(function)
-                .orElseThrow(() -> new RuntimeException("Function has no associated FunctionID"));
         // Check if there is an existing process already, because the trigger API will fail with 400 if there is
+        var fID = functionWithID.functionID;
+        var function = functionWithID.function;
         if (api.pollAIDecompileStatus(fID).status().equals("uninitialised")){
             // Trigger the decompilation
             api.triggerAIDecompilationForFunctionID(fID);
@@ -585,21 +583,36 @@ public class GhidraRevengService {
 
     ///  This method analyses a program by uploading it (if necessary), triggering an analysis, and _blocking_
     /// until the analysis is complete. This is for scripts and tests, and must not be used on the UI thread
-    public ProgramWithBinaryID analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
+    /// It does not upload the program, this must be done beforehand, and the hash must be associated via {@link AnalysisOptionsBuilder#hash(BinaryHash)}
+    public AnalysedProgram analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
         // Check if we are on the swing thread
         var programWithBinaryID = startAnalysis(program, analysisOptionsBuilder);
         var finalStatus = waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
         // TODO: Check final status for errors, and do something appropriate on failure
-        registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
-        return programWithBinaryID;
+        var analysedProgram = registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
+        return analysedProgram;
     }
 
+    /// Get the ProgramWithBinaryID for a known program
+    /// This only guarantees an associated analysis, not that it is finished
     public Optional<ProgramWithBinaryID> getKnownProgram(Program program) {
         return getBinaryIDFor(program).map(binID -> {
                     var analysisID = api.getAnalysisIDfromBinaryID(binID);
                     return new ProgramWithBinaryID(program, binID, analysisID);
                 }
         );
+    }
+
+    ///  {@link GhidraRevengService#isProgramAnalysed(Program)} and if so, return an AnalysedProgram
+    public Optional<AnalysedProgram> getAnalysedProgram(Program program) {
+        var kProg = getKnownProgram(program);
+        if (kProg.isEmpty()){
+            return Optional.empty();
+        }
+        if (isProgramAnalysed(kProg.get().program())){
+            return Optional.of(new AnalysedProgram(kProg.get().program(), kProg.get().binaryID(), kProg.get().analysisID()));
+        }
+        return Optional.empty();
     }
 
     public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(ProgramWithBinaryID program, FunctionID functionID) {
@@ -915,9 +928,7 @@ public class GhidraRevengService {
 
     public ProgramWithBinaryID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
         var binaryID = api.analyse(analysisOptionsBuilder);
-        AnalysisID analysisID = api.getAnalysisIDfromBinaryID(binaryID);
-        addBinaryIDtoProgramOptions(program, binaryID);
-        return new ProgramWithBinaryID(program, binaryID, analysisID);
+        return addBinaryIDtoProgramOptions(program, binaryID);
     }
 
     public Map<GhidraFunctionMatch, BoxPlot> getNameScores(java.util.Collection<GhidraFunctionMatch> values) {
@@ -1020,4 +1031,86 @@ public class GhidraRevengService {
     public void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
         api.batchRenameFunctions(functionsList);
     }
+
+    /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
+    /// This only guarantees that the program has an associated analysis, but not that the analysis is finished
+    /// The id of this should also be stored in the program options, but this is currently not enforced yet to allow easier testing
+    public record ProgramWithBinaryID(
+            Program program,
+            BinaryID binaryID,
+            AnalysisID analysisID
+    ){}
+
+
+
+
+    /// All functions that require a program to have a finished analysis on the portal can use this to encode this assumption into the type system
+    /// This guarantees that Ghidra Functions that exist on the server can be mapped to Function IDs
+    /// This rules out the two cases:
+    /// * the program has no associated analysis on the server
+    /// * the program has an associated analysis, but analysis hasn't finished yet
+    public static class AnalysedProgram {
+
+        private final Program program;
+        private final BinaryID binaryID;
+        private final AnalysisID analysisID;
+
+
+        /// The constructor is private to enforce the use of the static factory method and from the outer class
+        private AnalysedProgram(
+                Program program,
+                BinaryID binaryID,
+                AnalysisID analysisID
+        ) {
+            this.program = program;
+            this.binaryID = binaryID;
+            this.analysisID = analysisID;
+
+        }
+
+        public Program program() {
+            return program;
+        }
+
+        public AnalysisID analysisID() {
+            return analysisID;
+        }
+
+        private LongPropertyMap getFunctionIDPropertyMap(AnalysedProgram program){
+            var map = program.program().getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP);
+            if (map == null){
+                throw new IllegalStateException("Function ID property map not found for supposedly known program %s".formatted(program.program().getName()));
+            }
+            return map;
+        }
+
+        public static AnalysedProgram fromAnalysisResult(LegacyAnalysisResult analysisResult, Program program) {
+            if (analysisResult.status() != AnalysisStatus.Complete) {
+                throw new IllegalArgumentException("AnalysisResult must have status Complete to create ProgramWithBinaryID");
+            }
+            return new AnalysedProgram(program, analysisResult.binary_id(), analysisResult.analysis_id());
+        }
+
+        /// Only returns Optional.Empty if the function is not known on the server (e.g. because it's a thunk)
+        public Optional<FunctionWithID> getIDForFunction(Function function) {
+            if (function.getProgram() != this.program){
+                throw new IllegalArgumentException("Function %s does not belong to program %s".formatted(function, this.program.getName()));
+            }
+            LongPropertyMap functionIDMap = getFunctionIDPropertyMap(this);
+            var rawId = functionIDMap.get(function.getEntryPoint());
+            return Optional
+                    .ofNullable(rawId)
+                    .map(FunctionID::new)
+                    .map(
+                            functionID -> new FunctionWithID(function, functionID)
+                    );
+        }
+
+    }
+
+    /// Holding this object serves as the proof that a Function has an associated FunctionID
+    public static record FunctionWithID(
+            Function function,
+            FunctionID functionID
+    ) {}
 }

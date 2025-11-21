@@ -5,7 +5,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
 import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -98,7 +97,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private void pickAnalysis(LegacyAnalysisResult result) {
         var service = tool.getService(GhidraRevengService.class);
         var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-        var programWithID = new ProgramWithBinaryID(program, result.binary_id(), analysisID);
+        var programWithID = new GhidraRevengService.ProgramWithBinaryID(program, result.binary_id(), analysisID);
 
         tool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(

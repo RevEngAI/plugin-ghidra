@@ -1,8 +1,8 @@
 package ai.reveng.toolkit.ghidra.core;
 
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.framework.plugintool.PluginEvent;
 import ghidra.program.model.listing.Program;
 
@@ -21,9 +21,9 @@ import ghidra.program.model.listing.Program;
  */
 public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
     private final AnalysisStatus status;
-    private final ProgramWithBinaryID programWithBinaryID;
+    private final GhidraRevengService.ProgramWithBinaryID programWithBinaryID;
 
-    public RevEngAIAnalysisStatusChangedEvent(String sourceName, ProgramWithBinaryID programWithBinaryID, AnalysisStatus status) {
+    public RevEngAIAnalysisStatusChangedEvent(String sourceName, GhidraRevengService.ProgramWithBinaryID programWithBinaryID, AnalysisStatus status) {
         super(sourceName, "RevEngAI Analysis Finished");
         if (status == null || programWithBinaryID == null) {
             throw new IllegalArgumentException("args cannot be null");
@@ -36,7 +36,7 @@ public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
         return status;
     }
 
-    public ProgramWithBinaryID getProgramWithBinaryID() {
+    public GhidraRevengService.ProgramWithBinaryID getProgramWithBinaryID() {
         return programWithBinaryID;
     }
 

@@ -17,11 +17,9 @@ package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.about.AboutDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.misc.AnalysisLogComponent;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses.RecentAnalysisDialog;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.help.HelpDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
@@ -29,8 +27,6 @@ import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoun
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
-import docking.ActionContext;
 import docking.action.DockingAction;
 import docking.action.builder.ActionBuilder;
 import docking.widgets.OptionDialog;
@@ -279,21 +275,26 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 	protected void programActivated(Program program) {
 		super.programActivated(program);
 
-		if (!revengService.isKnownProgram(program)){
-			var maybeBinID = revengService.getBinaryIDFor(program);
-			if (maybeBinID.isEmpty()){
-				Msg.info(this, "Program has no saved binary ID");
-				return;
-			}
-			var binID = maybeBinID.get();
-			AnalysisStatus status = revengService.pollStatus(binID);
-			var analysisID = revengService.getApi().getAnalysisIDfromBinaryID(binID);
-			tool.firePluginEvent(
-					new RevEngAIAnalysisStatusChangedEvent(
-					"programActivated",
-							new ProgramWithBinaryID(program, binID, analysisID),
-							status));
-		}
+        var knownProgram = revengService.getKnownProgram(program);
+        if (knownProgram.isPresent()) {
+            log.info("Activated known program: {}", knownProgram.get());
+        } else {
+            // Program is not known yet
+            var maybeBinID = revengService.getBinaryIDFor(program);
+            if (maybeBinID.isEmpty()){
+                Msg.info(this, "Program has no saved binary ID");
+                return;
+            }
+            var binID = maybeBinID.get();
+            AnalysisStatus status = revengService.pollStatus(binID);
+            var analysisID = revengService.getApi().getAnalysisIDfromBinaryID(binID);
+            tool.firePluginEvent(
+                    new RevEngAIAnalysisStatusChangedEvent(
+                            "programActivated",
+                            new GhidraRevengService.ProgramWithBinaryID(program, binID, analysisID),
+                            status));
+        }
+
 	}
 
     @Override
@@ -311,12 +312,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 try {
                     // TODO: Can we get a better taskmonitor here?
                     // Or should we never do something here that warrants a monitor in the first place?
-                    revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
+                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
+                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
                 } catch (Exception e) {
                     Msg.error(this, "Error registering finished analysis for program " + program, e);
                     return;
                 }
-                tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", program));
             }
         }
     }

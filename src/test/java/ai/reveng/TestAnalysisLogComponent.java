@@ -1,11 +1,11 @@
 package ai.reveng;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.misc.AnalysisLogComponent;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitorComponent;
@@ -19,11 +19,11 @@ import static org.junit.Assert.*;
 
 public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTest {
 
-    private ProgramWithBinaryID getPlaceHolderID() throws Exception{
+    private GhidraRevengService.ProgramWithBinaryID getPlaceHolderID() throws Exception{
         var builder = new ghidra.program.database.ProgramBuilder("mock", ProgramBuilder._8051, this);
         // Add an example function
         var program = builder.getProgram();
-        return new ProgramWithBinaryID(
+        return new GhidraRevengService.ProgramWithBinaryID(
                 program,
                 new BinaryID(1),
                 new AnalysisID(1)
@@ -59,7 +59,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         // The analysis log component should now be visible, and have a task
         var logComponent = defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
         assertNotNull(logComponent);
-        Map<ProgramWithBinaryID, Task> trackedPrograms = (Map<ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
+        Map<GhidraRevengService.ProgramWithBinaryID, Task> trackedPrograms = (Map<GhidraRevengService.ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
         assertNotNull(trackedPrograms);
         assertTrue(trackedPrograms.containsKey(program));
     }
@@ -107,7 +107,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         );
 
         AnalysisLogComponent logComponent = (AnalysisLogComponent) defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
-        var trackedPrograms =  (Map<ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
+        var trackedPrograms =  (Map<GhidraRevengService.ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
         assertNotNull(trackedPrograms);
         assertTrue(trackedPrograms.containsKey(program));
         waitForTasks();
