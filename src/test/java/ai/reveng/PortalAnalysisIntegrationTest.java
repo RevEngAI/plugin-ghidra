@@ -1,5 +1,6 @@
 package ai.reveng;
 
+import ai.reveng.model.FunctionsDetailResponse;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
@@ -93,7 +94,8 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                         new AnalysisID(1),
                         new BinaryID(1),
                         "binary_name",
-                        new BinaryHash("dummyhash")
+                        new BinaryHash("dummyhash"),
+                        "portal_name_demangled"
                 );
             }
         });

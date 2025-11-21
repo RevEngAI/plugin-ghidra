@@ -65,7 +65,7 @@ dependencies {
   	implementation 'org.json:json:20250107'
 	implementation "com.google.guava:guava:33.2.0-jre"
 	implementation group: 'com.fifesoft', name: 'rsyntaxtextarea', version: '3.5.2'
-    implementation "ai.reveng:sdk:2.37.4"
+    implementation "ai.reveng:sdk:2.42.0"
 	testImplementation('junit:junit:4.13.1')
 	testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.8.2")
 

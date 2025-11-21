@@ -519,11 +519,14 @@ public class TypedApiImplementation implements TypedApiInterface {
      */
     @Override
     public FunctionDetails getFunctionDetails(FunctionID id) {
-        var request = requestBuilderForEndpoint("functions", String.valueOf(id.value()))
-                .GET()
-                .build();
-        var response = sendVersion2Request(request);
-        return FunctionDetails.fromJSON(response.getJsonData());
+        BaseResponseFunctionsDetailResponse dets = null;
+        try {
+            dets = functionsCoreApi.getFunctionDetails((int) id.value());
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+        return FunctionDetails.fromServerResponse(dets.getData());
+
     }
 
     @Override

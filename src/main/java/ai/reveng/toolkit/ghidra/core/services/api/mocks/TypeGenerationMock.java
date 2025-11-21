@@ -59,7 +59,8 @@ public class TypeGenerationMock extends UnimplementedAPI {
                 new AnalysisID(1337),
                 new BinaryID(1337),
                 "placeholder_for_%s".formatted(id),
-                new BinaryHash("placeholder_for_%s".formatted(id))
+                new BinaryHash("placeholder_for_%s".formatted(id)),
+                "demangled_placeholder_for_%s".formatted(id)
         );
     }
 }

@@ -94,7 +94,7 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
-    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) throws ApiException {
+    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) {
         var status = api.status(programWithBinaryID.analysisID);
         if (!status.equals(AnalysisStatus.Complete)){
             throw new IllegalStateException("Analysis %s is not complete yet, current status: %s"
@@ -169,10 +169,15 @@ public class GhidraRevengService {
     /// analysis is associated with the program
     /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(ProgramWithBinaryID,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private AnalysedProgram associateFunctionInfo(ProgramWithBinaryID knownProgram) throws ApiException {
+    private AnalysedProgram associateFunctionInfo(ProgramWithBinaryID knownProgram) {
         var binID = knownProgram.binaryID();
         var program = knownProgram.program();
-        List<FunctionInfo> functionInfo = api.getFunctionInfo(binID);
+        List<FunctionInfo> functionInfo = null;
+        try {
+            functionInfo = api.getFunctionInfo(binID);
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
         var transactionID = program.startTransaction("Associate Function Info");
 
         // Create the FunctionID map
@@ -289,10 +294,9 @@ public class GhidraRevengService {
 
             // Get the current name on  the server side
             FunctionDetails details = api.getFunctionDetails(fID.get().functionID);
-            var serverMangledName = details.functionName();
 
             // Extract the mangled name from Ghidra
-            var revEngMangledName = details.functionName();
+            var revEngMangledName = details.mangledFunctionName();
             // TODO: This is currently just a placeholder until the server provides demangled names at this endpoint!
             var revEngDemangledName = details.demangledName();
 
@@ -324,7 +328,7 @@ public class GhidraRevengService {
                     }));
 
 
-            mangledNameMap.add(function.getEntryPoint(), serverMangledName);
+            mangledNameMap.add(function.getEntryPoint(), revEngMangledName);
 
             /// Source types:
             /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
@@ -340,7 +344,7 @@ public class GhidraRevengService {
                         // The following check should never fail because it is a default name,
                         // and we checked above that the server name is not a default name
                         // but just to be safe and make that assumption explicit we check it explicitly
-                        if (!function.getSymbol().getName(false).equals(serverMangledName)) {
+                        if (!function.getSymbol().getName(false).equals(revEngDemangledName)) {
                             Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
                             var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
                                     .applyTo(analysedProgram.program());
