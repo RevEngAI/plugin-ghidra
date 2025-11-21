@@ -5,9 +5,13 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
+import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.data.TypeDef;
 import ghidra.program.model.data.Undefined;
+import ghidra.program.model.symbol.SourceType;
+import ghidra.util.task.TaskMonitor;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -38,7 +42,40 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
 
             @Override
             public Optional<FunctionDataTypeStatus> getFunctionDataTypes(AnalysisID analysisID, FunctionID functionID) {
-                return Optional.empty();
+                var ds = new FunctionDataTypeStatus(
+                        true,
+                        Optional.of(
+                                new FunctionDataTypeMessage(
+                                        new FunctionArtifact(
+                                                0x4000L,
+                                                0x100,
+                                                new FunctionHeader(
+                                                        null,
+                                                        "portal_name_demangled",
+                                                        0x4000L,
+                                                        "int",
+                                                        new FunctionArgument[]{
+                                                                new FunctionArgument(0, 8,
+                                                                        null,
+                                                                        "named_param_1",
+                                                                        "char *"
+                                                                ),
+                                                        }
+
+                                                ),
+                                                new StackVariable[]{}
+                                        ),
+                                        new FunctionDependencies(
+                                                new Typedef[]{},
+                                                new Struct[]{}
+                                        )
+                                )
+                        ),
+                        "completed",
+                        null,
+                        functionID
+                );
+                return Optional.of(ds);
             }
 
             @Override
@@ -63,6 +100,12 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
         // Add an example function
         var exampleFunc = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        /// Tell Ghidra that the function signature source is just default,
+        /// as the logic in {@link GhidraRevengService#pullFunctionInfoFromAnalysis(GhidraRevengService.AnalysedProgram, TaskMonitor)}
+        /// relies on this to decide whether to update the function signature or not
+        var tId = builder.getProgram().startTransaction("Set function signature source");
+        exampleFunc.setSignatureSource(SourceType.DEFAULT);
+        builder.getProgram().endTransaction(tId, true);
         // We need to also create the memory where the function lives, `getFunctions` doesn't find it otherwise
         builder.createMemory("test", "0x4000", 0x100);
         Assert.assertNotNull(builder.getProgram().getFunctionManager().getFunctionAt(exampleFunc.getEntryPoint()));
@@ -104,6 +147,11 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         assertTrue(receivedResultsLoadedEvent.get());
         // Check that the function names have been updated to the one returned by the portal
         assertEquals("portal_name_demangled", exampleFunc.getName());
+
+        assertEquals(SourceType.ANALYSIS, exampleFunc.getSignatureSource());
+        var signature = exampleFunc.getSignature(true);
+        assertEquals("int portal_name_demangled(char * named_param_1)", signature.getPrototypeString());
+
 
         // Check the function ID has been stored in the program options
         var funcIDMap = service.getFunctionMap(program);
