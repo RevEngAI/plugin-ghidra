@@ -6,7 +6,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
 import ghidra.util.exception.CancelledException;
@@ -26,12 +25,6 @@ public class StartAnalysisTask extends Task {
     private final Program program;
     private final AnalysisLogConsumer log;
     private final PluginTool tool;
-
-    public ProgramWithBinaryID getProgramWithBinaryID() {
-        return programWithBinaryID;
-    }
-
-    private ProgramWithBinaryID programWithBinaryID;
 
     public StartAnalysisTask(Program program,
                              AnalysisOptionsBuilder options,
@@ -55,6 +48,7 @@ public class StartAnalysisTask extends Task {
 
         monitor.setMessage("Sending Analysis Request");
 
+        GhidraRevengService.ProgramWithBinaryID programWithBinaryID;
         try {
         programWithBinaryID = reService.startAnalysis(program, options);
         } catch (ApiException e) {

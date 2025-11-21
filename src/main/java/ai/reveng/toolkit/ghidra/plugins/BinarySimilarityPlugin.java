@@ -127,7 +127,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 )
                 .onAction(context -> {
                     var program = tool.getService(ProgramManager.class).getCurrentProgram();
-                    if (!apiService.isProgramAnalysed(program)) {
+                    if (apiService.getAnalysedProgram(program).isEmpty()) {
                         Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip",
                                 "Analysis must have completed before running auto unstrip");
                         return;
@@ -159,14 +159,10 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 )
                 .onAction(context -> {
                     var program = tool.getService(ProgramManager.class).getCurrentProgram();
-                    if (!apiService.isProgramAnalysed(program)) {
+                    var knownProgram = apiService.getAnalysedProgram(program);
+                    if (knownProgram.isEmpty()){
                         Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Matching",
                                 "Analysis must have completed before running function matching");
-                        return;
-                    }
-                    var knownProgram = apiService.getKnownProgram(program);
-                    if (knownProgram.isEmpty()){
-                        Msg.info(this, "Program has no saved binary ID");
                         return;
                     }
 
@@ -184,25 +180,15 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                             // Exclude thunks and external functions because we do not support them in the portal
                             && !func.isExternal()
                             && !func.isThunk()
-                            && apiService.isKnownProgram(context.getProgram())
-                            && apiService.isProgramAnalysed(context.getProgram());
+                            && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
-                    var program = tool.getService(ProgramManager.class).getCurrentProgram();
-                    if (!apiService.isProgramAnalysed(program)) {
-                        Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Match function",
-                                "Analysis must have completed before running function matching");
-                        return;
-                    }
-                    var knownProgram = apiService.getKnownProgram(program);
-                    if (knownProgram.isEmpty()){
-                        Msg.info(this, "Program has no saved binary ID");
-                        return;
-                    }
+                    // We know analysed program is present due to enabledWhen
+                    var knownProgram = apiService.getAnalysedProgram(context.getProgram()).get();
 
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 
-                    var functionMatchingDialog = new FunctionLevelFunctionMatchingDialog(tool, knownProgram.get(), func);
+                    var functionMatchingDialog = new FunctionLevelFunctionMatchingDialog(tool, knownProgram, func);
                     tool.showDialog(functionMatchingDialog);
                 })
                 .popupMenuPath(new String[] { "Match function" })
@@ -219,12 +205,13 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                             // Exclude thunks and external functions because we do not support them in the portal
                             && !func.isExternal()
                             && !func.isThunk()
-							&& apiService.isKnownProgram(context.getProgram())
-							&& apiService.isProgramAnalysed(context.getProgram());
+                            && apiService.getAnalysedProgram(context.getProgram()).isPresent();
 				})
 				.onAction(context -> {
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
-					if (!apiService.isKnownFunction(func)) {
+                    var analysedProgram = apiService.getAnalysedProgram(context.getProgram()).get();
+                    var functionWithId = analysedProgram.getIDForFunction(func);
+					if (functionWithId.isEmpty()) {
 						Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "AI Decompilation",
 								"Function is not known to the RevEng.AI API." +
 										"This can happen if the function boundaries do not match.\n" +
@@ -234,7 +221,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 					// Spawn Task to decompile the function
                     tool.getService(ReaiLoggingService.class).info("Requested AI Decompilation via Action for function " + func.getName());
                     decompiledWindow.setVisible(true);
-                    decompiledWindow.refresh(func);
+                    decompiledWindow.refresh(functionWithId.get());
 				})
 				.popupMenuPath(new String[] { "AI Decompilation" })
 				.popupMenuIcon(ReaiPluginPackage.REVENG_16)
@@ -246,13 +233,13 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .enabledWhen(context -> {
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
-                            && apiService.isKnownProgram(context.getProgram())
-                            && apiService.isProgramAnalysed(context.getProgram());
+                            && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
-                    var functionID = apiService.getFunctionIDFor(func);
-                    if (!apiService.isKnownFunction(func) || functionID.isEmpty()) {
+                    var analysedProgram = apiService.getAnalysedProgram(context.getProgram()).get();
+                    var functionWithID = analysedProgram.getIDForFunction(func);
+                    if (functionWithID.isEmpty()) {
                         Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "View function in portal",
                                 "Function is not known to the RevEng.AI API." +
                                         "This can happen if the function boundaries do not match.\n" +
@@ -260,7 +247,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         return;
                     }
 
-                    apiService.openFunctionInPortal(functionID.get());
+                    apiService.openFunctionInPortal(functionWithID.get().functionID());
                 })
                 .popupMenuPath(new String[] { "View function in portal" })
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)

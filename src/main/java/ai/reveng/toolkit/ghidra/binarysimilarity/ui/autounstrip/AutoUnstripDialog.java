@@ -5,7 +5,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AutoUnstripResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
@@ -49,7 +48,7 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
         private record RenameResult(String virtualAddress, String originalName, String newName) {
     }
 
-    public AutoUnstripDialog(PluginTool tool, ProgramWithBinaryID analysisID) {
+    public AutoUnstripDialog(PluginTool tool, GhidraRevengService.ProgramWithBinaryID analysisID) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip", true);
 
         this.analysisID = analysisID.analysisID();

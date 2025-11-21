@@ -4,7 +4,6 @@ import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.util.exception.CancelledException;
@@ -24,7 +23,7 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     private final JScrollPane scroll;
     private TaskMonitorComponent taskMonitorComponent;
     private final JPanel mainPanel;
-    private final Map<ProgramWithBinaryID, Task> trackedPrograms =  new ConcurrentHashMap<>();
+    private final Map<GhidraRevengService.ProgramWithBinaryID, Task> trackedPrograms =  new ConcurrentHashMap<>();
 
     public static String NAME = ReaiPluginPackage.WINDOW_PREFIX + "Analysis Log";
 
@@ -98,10 +97,10 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
 
     class AnalysisMonitoringTask extends Task {
 
-        private final ProgramWithBinaryID program;
+        private final GhidraRevengService.ProgramWithBinaryID program;
         private final AnalysisLogConsumer logConsumer;
 
-        public AnalysisMonitoringTask(ProgramWithBinaryID programWithBinaryID, AnalysisLogConsumer logConsumer) {
+        public AnalysisMonitoringTask(GhidraRevengService.ProgramWithBinaryID programWithBinaryID, AnalysisLogConsumer logConsumer) {
             super(programWithBinaryID.toString(), true, false, false);
             program = programWithBinaryID;
             this.logConsumer = logConsumer;

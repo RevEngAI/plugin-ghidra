@@ -2,7 +2,6 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.framework.plugintool.PluginTool;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.program.model.listing.Function;
@@ -15,7 +14,7 @@ import java.util.Objects;
 
 public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
 
-    public BinaryLevelFunctionMatchingDialog(PluginTool tool, ProgramWithBinaryID programWithBinaryID) {
+    public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
               tool.getService(GhidraRevengService.class), programWithBinaryID);
     }
@@ -44,7 +43,7 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
 
                 request.setFilters(filters);
 
-                functionMatchingResponse = revengService.getFunctionMatchingForAnalysis(programWithBinaryID.analysisID(), request);
+                functionMatchingResponse = revengService.getFunctionMatchingForAnalysis(analyzedProgram.analysisID(), request);
                 updateUI();
 
                 // Check if we hit an error status
