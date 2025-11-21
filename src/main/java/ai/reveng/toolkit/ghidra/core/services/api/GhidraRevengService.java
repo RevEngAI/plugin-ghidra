@@ -16,11 +16,14 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthentica
 import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
+import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
+import ghidra.app.cmd.function.SetFunctionNameCmd;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Structure;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionSignature;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.LongPropertyMap;
@@ -45,7 +48,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-
 
 
 /**
@@ -93,14 +95,15 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
-    public void registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID) throws ApiException {
+    public void registerFinishedAnalysisForProgram(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) throws ApiException {
         statusCache.put(programWithBinaryID.binaryID(), AnalysisStatus.Complete);
 
         // Add the binary to the program before loading the function info. Checking that a function is present requires
         // the binary ID to be present in the program options.
         addBinaryIDtoProgramOptions(programWithBinaryID.program(), programWithBinaryID.binaryID());
 
-        loadFunctionInfo(programWithBinaryID.program(), programWithBinaryID.binaryID());
+        associateFunctionInfo(programWithBinaryID.program(), programWithBinaryID.binaryID());
+        pullFunctionInfoFromAnalysis(programWithBinaryID, monitor);
     }
 
     public void addBinaryIDtoProgramOptions(Program program, BinaryID binID){
@@ -158,13 +161,15 @@ public class GhidraRevengService {
         return Optional.of(binID);
     }
 
-    /**
-     * Loads the function info into a dedicated user property map.
-     * Future task: we can potentially merge the function ID map with the mangled name map and have a single map of objects.
-     */
-    private void loadFunctionInfo(Program program, BinaryID binID) throws ApiException {
+    /// Loads the function info into a dedicated user property map.
+    /// This method should only concern itself with associating the FunctionID with the Ghidra Function
+    /// This property is immutable within an Analysis: The function ID will never change unless an entirely different
+    /// analysis is associated with the program
+    /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(ProgramWithBinaryID,TaskMonitor)]
+    /// because this information can change on the server, and thus needs a dedicated method to refresh it
+    private void associateFunctionInfo(Program program, BinaryID binID) throws ApiException {
         List<FunctionInfo> functionInfo = api.getFunctionInfo(binID);
-        var transactionID = program.startTransaction("Load Function Info");
+        var transactionID = program.startTransaction("Associate Function Info");
 
         // Create the FunctionID map
         LongPropertyMap functionIDMap;
@@ -176,75 +181,38 @@ public class GhidraRevengService {
         }
 
         // Create the function mangled name map
-        StringPropertyMap mangledNameMap;
         try {
-            mangledNameMap = program.getUsrPropertyManager().createStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
+            program.getUsrPropertyManager().createStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
         } catch (DuplicateNameException e) {
             program.endTransaction(transactionID, false);
             throw new RuntimeException("Previous mangled name property map still exists",e);
         }
 
         LongPropertyMap finalFunctionIDMap = functionIDMap;
-        StringPropertyMap finalMangledNameMap = mangledNameMap;
 
-        AtomicInteger ghidraRenamedFunctions = new AtomicInteger();
-        AtomicInteger ghidraBoundariesMatchedFunction = new AtomicInteger();
-        functionInfo.forEach(
-                info -> {
-                    var oFunc = getFunctionFor(info, program);
-                    if (oFunc.isEmpty()){
-                        Msg.error(this, "Function not found in Ghidra for info: %s".formatted(info));
-                        return;
-                    }
-                    var func = oFunc.get();
+        int ghidraBoundariesMatchedFunction = 0;
+        for (FunctionInfo info : functionInfo) {
+            var oFunc = getFunctionFor(info, program);
+            if (oFunc.isEmpty()) {
+                Msg.error(this, "Function not found in Ghidra for info: %s".formatted(info));
+                continue;
+            }
+            var func = oFunc.get();
+            // There are two ways to think about the size of a function
+            // They diverge for non-contiguous functions
+            var funcSizeByAddressCount = func.getBody().getNumAddresses();
+            var funcSizeByDistance = func.getBody().getMaxAddress().subtract(func.getEntryPoint()) + 1;
 
-                    // Extract the mangled name from Ghidra
-                    var ghidraMangledName = func.getSymbol().getName(false);
-                    var revEngMangledName = info.functionMangledName();
-                    var revEngDemangledName = info.functionName();
+            // For unclear reasons the func size is off by one
+            if (funcSizeByAddressCount - 1 != info.functionSize() && funcSizeByAddressCount != info.functionSize()) {
+                Msg.warn(this, "Function size mismatch for function %s: %d vs %d".formatted(func.getName(), funcSizeByAddressCount, info.functionSize()));
+                continue;
+            }
 
-                    // Skip external and thunk functions because we don't support them
-                    if (func.isExternal() || func.isThunk()){
-                        Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
-                        return;
-                    }
+            finalFunctionIDMap.add(func.getEntryPoint(), info.functionID().value());
 
-                    // Skip invalid function mangled names
-                    if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
-                        Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                        return;
-                    }
-
-                    var funcSize = func.getBody().getNumAddresses();
-
-                    // For unclear reasons the func size is off by one
-                    if (funcSize - 1 != info.functionSize() && funcSize != info.functionSize()){
-                        Msg.warn(this, "Function size mismatch for function %s: %d vs %d".formatted(ghidraMangledName, funcSize, info.functionSize()));
-                        return;
-                    }
-
-                    // Source types:
-                    // DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
-                    // ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
-                    // IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
-                    // USER_DEFINED: A name or signature explicitly set by the analyst.
-                    if (func.getSymbol().getSource() == SourceType.DEFAULT && !revEngMangledName.startsWith("FUN_") ){
-                        Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                        try {
-                            // Set demangled name from RevEng.AI
-                            func.setName(revEngDemangledName, SourceType.ANALYSIS);
-                            ghidraRenamedFunctions.getAndIncrement();
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-
-                    }
-                    finalFunctionIDMap.add(func.getEntryPoint(), info.functionID().value());
-                    finalMangledNameMap.add(func.getEntryPoint(), revEngMangledName);
-
-                    ghidraBoundariesMatchedFunction.getAndIncrement();
-                }
-        );
+            ghidraBoundariesMatchedFunction++;
+        }
 
         AtomicInteger ghidraFunctionCount = new AtomicInteger();
         program.getFunctionManager().getFunctions(true).forEach(
@@ -262,13 +230,149 @@ public class GhidraRevengService {
 
         // Print summary
         Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary",
-            ("Found %d functions from RevEng.AI. Renamed %d. Your local Ghidra instance has %d/%d matching function " +
+            ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
                 "boundaries. For better results, please start a new analysis from this plugin.").formatted(
                 functionInfo.size(),
-                ghidraRenamedFunctions.get(),
-                ghidraBoundariesMatchedFunction.get(),
+                ghidraBoundariesMatchedFunction,
                 ghidraFunctionCount.get()
         ));
+    }
+
+
+    /// Pull the server side information about the functions from a remote Analysis and update the local {@link Program}
+    /// based on it
+    /// This currently includes:
+    /// * the name of the function
+    /// * the type signature of the function
+    ///
+    /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
+    /// The initial association happens in {@link #associateFunctionInfo(Program, BinaryID)}
+    ///
+    public void pullFunctionInfoFromAnalysis(ProgramWithBinaryID programWithBinaryID, TaskMonitor monitor) {
+        var transactionId = programWithBinaryID.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
+
+        StringPropertyMap mangledNameMap = programWithBinaryID.program()
+                .getUsrPropertyManager()
+                .getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
+
+
+        int ghidraRenamedFunctions;
+        ghidraRenamedFunctions = 0;
+
+        int failedRenames = 0;
+        for (Function function : programWithBinaryID.program().getFunctionManager().getFunctions(true)) {
+            if (monitor.isCancelled()) {
+                continue;
+            }
+            var ghidraMangledName = function.getSymbol().getName(false);
+            // Skip external and thunk functions because we don't support them
+            if (function.isExternal() || function.isThunk()) {
+                Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
+                continue;
+            }
+
+            var fID = getFunctionIDFor(function);
+            if (fID.isEmpty()) {
+                Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
+                continue;
+            }
+
+            // Get the current name on  the server side
+            FunctionDetails details = api.getFunctionDetails(fID.get());
+            var serverMangledName = details.functionName();
+
+            // Extract the mangled name from Ghidra
+            var revEngMangledName = details.functionName();
+            // TODO: This is currently just a placeholder until the server provides demangled names at this endpoint!
+            var revEngDemangledName = details.demangledName();
+
+            // Skip invalid function mangled names
+            if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
+                Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                continue;
+            }
+
+
+            // Get the type information on the server side
+            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt = api.getFunctionDataTypes(
+                            programWithBinaryID.analysisID(),
+                            fID.get()
+                    )
+                    // Try getting the data types if they are available
+                    .flatMap(FunctionDataTypeStatus::data_types)
+                    // If they are available, try converting them to a Ghidra signature
+                    // If the conversion fails, act like there is no signature available
+                    .flatMap((functionDataTypeMessage -> {
+                        try {
+                            return Optional.of(getFunctionSignature(functionDataTypeMessage));
+                        } catch (DataTypeDependencyException e) {
+                            // Something went wrong loading the data type dependencies
+                            // just skip applying the signature and treat it like none being available
+                            Msg.error(this, "Could not get parse signature for function %s".formatted(function.getName()));
+                            return Optional.empty();
+                        }
+                    }));
+
+
+            mangledNameMap.add(function.getEntryPoint(), serverMangledName);
+
+            /// Source types:
+            /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
+            /// ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
+            /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
+            /// USER_DEFINED: A name or signature explicitly set by the analyst.
+            /// See {@link ghidra.program.model.symbol.SourceType} for more details
+            if (function.getSymbol().getSource() == SourceType.DEFAULT) {
+                if (functionSignatureMessageOpt.isEmpty()) {
+                    // We don't have signature information for this function, so we can only try renaming it
+                    if (function.getSymbol().getSource() == SourceType.DEFAULT && !revEngMangledName.startsWith("FUN_")) {
+                        // The local function has the default name, so we can rename it
+                        // The following check should never fail because it is a default name,
+                        // and we checked above that the server name is not a default name
+                        // but just to be safe and make that assumption explicit we check it explicitly
+                        if (!function.getSymbol().getName(false).equals(serverMangledName)) {
+                            Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                            var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
+                                    .applyTo(programWithBinaryID.program());
+                            if (success) {
+                                ghidraRenamedFunctions++;
+                            } else {
+                                failedRenames++;
+                                Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                            }
+                        }
+                    }
+
+                } else {
+                    /// We could use {@link ghidra.program.model.listing.FunctionSignature#isEquivalentSignature(FunctionSignature)}
+                    /// if we expect the server to have changing signatures at any point in time.
+                    /// For now, we only apply signatures to functions that have the default signature
+                    if (function.getSignatureSource() == SourceType.DEFAULT) {
+                        var success = new ApplyFunctionSignatureCmd(
+                                function.getEntryPoint(),
+                                functionSignatureMessageOpt.get(),
+                                SourceType.ANALYSIS
+                        ).applyTo(programWithBinaryID.program(), monitor);
+                        if (success) {
+                            ghidraRenamedFunctions++;
+                        } else {
+                            Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
+                            failedRenames++;
+                        }
+                    }
+                }
+            }
+
+
+        }
+        // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
+        programWithBinaryID.program().endTransaction(transactionId, ghidraRenamedFunctions > 0);
+        if (failedRenames > 0){
+            Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
+                    ("Failed to update %d functions from RevEng.AI. Please check the error log for details.").formatted(
+                            failedRenames
+                    ));
+        }
     }
 
     /**
@@ -285,13 +389,13 @@ public class GhidraRevengService {
     }
 
     public Optional<FunctionID> getFunctionIDFor(ProgramWithBinaryID knownProgram, Function function){
-        Optional<LongPropertyMap> functionIDMap = getFunctionIDMap(knownProgram);
+        Optional<LongPropertyMap> functionIDMap = getFunctionIDPropertyMap(knownProgram);
         return functionIDMap
                 .flatMap(map -> Optional.ofNullable(map.get(function.getEntryPoint())))
                 .map(FunctionID::new);
     }
 
-    private Optional<LongPropertyMap> getFunctionIDMap(ProgramWithBinaryID program){
+    private Optional<LongPropertyMap> getFunctionIDPropertyMap(ProgramWithBinaryID program){
         return Optional.ofNullable(program.program().getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP));
     }
 
@@ -317,6 +421,9 @@ public class GhidraRevengService {
         return functionMap;
     }
 
+    /**
+     * Get the Ghidra Function for a given FunctionInfo if there is one
+     */
     public Optional<Function> getFunctionFor(FunctionInfo functionInfo, Program program){
         // These addresses used to be relative, but are now absolute again
         var defaultAddressSpace = program.getAddressFactory().getDefaultAddressSpace();
@@ -475,10 +582,15 @@ public class GhidraRevengService {
 
         }
     }
+
+    ///  This method analyses a program by uploading it (if necessary), triggering an analysis, and _blocking_
+    /// until the analysis is complete. This is for scripts and tests, and must not be used on the UI thread
     public ProgramWithBinaryID analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
+        // Check if we are on the swing thread
         var programWithBinaryID = startAnalysis(program, analysisOptionsBuilder);
-        waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
-        registerFinishedAnalysisForProgram(programWithBinaryID);
+        var finalStatus = waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
+        // TODO: Check final status for errors, and do something appropriate on failure
+        registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
         return programWithBinaryID;
     }
 
@@ -490,9 +602,8 @@ public class GhidraRevengService {
         );
     }
 
-    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(BinaryID binID, FunctionID functionID) {
-        var analysisID = api.getAnalysisIDfromBinaryID(binID);
-        return api.getFunctionDataTypes(analysisID, functionID).flatMap(FunctionDataTypeStatus::data_types);
+    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(ProgramWithBinaryID program, FunctionID functionID) {
+        return api.getFunctionDataTypes(program.analysisID(), functionID).flatMap(FunctionDataTypeStatus::data_types);
     }
 
     /**
@@ -756,6 +867,7 @@ public class GhidraRevengService {
     }
 
     /**
+     * @param tool   The UI tool for firing an event on status changes. Can be null
      * @return The final AnalysisStatus, should be either Complete or Error
      */
     public AnalysisStatus waitForFinishedAnalysis(

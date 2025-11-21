@@ -28,4 +28,9 @@ public record FunctionDetails(
                 new BinaryHash(json.getString("sha_256_hash"))
         );
     }
+
+    public String demangledName() {
+        // This is currently a fake placeholder for the future field that will contain the demangled name
+        return functionName;
+    }
 }
