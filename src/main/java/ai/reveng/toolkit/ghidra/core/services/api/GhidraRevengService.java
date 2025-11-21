@@ -904,7 +904,7 @@ public class GhidraRevengService {
                 // Analysis log endpoint only starts to return data after the analysis is processing
                 String logs = this.getAnalysisLog(programWithID.analysisID());
                 if (logger != null) {
-                    logger.consumeLogs(logs);
+                    logger.consumeLogs(logs, programWithID);
                 }
                 var logsLines = logs.lines().toList();
                 var lastLine = logsLines.get(logsLines.size() - 1);

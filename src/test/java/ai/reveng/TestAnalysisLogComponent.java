@@ -7,6 +7,7 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.listing.Program;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
@@ -47,11 +48,11 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
 
 //        defaultTool.getService(GhidraRevengService.class);
         env.addPlugin(AnalysisManagementPlugin.class);
-        var program = getPlaceHolderID();
+        var programWithID = getPlaceHolderID();
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(
                         "Test",
-                        program,
+                        programWithID,
                         AnalysisStatus.Processing
                 )
         );
@@ -59,22 +60,22 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         // The analysis log component should now be visible, and have a task
         var logComponent = defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
         assertNotNull(logComponent);
-        Map<GhidraRevengService.ProgramWithBinaryID, Task> trackedPrograms = (Map<GhidraRevengService.ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
+        Map<Program, Task> trackedPrograms = (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
         assertNotNull(trackedPrograms);
-        assertTrue(trackedPrograms.containsKey(program));
+        assertTrue(trackedPrograms.containsKey(programWithID.program()));
     }
 
 
     @Test
     public void testFullAnalysisFlow() throws Exception {
         var defaultTool = env.showTool();
-        var program = getPlaceHolderID();
+        var programWithID = getPlaceHolderID();
 
         addMockedService(defaultTool, new UnimplementedAPI() {
                     private final Map<AnalysisID, AnalysisStatus> statusMap = new HashMap<>();
 
                     {
-                        statusMap.put(program.analysisID(), AnalysisStatus.Queued);
+                        statusMap.put(programWithID.analysisID(), AnalysisStatus.Queued);
                     }
 
                     @Override
@@ -101,19 +102,19 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(
                         "Test",
-                        program,
+                        programWithID,
                         AnalysisStatus.Queued
                 )
         );
 
         AnalysisLogComponent logComponent = (AnalysisLogComponent) defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
-        var trackedPrograms =  (Map<GhidraRevengService.ProgramWithBinaryID, Task>) getInstanceField("trackedPrograms", logComponent);
+        var trackedPrograms =  (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
         assertNotNull(trackedPrograms);
-        assertTrue(trackedPrograms.containsKey(program));
+        assertTrue(trackedPrograms.containsKey(programWithID.program()));
         waitForTasks();
 
         // Check that it is cleared out again after the task finished
-        assertFalse(trackedPrograms.containsKey(program));
+        assertFalse(trackedPrograms.containsKey(programWithID.program()));
         // Check that the taskmonitor is hidden again and isn't sitting there forever
         TaskMonitorComponent taskMonitorComponent = (TaskMonitorComponent) getInstanceField("taskMonitorComponent", logComponent);
         assertFalse(taskMonitorComponent.isVisible());
