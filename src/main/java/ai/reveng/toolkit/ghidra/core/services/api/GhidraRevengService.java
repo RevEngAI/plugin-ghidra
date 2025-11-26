@@ -413,6 +413,7 @@ public class GhidraRevengService {
                                 functionSignatureMessageOpt.get(),
                                 SourceType.ANALYSIS
                         ).applyTo(analysedProgram.program(), monitor);
+                        // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
                         if (success) {
                             ghidraRenamedFunctions++;
                         } else {

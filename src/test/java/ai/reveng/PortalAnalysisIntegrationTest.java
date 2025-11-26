@@ -7,6 +7,8 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
+import ghidra.framework.Application;
+import ghidra.framework.ApplicationVersion;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
@@ -147,9 +149,15 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         // Check that the function names have been updated to the one returned by the portal
         assertEquals("portal_name_demangled", exampleFunc.getName());
 
-        assertEquals(SourceType.ANALYSIS, exampleFunc.getSignatureSource());
         var signature = exampleFunc.getSignature(true);
         assertEquals("int portal_name_demangled(char * named_param_1)", signature.getPrototypeString());
+        // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x
+        // So we only test this for Ghidra 11.3 and above
+        ApplicationVersion version = new ApplicationVersion(Application.getApplicationVersion());
+        if (version.compareTo(new ApplicationVersion("11.3")) > 0) {
+            assertEquals(SourceType.ANALYSIS, exampleFunc.getSignatureSource());
+        }
+
 
 
         // Check the function ID has been stored in the program options
