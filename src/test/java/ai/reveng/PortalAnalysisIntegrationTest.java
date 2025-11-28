@@ -1,7 +1,9 @@
 package ai.reveng;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
+import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
@@ -97,6 +99,11 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                         "portal_name_demangled"
                 );
             }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
         });
         var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
         // Add an example function
@@ -121,9 +128,12 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
 
         waitForSwing();
 
-        var id = new GhidraRevengService.ProgramWithID(program, new AnalysisID(1));
         var service = defaultTool.getService(GhidraRevengService.class);
-        service.addAnalysisIDtoProgramOptions(program, id.analysisID());
+        // We start an analysis to get an Analysis ID associated with the program
+        var id  = service.startAnalysis(program, null);
+
+        assert service.getKnownProgram(program).isPresent();
+        assert service.getAnalysedProgram(program).isEmpty();
 
         // Register a listener for the results loaded event, to verify that has been fired later
         AtomicBoolean receivedResultsLoadedEvent = new AtomicBoolean(false);
@@ -131,7 +141,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
             receivedResultsLoadedEvent.set(true);
         });
 
-        // Simulate the analysis status change event
+        // Simulate the analysis status change event being triggered when the analysis is complete
         // We have to run this without waiting, otherwise the test case doesn't continue until the dialog is closed
         runSwing(
                 () -> defaultTool.firePluginEvent(
@@ -146,6 +156,10 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         waitForSwing();
         // Check that we received the results loaded event, i.e. other plugins would have been notified
         assertTrue(receivedResultsLoadedEvent.get());
+
+        // Check that an analysed program is now known
+        assert service.getAnalysedProgram(program).isPresent();
+
         // Check that the function names have been updated to the one returned by the portal
         assertEquals("portal_name_demangled", exampleFunc.getName());
 

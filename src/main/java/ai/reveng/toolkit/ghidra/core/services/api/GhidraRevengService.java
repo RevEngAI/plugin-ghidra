@@ -109,14 +109,7 @@ public class GhidraRevengService {
         return analysedProgram;
     }
 
-    @Deprecated
-    public ProgramWithID addBinaryIDtoProgramOptions(Program program, BinaryID binID){
-        var analysisID = api.getAnalysisIDfromBinaryID(binID);
-        return addAnalysisIDtoProgramOptions(program, analysisID);
-    }
-
-    ///  This method is only for mocking purposes
-    public ProgramWithID addAnalysisIDtoProgramOptions(Program program, AnalysisID analysisID){
+    private ProgramWithID addAnalysisIDtoProgramOptions(Program program, AnalysisID analysisID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
         program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
                 .setLong(OPTION_KEY_ANALYSIS_ID, analysisID.id());
@@ -475,7 +468,7 @@ public class GhidraRevengService {
     /**
      * Get the Ghidra Function for a given FunctionInfo if there is one
      */
-    public Optional<Function> getFunctionFor(FunctionInfo functionInfo, Program program){
+    private Optional<Function> getFunctionFor(FunctionInfo functionInfo, Program program){
         // These addresses used to be relative, but are now absolute again
         var defaultAddressSpace = program.getAddressFactory().getDefaultAddressSpace();
         var funcAddress = defaultAddressSpace.getAddress(functionInfo.functionVirtualAddress());
@@ -672,7 +665,7 @@ public class GhidraRevengService {
         return Optional.empty();
     }
 
-    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(ProgramWithID program, FunctionID functionID) {
+    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(AnalysedProgram program, FunctionID functionID) {
         return api.getFunctionDataTypes(program.analysisID(), functionID).flatMap(FunctionDataTypeStatus::data_types);
     }
 
