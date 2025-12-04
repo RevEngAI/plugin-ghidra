@@ -143,7 +143,6 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
 
     public void setDisplayedValuesBasedOnStatus(Function function, AIDecompilationStatus status) {
-        setVisible(true);
         this.function = function;
         if (status.status().equals("success")) {
             setCode(status.decompilation());
@@ -155,7 +154,6 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     private void setCode(String code) {
-        setVisible(true);
         String text = code;
         textArea.setText(text);
     }

@@ -13,6 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - ghidra: "11.4.3"
+            java: "21"
+          - ghidra: "11.4.2"
+            java: "21"
           - ghidra: "11.4.1"
             java: "21"
           - ghidra: "11.4"

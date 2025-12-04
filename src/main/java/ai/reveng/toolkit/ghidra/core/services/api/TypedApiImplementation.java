@@ -109,6 +109,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         headers = new HashMap<>();
         headers.put("Authorization", apiKey);
         headers.put("User-Agent", userAgent);
+        headers.put("X-RevEng-Application", userAgent);
 
         // TODO: Actually implement support for some encodings and then accept them
 //        headers.put("Accept-Encoding", "gzip, deflate, br");
