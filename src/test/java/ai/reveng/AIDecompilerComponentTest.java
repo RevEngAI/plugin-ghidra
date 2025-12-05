@@ -1,6 +1,8 @@
 package ai.reveng;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
+import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
@@ -36,7 +38,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
             }
 
             @Override
-            public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
                 return List.of(
                         new FunctionInfo(
                                 new FunctionID(1),
@@ -81,6 +83,11 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                     throw new RuntimeException("Unknown FunctionID");
                 }
 
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
             }
 
             @Override
@@ -155,7 +162,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         var func2 = builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
 
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
-
+//        service.getAnalysedProgram(programWithID);
         env.showTool(programWithID.program());
         waitForSwing();
 
@@ -191,12 +198,17 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         }
 
         @Override
+        public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+            return new AnalysisID(1);
+        }
+
+        @Override
         public AnalysisStatus status(AnalysisID analysisID) {
             return AnalysisStatus.Complete;
         }
 
         @Override
-        public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+        public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
             return List.of(
                     new FunctionInfo(
                             new FunctionID(1),

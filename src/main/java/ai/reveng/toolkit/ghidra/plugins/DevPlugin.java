@@ -1,7 +1,7 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
 import ai.reveng.toolkit.ghidra.devplugin.RevEngMetadataProvider;
 import docking.action.builder.ActionBuilder;
@@ -50,8 +50,8 @@ public class DevPlugin extends ProgramPlugin {
 				.onAction(e -> {
 					GhidraRevengService reAIService = tool.getService(GhidraRevengService.class);
 					var api = reAIService.getApi();
-					AnalysisID analysisID = reAIService.getAnalysisIDFor(currentProgram).get();
-					var functionMap = reAIService.getFunctionMap(currentProgram);
+                    var analysedProgram = reAIService.getAnalysedProgram(currentProgram).orElseThrow();
+					var functionMap = analysedProgram.getFunctionMap();
 					var task = new Task("Generate Signatures", true, true, true) {
 						@Override
 						public void run(TaskMonitor monitor) {
@@ -60,7 +60,7 @@ public class DevPlugin extends ProgramPlugin {
 									(fID, function) -> {
 										try {
 											monitor.checkCancelled();
-											api.generateFunctionDataTypes(analysisID, List.of(fID));
+											api.generateFunctionDataTypes(analysedProgram.analysisID(), List.of(fID));
 											monitor.incrementProgress(1);
 										} catch (APIConflictException e) {
 											// Already requested

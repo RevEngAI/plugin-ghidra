@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
+import ai.reveng.model.TypeDefinition;
 import org.json.JSONObject;
 
 import java.util.Set;
@@ -26,4 +27,12 @@ public record Typedef(
             return obj.keySet().equals(Set.of("last_change", "name", "type"));
 //            return obj.has("type") && obj.has("name");
         }
+
+    public static Typedef fromOpenAPI(TypeDefinition typedef) {
+        return new Typedef(
+                typedef.getLastChange(),
+                typedef.getName(),
+                typedef.getType()
+        );
+    }
 }

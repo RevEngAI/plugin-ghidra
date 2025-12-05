@@ -2,7 +2,7 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
@@ -53,10 +53,15 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             public void actionPerformed(ActionContext context) {
                 if (function != null) {
                     var service = tool.getService(GhidraRevengService.class);
-                    var fID = service.getFunctionIDFor(function);
+                    var analyzedProgram = service.getAnalysedProgram(function.getProgram());
+                    if (analyzedProgram.isEmpty()) {
+                        Msg.error(this, "Failed to send positive feedback: Program is not known to RevEng.AI");
+                        return;
+                    }
+                    var fID = analyzedProgram.get().getIDForFunction(function);
                     fID.ifPresent(id -> {
                         try {
-                            service.getApi().aiDecompRating(id, "POSITIVE", "");
+                            service.getApi().aiDecompRating(id.functionID(), "POSITIVE", "");
                         } catch (ApiException e) {
                             // Fail silently because this is not a critical feature
                             Msg.error(this, "Failed to send positive feedback for function %s: %s".formatted(function.getName(), e.getMessage()));
@@ -89,10 +94,15 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 if (!dialog.isCanceled()) {
                     if (function != null) {
                         var service = tool.getService(GhidraRevengService.class);
-                        var fID = service.getFunctionIDFor(function);
+                        var programWithID = service.getAnalysedProgram(function.getProgram());
+                        if (programWithID.isEmpty()) {
+                            Msg.error(this, "Failed to send negative feedback: Program is not known to RevEng.AI");
+                            return;
+                        }
+                        var fID = programWithID.get().getIDForFunction(function);
                         fID.ifPresent(id -> {
                             try {
-                                service.getApi().aiDecompRating(id, "NEGATIVE", dialog.getValue());
+                                service.getApi().aiDecompRating(id.functionID(), "NEGATIVE", dialog.getValue());
                             } catch (ApiException e) {
                                 // Fail silently because this is not a critical feature
                                 Msg.error(this, "Failed to send negative feedback for function %s: %s".formatted(function.getName(), e.getMessage()));
@@ -164,11 +174,11 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         descriptionArea.setText("");
     }
 
-    public void refresh(Function function) {
+    public void refresh(GhidraRevengService.FunctionWithID function) {
         // Check if we know this function already
-        var cachedStatus = cache.get(function);
+        var cachedStatus = cache.get(function.function());
         if (cachedStatus != null) {
-            setDisplayedValuesBasedOnStatus(function, cachedStatus);
+            setDisplayedValuesBasedOnStatus(function.function(), cachedStatus);
         } else {
             // TODO: Allow toggling auto decomp mode via local toggle action, for now do it always
 
@@ -184,6 +194,13 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     public void locationChanged(ProgramLocation loc) {
+        var service = tool.getService(GhidraRevengService.class);
+        var analyzedProgram = service.getAnalysedProgram(loc.getProgram());
+        if (analyzedProgram.isEmpty()) {
+            clear();
+            return;
+        }
+
         var functionMgr = loc.getProgram().getFunctionManager();
         var newFuncLocation = functionMgr.getFunctionContaining(loc.getAddress());
 
@@ -193,9 +210,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         }
 
         function = newFuncLocation;
-        if (function != null && !function.isExternal() && !function.isThunk()) {
-            refresh(function);
-        }
+        var functionWithID = analyzedProgram.get().getIDForFunction(function);
+        functionWithID.ifPresent(this::refresh);
     }
 
 
@@ -225,18 +241,17 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     class AIDecompTask extends Task {
 
         private final GhidraRevengService service;
-        private final Function function;
+        private final GhidraRevengService.FunctionWithID functionWithID;
 
-        public AIDecompTask(PluginTool tool, Function function) {
+        public AIDecompTask(PluginTool tool, GhidraRevengService.FunctionWithID functionWithID) {
             super("AI Decomp task", true, false, false);
             service = tool.getService(GhidraRevengService.class);
-            this.function = function;
+            this.functionWithID = functionWithID;
         }
 
         @Override
         public void run(TaskMonitor monitor) throws CancelledException {
-            var fID = service.getFunctionIDFor(function)
-                    .orElseThrow(() -> new RuntimeException("Function has no associated FunctionID"));
+            var fID = functionWithID.functionID();
             // Check if there is an existing process already, because the trigger API will fail with 400 if there is
             if (service.getApi().pollAIDecompileStatus(fID).status().equals("uninitialised")) {
                 // Trigger the decompilation
@@ -247,7 +262,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         }
 
 
-        private void waitForDecomp(FunctionID id, TaskMonitor monitor) throws CancelledException {
+        private void waitForDecomp(TypedApiInterface.FunctionID id, TaskMonitor monitor) throws CancelledException {
             var logger = tool.getService(ReaiLoggingService.class);
             var api = service.getApi();
             AIDecompilationStatus lastDecompStatus = null;
@@ -256,9 +271,9 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 if (lastDecompStatus == null || !Objects.equals(newStatus.status(), lastDecompStatus.status())) {
                     lastDecompStatus = newStatus;
 
-                    newStatusForFunction(function, newStatus);
+                    newStatusForFunction(functionWithID.function(), newStatus);
                 }
-                monitor.setMessage("Waiting for AI Decompilation for %s ... Current status: %s".formatted(function.getName(), lastDecompStatus.status()));
+                monitor.setMessage("Waiting for AI Decompilation for %s ... Current status: %s".formatted(functionWithID.function().getName(), lastDecompStatus.status()));
                 monitor.checkCancelled();
                 switch (newStatus.status()) {
                     case "pending":

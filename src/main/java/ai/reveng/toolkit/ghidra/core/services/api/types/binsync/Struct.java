@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
+import ai.reveng.model.Structure;
 import org.json.JSONObject;
 
 /**
@@ -35,4 +36,16 @@ public record Struct(
     }
 
 
+    public static Struct fromOpenAPI(Structure struct) {
+        StructMember[] members = struct.getMembers().values().stream()
+                .map(StructMember::fromOpenAPI)
+                .toList().toArray(new StructMember[0]);
+
+        return new Struct(
+                struct.getLastChange(),
+                struct.getName(),
+                struct.getSize(),
+                members
+        );
+    }
 }

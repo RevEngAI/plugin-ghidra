@@ -1,20 +1,16 @@
 package ai.reveng.toolkit.ghidra.core.services.api.mocks;
 
-import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
-import ai.reveng.toolkit.ghidra.core.services.api.ModelName;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import org.json.JSONObject;
 
-import javax.annotation.Nullable;
 import java.io.FileNotFoundException;
-import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
+@Deprecated
 public class MockApi implements TypedApiInterface {
     @Override
     public BinaryHash upload(Path binPath) throws FileNotFoundException {
@@ -22,16 +18,7 @@ public class MockApi implements TypedApiInterface {
     }
 
     @Override
-    public Object delete(BinaryID binID) {
-        return TypedApiInterface.super.delete(binID);
-    }
-
-    @Override
-    public List<LegacyAnalysisResult> recentAnalyses() {
-        return TypedApiInterface.super.recentAnalyses();
-    }
-
-    @Override
+    @Deprecated
     public List<LegacyAnalysisResult> search(BinaryHash hash) {
         if (hash.equals(new BinaryHash("b04c1259718dd16c0ffbd0931aeecf07746775cc2f1cda76e46d51af165f3ba6"))) {
             return List.of(new LegacyAnalysisResult(
@@ -56,11 +43,6 @@ public class MockApi implements TypedApiInterface {
     }
 
     @Override
-    public BinaryID analyse(AnalysisOptionsBuilder binHash) {
-        return new BinaryID(17920);
-    }
-
-    @Override
     public String getAnalysisLogs(AnalysisID analysisID) {
         return "";
     }
@@ -75,7 +57,7 @@ public class MockApi implements TypedApiInterface {
     }
 
     @Override
-    public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) {
+    public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
         var r = """
                 {
                   "success": true,

@@ -2,9 +2,6 @@ package ai.reveng;
 
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
 import org.junit.Test;
 
 

@@ -1,6 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses;
 
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -16,10 +17,10 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnalysisResult> {
-    private final BinaryHash hash;
+    private final TypedApiInterface.BinaryHash hash;
     private final Address imageBase;
 
-    public RecentAnalysesTableModel(PluginTool tool, BinaryHash hash, Address imageBase) {
+    public RecentAnalysesTableModel(PluginTool tool, TypedApiInterface.BinaryHash hash, Address imageBase) {
         super("Recent Analyses Table Model", tool);
         this.hash = hash;
         this.imageBase = imageBase;

@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import org.json.JSONObject;
 
 import java.util.List;
@@ -18,7 +19,7 @@ import java.util.List;
  * @param tags
  */
 public record LegacyCollection(
-        CollectionID collectionID,
+        TypedApiInterface.CollectionID collectionID,
         String collectionScope,
         String collectionName,
         String owner,
@@ -29,7 +30,7 @@ public record LegacyCollection(
 ) {
     public static LegacyCollection fromJSONObject(JSONObject json){
         return new LegacyCollection(
-                new CollectionID(json.getInt("collection_id")),
+                new TypedApiInterface.CollectionID(json.getInt("collection_id")),
                 json.getString("collection_scope"),
                 json.getString("collection_name"),
                 json.getString("collection_owner"),
