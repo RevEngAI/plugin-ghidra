@@ -2,7 +2,7 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
@@ -262,7 +262,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         }
 
 
-        private void waitForDecomp(FunctionID id, TaskMonitor monitor) throws CancelledException {
+        private void waitForDecomp(TypedApiInterface.FunctionID id, TaskMonitor monitor) throws CancelledException {
             var logger = tool.getService(ReaiLoggingService.class);
             var api = service.getApi();
             AIDecompilationStatus lastDecompStatus = null;

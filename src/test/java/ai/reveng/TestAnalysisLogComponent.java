@@ -2,6 +2,7 @@ package ai.reveng;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.misc.AnalysisLogComponent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -26,7 +27,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var program = builder.getProgram();
         return new GhidraRevengService.ProgramWithID(
                 program,
-                new AnalysisID(1)
+                new TypedApiInterface.AnalysisID(1)
         );
     }
 

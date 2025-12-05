@@ -6,6 +6,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
@@ -34,6 +35,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.NoValueException;
 import ghidra.util.task.TaskMonitor;
+import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
 import java.awt.*;
@@ -67,13 +69,16 @@ import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.OPTION_KEY_ANAL
 public class GhidraRevengService {
     private static final String REAI_FUNCTION_PROP_MAP = "RevEngAI_FunctionID_Map";
     private static final String REAI_FUNCTION_MANGLED_MAP = "RevEngAI_FunctionMangledNames_Map";
-    private Map<AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
+    private final Map<TypedApiInterface.AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
     private TypedApiInterface api;
     private ApiInfo apiInfo;
     private final List<Collection> collections = new ArrayList<>();
     private final List<AnalysisResult> analysisIDFilter = new ArrayList<>();
 
+    /// dedicated functions on the GhidraRevengService should be used instead to enforce assumptions via
+    /// type level guarantees
+//    @Deprecated
     public TypedApiInterface getApi() {
         return api;
     }
@@ -96,7 +101,7 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
-    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID, TaskMonitor monitor) {
+    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID, TaskMonitor monitor) throws CancelledException {
         var status = status(programWithID);
         if (!status.equals(AnalysisStatus.Complete)){
             throw new IllegalStateException("Analysis %s is not complete yet, current status: %s"
@@ -106,10 +111,11 @@ public class GhidraRevengService {
 
         var analysedProgram = associateFunctionInfo(programWithID);
         pullFunctionInfoFromAnalysis(analysedProgram, monitor);
+        monitor.checkCancelled();
         return analysedProgram;
     }
 
-    private ProgramWithID addAnalysisIDtoProgramOptions(Program program, AnalysisID analysisID){
+    private ProgramWithID addAnalysisIDtoProgramOptions(Program program, TypedApiInterface.AnalysisID analysisID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
         program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
                 .setLong(OPTION_KEY_ANALYSIS_ID, analysisID.id());
@@ -129,7 +135,8 @@ public class GhidraRevengService {
         return getBinaryIDfromOptions(program);
     }
 
-    private Optional<AnalysisID> getAnalysisIDFor(Program program){
+    @SuppressWarnings("deprecation") // Using deprecated method to support legacy BinaryID
+    private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFor(Program program){
         var optAnalysisID = getAnalysisIDFromOptions(program);
         if (optAnalysisID.isPresent()){
             return optAnalysisID;
@@ -148,7 +155,7 @@ public class GhidraRevengService {
         }
         return Optional.empty();
     }
-    private Optional<AnalysisID> getAnalysisIDFromOptions(
+    private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFromOptions(
             Program program
     ) {
         long bid = program.getOptions(
@@ -157,7 +164,7 @@ public class GhidraRevengService {
         if (bid == ReaiPluginPackage.INVALID_ANALYSIS_ID) {
             return Optional.empty();
         }
-        var analysisID = new AnalysisID((int) bid);
+        var analysisID = new TypedApiInterface.AnalysisID((int) bid);
         if (!statusCache.containsKey(analysisID)) {
             // Check that it's really valid in the context of the currently configured API
             try {
@@ -293,6 +300,11 @@ public class GhidraRevengService {
     }
 
 
+    public record RenameResult(Function func, String originalName, String newName) {
+        public String virtualAddress() {
+            return func.getEntryPoint().toString();
+        }
+    }
     /// Pull the server side information about the functions from a remote Analysis and update the local {@link Program}
     /// based on it
     /// This currently includes:
@@ -302,18 +314,24 @@ public class GhidraRevengService {
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
     /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
     ///
-    public void pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
+    public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
         var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
 
-        StringPropertyMap mangledNameMap = analysedProgram.program()
-                .getUsrPropertyManager()
-                .getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
-
-
-        int ghidraRenamedFunctions;
-        ghidraRenamedFunctions = 0;
+        List<RenameResult> renameResults = new ArrayList<>();
 
         int failedRenames = 0;
+
+        Map<TypedApiInterface.FunctionID, @NotNull FunctionDataTypesListItem> signatureMap = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID).getItems()
+                .stream()
+                .filter(item -> item.getStatus().equals("completed"))
+                .filter(item -> item.getDataTypes().getFuncTypes() != null)
+                .collect(
+                Collectors.toMap(
+                        item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
+                        fdtStatus -> fdtStatus
+                )
+        );
+
         for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
             if (monitor.isCancelled()) {
                 continue;
@@ -336,7 +354,6 @@ public class GhidraRevengService {
 
             // Extract the mangled name from Ghidra
             var revEngMangledName = details.mangledFunctionName();
-            // TODO: This is currently just a placeholder until the server provides demangled names at this endpoint!
             var revEngDemangledName = details.demangledName();
 
             // Skip invalid function mangled names
@@ -345,19 +362,16 @@ public class GhidraRevengService {
                 continue;
             }
 
-
+            var sig = Optional.ofNullable(signatureMap.get(fID.get().functionID));
             // Get the type information on the server side
-            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt = api.getFunctionDataTypes(
-                            analysedProgram.analysisID(),
-                            fID.get().functionID()
-                    )
+            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt = sig
                     // Try getting the data types if they are available
-                    .flatMap(FunctionDataTypeStatus::data_types)
                     // If they are available, try converting them to a Ghidra signature
                     // If the conversion fails, act like there is no signature available
+                    .flatMap (item -> Optional.ofNullable(item.getDataTypes()))
                     .flatMap((functionDataTypeMessage -> {
                         try {
-                            return Optional.of(getFunctionSignature(functionDataTypeMessage));
+                            return getFunctionSignature(functionDataTypeMessage);
                         } catch (DataTypeDependencyException e) {
                             // Something went wrong loading the data type dependencies
                             // just skip applying the signature and treat it like none being available
@@ -367,7 +381,7 @@ public class GhidraRevengService {
                     }));
 
 
-            mangledNameMap.add(function.getEntryPoint(), revEngMangledName);
+            analysedProgram.setMangledNameForFunction(function, revEngMangledName);
 
             /// Source types:
             /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
@@ -388,7 +402,11 @@ public class GhidraRevengService {
                             var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
                                     .applyTo(analysedProgram.program());
                             if (success) {
-                                ghidraRenamedFunctions++;
+                                renameResults.add(new RenameResult(
+                                        function,
+                                        ghidraMangledName,
+                                        revEngDemangledName
+                                ));
                             } else {
                                 failedRenames++;
                                 Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
@@ -408,7 +426,11 @@ public class GhidraRevengService {
                         ).applyTo(analysedProgram.program(), monitor);
                         // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
                         if (success) {
-                            ghidraRenamedFunctions++;
+                            renameResults.add(new RenameResult(
+                                    function,
+                                    ghidraMangledName,
+                                    revEngDemangledName
+                            ));
                         } else {
                             Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
                             failedRenames++;
@@ -420,13 +442,14 @@ public class GhidraRevengService {
 
         }
         // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-        analysedProgram.program().endTransaction(transactionId, ghidraRenamedFunctions > 0);
+        analysedProgram.program().endTransaction(transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
                     ("Failed to update %d functions from RevEng.AI. Please check the error log for details.").formatted(
                             failedRenames
                     ));
         }
+        return renameResults;
     }
 
     /**
@@ -438,31 +461,9 @@ public class GhidraRevengService {
      * @deprecated Use {@link AnalysedProgram#getIDForFunction(Function)} instead. It forces the caller to prove that they know that the {@link Program} is indeed known on the server and associated by having to provide a {@link AnalysedProgram} instance.
      */
     @Deprecated
-    public Optional<FunctionID> getFunctionIDFor(Function function){
+    public Optional<TypedApiInterface.FunctionID> getFunctionIDFor(Function function){
         return getAnalysedProgram(function.getProgram())
                 .flatMap(knownProgram -> knownProgram.getIDForFunction(function).map(fidWithStatus -> fidWithStatus.functionID));
-    }
-
-    public Optional<StringPropertyMap> getFunctionMangledNamesMap(Program program) {
-        return Optional.ofNullable(program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP));
-    }
-
-    public BiMap<FunctionID, Function> getFunctionMap(Program program){
-        var propMap = program.getUsrPropertyManager().getLongPropertyMap(REAI_FUNCTION_PROP_MAP);
-        BiMap<FunctionID, Function> functionMap = HashBiMap.create();
-        propMap.getPropertyIterator().forEachRemaining(
-                addr -> {
-                    var func = program.getFunctionManager().getFunctionAt(addr);
-
-                    try {
-                        functionMap.put(new FunctionID(propMap.getLong(addr)), func);
-                    } catch (NoValueException e) {
-                        // This should never happen, because we're iterating over the keys
-                        throw new RuntimeException(e);
-                    }
-                }
-        );
-        return functionMap;
     }
 
     /**
@@ -478,7 +479,7 @@ public class GhidraRevengService {
     }
 
     @Deprecated
-    public List<LegacyAnalysisResult> searchForHash(BinaryHash hash){
+    public List<LegacyAnalysisResult> searchForHash(TypedApiInterface.BinaryHash hash){
         return api.search(hash);
     }
 
@@ -487,6 +488,7 @@ public class GhidraRevengService {
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
         var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
+        //noinspection deprecation
         reaiOptions.setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
         reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
         // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
@@ -517,12 +519,12 @@ public class GhidraRevengService {
         return result;
     }
 
-    private BinaryHash hashOfProgram(Program program) {
+    private TypedApiInterface.BinaryHash hashOfProgram(Program program) {
         // TODO: we break the guarantee that a BinaryHash implies that a file of this hash has already been uploaded
-        return new BinaryHash(program.getExecutableSHA256());
+        return new TypedApiInterface.BinaryHash(program.getExecutableSHA256());
     }
 
-    public BinaryHash upload(Program program) {
+    public TypedApiInterface.BinaryHash upload(Program program) {
         // TODO: Check if the program is already uploaded on the server
         // But this requires a dedicated API to do cleanly
 
@@ -552,7 +554,7 @@ public class GhidraRevengService {
         }
     }
 
-    public BinaryHash upload(Path path) {
+    public TypedApiInterface.BinaryHash upload(Path path) {
         try {
             return api.upload(path);
         } catch (FileNotFoundException | ApiException e) {
@@ -570,7 +572,7 @@ public class GhidraRevengService {
     }
 
     ///  Use this method if you just have an AnalysisID and it is not clear yet if it can be accessed
-    public AnalysisStatus pollStatus(AnalysisID id) throws ApiException {
+    public AnalysisStatus pollStatus(TypedApiInterface.AnalysisID id) throws ApiException {
         return api.status(id);
     }
 
@@ -633,7 +635,7 @@ public class GhidraRevengService {
 
     ///  This method analyses a program by uploading it (if necessary), triggering an analysis, and _blocking_
     /// until the analysis is complete. This is for scripts and tests, and must not be used on the UI thread
-    /// It does not upload the program, this must be done beforehand, and the hash must be associated via {@link AnalysisOptionsBuilder#hash(BinaryHash)}
+    /// It does not upload the program, this must be done beforehand, and the hash must be associated via {@link AnalysisOptionsBuilder#hash(TypedApiInterface.BinaryHash)}
     public AnalysedProgram analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
         // Check if we are on the swing thread
         var programWithBinaryID = startAnalysis(program, analysisOptionsBuilder);
@@ -665,58 +667,58 @@ public class GhidraRevengService {
         return Optional.empty();
     }
 
-    public Optional<FunctionDataTypeMessage> getFunctionSignatureArtifact(AnalysedProgram program, FunctionID functionID) {
-        return api.getFunctionDataTypes(program.analysisID(), functionID).flatMap(FunctionDataTypeStatus::data_types);
-    }
-
     /**
-     * Create a {@link FunctionDefinitionDataType} from a @{@link FunctionDataTypeMessage} in isolation
+     * Create a {@link FunctionDefinitionDataType} from a @{@link FunctionInfoOutput} in isolation
      *
-     * All the required dependency types should be stored in the DataTypeManager that is associated with this
+     * All the required dependency types will be stored in the DataTypeManager that is associated with this
      * FunctionDefinitionDataType
      *
      * @param functionDataTypeMessage The message containing the function signature, received from the API
      * @return Self-contained signature for the function
      */
-    public static FunctionDefinitionDataType getFunctionSignature(FunctionDataTypeMessage functionDataTypeMessage) throws DataTypeDependencyException {
-
-        // TODO: Do we need the program or data type manager?
-        // Or can we just create a new one with all the necessary types and then they get merged?
+    public static Optional<FunctionDefinitionDataType> getFunctionSignature(FunctionInfoOutput functionDataTypeMessage) throws DataTypeDependencyException {
 
         // Create Data Type Manager with all dependencies
-        var dtm = loadDependencyDataTypes(functionDataTypeMessage.func_deps());
+        var d = FunctionDependencies.fromOpenAPI(functionDataTypeMessage.getFuncDeps());
+        var dtm = loadDependencyDataTypes(d);
 
-        FunctionDefinitionDataType f = new FunctionDefinitionDataType(functionDataTypeMessage.functionName(), dtm);
+        if (functionDataTypeMessage.getFuncTypes() == null){
+            return Optional.empty();
+        }
+        var funcName = functionDataTypeMessage.getFuncTypes().getName();
+        FunctionDefinitionDataType f = new FunctionDefinitionDataType(funcName, dtm);
 
         try {
-            f.setName(functionDataTypeMessage.functionName());
+            f.setName(funcName);
         } catch (InvalidNameException e) {
             throw new RuntimeException(e);
         }
 
-        ParameterDefinitionImpl[] args = Arrays.stream(functionDataTypeMessage.func_types().header().args()).map(
+        ParameterDefinitionImpl[] args = functionDataTypeMessage.getFuncTypes().getHeader().getArgs().values().stream().map(
                 arg -> {
                     DataType ghidraType = null;
                     try {
-                        ghidraType = loadDataType(dtm, arg.type(), functionDataTypeMessage.func_deps());
+                        var scopedName = TypePathAndName.fromString(arg.getType());
+                        ghidraType = loadDataType(dtm, scopedName);
                     } catch (DataTypeDependencyException e) {
                         Msg.error(GhidraRevengService.class,
-                                "Couldn't find type '%s' for param of %s".formatted(arg.type(), functionDataTypeMessage.functionName())
+                                ("" +
+                                        "Couldn't find type '%s' for param of %s").formatted(arg.getType(), funcName)
                         );
-                        ghidraType = Undefined.getUndefinedDataType(arg.size());
+                        ghidraType = Undefined.getUndefinedDataType(arg.getSize());
                     }
                     // Add the type to the DataTypeManager
-                    return new ParameterDefinitionImpl(arg.name(), ghidraType, null);
+                    return new ParameterDefinitionImpl(arg.getName(), ghidraType, null);
                 }).toArray(ParameterDefinitionImpl[]::new);
 
         f.setArguments(args);
 
         DataType returnType = null;
-        returnType = loadDataType(dtm, functionDataTypeMessage.func_types().header().type(), functionDataTypeMessage.func_deps());
+        returnType = loadDataType(dtm, TypePathAndName.fromString(functionDataTypeMessage.getFuncTypes().getHeader().getType()));
         f.setReturnType(returnType);
 
 
-        return f;
+        return Optional.of(f);
     }
 
     public static DataTypeManager loadDependencyDataTypes(FunctionDependencies dependencies){
@@ -761,7 +763,8 @@ public class GhidraRevengService {
             var path = TypePathAndName.fromString(typeDef.name());
             DataType type;
             try {
-                type = dataTypeParser.parse(typeDef.type());
+                var scopedType = TypePathAndName.fromString(typeDef.type());
+                type = dataTypeParser.parse(scopedType.name());
             } catch (InvalidDataTypeException e) {
                 // The type wasn't available in the DataTypeManager yet, try again later
                 typeDefsToAdd.add(typeDef);
@@ -770,7 +773,7 @@ public class GhidraRevengService {
             } catch (CancelledException e) {
                 throw new RuntimeException(e);
             }
-            TypedefDataType typedefDataType = new TypedefDataType(new CategoryPath(CategoryPath.ROOT, path.path()), path.name(), type, null);
+            TypedefDataType typedefDataType = new TypedefDataType(path.toCategoryPath(), path.name(), type, null);
             dtm.addDataType(typedefDataType, DataTypeConflictHandler.REPLACE_EMPTY_STRUCTS_OR_RENAME_AND_ADD_HANDLER);
         }
 
@@ -785,7 +788,7 @@ public class GhidraRevengService {
                                 binSyncStructMember -> {
                                     DataType fieldType = null;
                                     try {
-                                        fieldType = loadDataType(dtm, binSyncStructMember.type(), dependencies);
+                                        fieldType = loadDataType(dtm, TypePathAndName.fromString(binSyncStructMember.type()));
                                     } catch (DataTypeDependencyException e) {
                                         Msg.error(
                                                 GhidraRevengService.class,
@@ -813,7 +816,7 @@ public class GhidraRevengService {
         return dtm;
     }
 
-    private static DataType loadDataType(DataTypeManager dtm, String name, FunctionDependencies dependencies) throws DataTypeDependencyException {
+    private static DataType loadDataType(DataTypeManager dtm, TypePathAndName type) throws DataTypeDependencyException {
         DataTypeParser dataTypeParser = new DataTypeParser(
                 dtm,
                 null,
@@ -821,17 +824,17 @@ public class GhidraRevengService {
                 DataTypeParser.AllowedDataTypes.ALL);
         DataType dataType;
         try {
-            dataType = dataTypeParser.parse(name);
+            dataType = dataTypeParser.parse(type.name());
         } catch (InvalidDataTypeException e) {
             // The type wasn't available in the DataTypeManager, so we have to find it in the dependencies
-            throw new DataTypeDependencyException("Data type not found in DataTypeManager: %s".formatted(name), e);
+            throw new DataTypeDependencyException("Data type not found in DataTypeManager: %s".formatted(type), e);
         } catch (CancelledException e) {
             throw new RuntimeException(e);
         }
         return dataType;
     }
 
-    public String getAnalysisLog(AnalysisID analysisID) {
+    public String getAnalysisLog(TypedApiInterface.AnalysisID analysisID) {
         return api.getAnalysisLogs(analysisID);
     }
 
@@ -850,7 +853,7 @@ public class GhidraRevengService {
 
     public static final String PORTAL_FUNCTIONS = "function/";
 
-    public void openFunctionInPortal(FunctionID functionID) {
+    public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
         openPortal(PORTAL_FUNCTIONS, String.valueOf(functionID.value()));
     }
 
@@ -861,7 +864,7 @@ public class GhidraRevengService {
     public void openPortalFor(Collection c){
         openCollectionInPortal(c);
     }
-    public void openPortalFor(FunctionID f){
+    public void openPortalFor(TypedApiInterface.FunctionID f){
         openFunctionInPortal(f);
     }
 
@@ -873,7 +876,7 @@ public class GhidraRevengService {
         openPortalFor(programWithID.analysisID());
     }
 
-    public void openPortalFor(AnalysisID analysisID) {
+    public void openPortalFor(TypedApiInterface.AnalysisID analysisID) {
         openPortal("analyses", String.valueOf(analysisID.id()));
     }
 
@@ -989,7 +992,7 @@ public class GhidraRevengService {
         // Get the confidence scores for each match in the input
         List<FunctionNameScore> r =  api.getNameScores(values.stream().map(GhidraFunctionMatch::functionMatch).toList(), false);
         // Collect to a Map from the FunctionID to the actual score
-        Map<FunctionID, BoxPlot> plots = r.stream().collect(Collectors.toMap(FunctionNameScore::functionID, FunctionNameScore::score));
+        Map<TypedApiInterface.FunctionID, BoxPlot> plots = r.stream().collect(Collectors.toMap(FunctionNameScore::functionID, FunctionNameScore::score));
         return values.stream().collect(Collectors.toMap(
                 match -> match,
                 match -> plots.get(match.functionMatch().origin_function_id())
@@ -1001,23 +1004,43 @@ public class GhidraRevengService {
      * @param values
      * @return
      */
-    public Map<GhidraFunctionMatch, FunctionDataTypeMessage> getSignatures(java.util.Collection<GhidraFunctionMatch> values) {
+    public Map<GhidraFunctionMatch, FunctionDefinitionDataType> getSignatures(java.util.Collection<GhidraFunctionMatch> values) {
 
-        DataTypeList dataTypesList = this.api.getFunctionDataTypes(values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).toList());
-        Map<FunctionID, FunctionDataTypeMessage> signatureMap = Arrays.stream(dataTypesList.dataTypes())
-                .filter(FunctionDataTypeStatus::completed)
-                .filter(status -> status.data_types().isPresent())
+
+        // Get all data type info for the neighbour functions
+        var dataTypesList = this.api.listFunctionDataTypesForFunctions(
+                values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).toList()
+        );
+        // Create a map from FunctionID to FunctionInfoOutput for easy lookup, only for completed signatures
+        Map<TypedApiInterface.FunctionID, @NotNull FunctionInfoOutput> signatureMap = dataTypesList.getItems().stream()
+                // Only keep completed signatures
+                .filter(FunctionDataTypesListItem::getCompleted)
+                // Double check that there is a data type available
+                .filter(functionDataTypesListItem -> functionDataTypesListItem.getDataTypes() != null)
                 .collect(Collectors.toMap(
-                        FunctionDataTypeStatus::functionID,
-                        status -> status.data_types().get()
+                        item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
+                        FunctionDataTypesListItem::getDataTypes
                 ));
 
-        return values.stream()
+        Map<GhidraFunctionMatch, @NotNull FunctionInfoOutput> matchMap =  values.stream()
                 .filter(match -> signatureMap.containsKey(match.functionMatch().nearest_neighbor_id()))
                 .collect(Collectors.toMap(
                 match -> match,
                 match -> signatureMap.get(match.functionMatch().nearest_neighbor_id())
         ));
+
+        // Now parse all signatures
+        Map<GhidraFunctionMatch, FunctionDefinitionDataType> result = new HashMap<>();
+        for (var entry : matchMap.entrySet()){
+            try {
+                var funcDefOpt = getFunctionSignature(entry.getValue());
+                funcDefOpt.ifPresent(funcDef -> result.put(entry.getKey(), funcDef));
+            } catch (DataTypeDependencyException e) {
+                Msg.error(this, "Could not parse signature for function %s".formatted(entry.getKey().functionMatch()), e);
+            }
+        }
+        return result;
+
     }
 
     public CompletableFuture<List<SelectableItem>> searchCollectionsWithIds(String query, String modelName) {
@@ -1070,28 +1093,62 @@ public class GhidraRevengService {
         });
     }
 
-    public Basic getBasicDetailsForAnalysis(AnalysisID analysisID) throws ApiException {
+    public Basic getBasicDetailsForAnalysis(TypedApiInterface.AnalysisID analysisID) throws ApiException {
         return api.getAnalysisBasicInfo(analysisID);
     }
 
-    public FunctionMatchingBatchResponse getFunctionMatchingForAnalysis(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
+    public FunctionMatchingResponse getFunctionMatchingForAnalysis(TypedApiInterface.AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
         return api.analysisFunctionMatching(analysisID, request);
     }
 
-    public FunctionMatchingBatchResponse getFunctionMatchingForFunction(FunctionMatchingRequest request) throws ApiException {
+    public FunctionMatchingResponse getFunctionMatchingForFunction(FunctionMatchingRequest request) throws ApiException {
         return api.functionFunctionMatching(request);
     }
 
-    public void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
-        api.batchRenameFunctions(functionsList);
+    public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
+        // Pushing types to the portal is not supported yet, so we just extract the function matches and call the other method
+        batchRenameMatches(functionsList.stream()
+                .map(GhidraFunctionMatchWithSignature::functionMatch)
+                .toList());
+
     }
+
+    public void batchRenameGhidraMatches(List<GhidraFunctionMatch> functionsList) throws ApiException {
+        var matches = functionsList.stream()
+                .map(GhidraFunctionMatch::functionMatch)
+                .toList();
+        batchRenameMatches(matches);
+    }
+
+    public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
+        var matches = functionsList.stream()
+                .map(result -> {
+                    var func = new FunctionRenameMap();
+                    func.setFunctionId(result.origin_function_id().value());
+                    func.setNewName(result.nearest_neighbor_function_name());
+                    func.setNewMangledName(result.nearest_neighbor_mangled_function_name());
+                    return func;
+                })
+                .toList();
+
+        var functionsListRename = new FunctionsListRename();
+        functionsListRename.setFunctions(matches);
+
+        api.batchRenameFunctions(functionsListRename);
+    }
+
+
+    public TypedApiInterface.TypedAutoUnstripResponse autoUnstrip(AnalysedProgram program) throws ApiException {
+        return api.autoUnstrip(program.analysisID);
+    }
+
 
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished
     /// The id of this should also be stored in the program options, but this is currently not enforced yet to allow easier testing
     public record ProgramWithID(
             Program program,
-            AnalysisID analysisID
+            TypedApiInterface.AnalysisID analysisID
     ){}
 
 
@@ -1105,14 +1162,14 @@ public class GhidraRevengService {
     public static class AnalysedProgram {
 
         private final Program program;
-        private final AnalysisID analysisID;
+        private final TypedApiInterface.AnalysisID analysisID;
 
 
         /// The constructor is private to enforce that only the GhidraRevengService class
         /// can create instances of this class, ensuring the guarantees hold
         private AnalysedProgram(
                 Program program,
-                AnalysisID analysisID
+                TypedApiInterface.AnalysisID analysisID
         ) {
             this.program = program;
             this.analysisID = analysisID;
@@ -1123,7 +1180,7 @@ public class GhidraRevengService {
             return program;
         }
 
-        public AnalysisID analysisID() {
+        public TypedApiInterface.AnalysisID analysisID() {
             return analysisID;
         }
 
@@ -1137,6 +1194,10 @@ public class GhidraRevengService {
 
         /// Only returns Optional.Empty if the function is not known on the server (e.g. because it's a thunk)
         public Optional<FunctionWithID> getIDForFunction(Function function) {
+            if (function == null) {
+                Msg.error(AnalysedProgram.class, "Function provided to getIDForFunction is null");
+                return Optional.empty();
+            }
             if (function.getProgram() != this.program){
                 throw new IllegalArgumentException("Function %s does not belong to program %s".formatted(function, this.program.getName()));
             }
@@ -1144,17 +1205,64 @@ public class GhidraRevengService {
             var rawId = functionIDMap.get(function.getEntryPoint());
             return Optional
                     .ofNullable(rawId)
-                    .map(FunctionID::new)
+                    .map(TypedApiInterface.FunctionID::new)
                     .map(
                             functionID -> new FunctionWithID(function, functionID)
                     );
         }
+
+        public BiMap<TypedApiInterface.FunctionID, Function> getFunctionMap(){
+            var propMap = getFunctionIDPropertyMap(this);
+
+            BiMap<TypedApiInterface.FunctionID, Function> functionMap = HashBiMap.create();
+            propMap.getPropertyIterator().forEachRemaining(
+                    addr -> {
+                        var func = program.getFunctionManager().getFunctionAt(addr);
+
+                        try {
+                            functionMap.put(new TypedApiInterface.FunctionID(propMap.getLong(addr)), func);
+                        } catch (NoValueException e) {
+                            // This should never happen, because we're iterating over the keys
+                            throw new RuntimeException(e);
+                        }
+                    }
+            );
+            return functionMap;
+        }
+
+
+        public Optional<FunctionWithID> getFunctionForID(TypedApiInterface.FunctionID functionID) {
+            throw new UnsupportedOperationException("Not implemented yet");
+        }
+
+        public void setMangledNameForFunction(Function function, String mangledName) {
+            if (function.getProgram() != this.program){
+                throw new IllegalArgumentException("Function %s does not belong to program %s".formatted(function, this.program.getName()));
+            }
+            StringPropertyMap mangledNameMap = this.program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
+            if (mangledNameMap == null){
+                throw new IllegalStateException("Mangled name property map not found for supposedly known program %s".formatted(this.program.getName()));
+            }
+            mangledNameMap.add(function.getEntryPoint(), mangledName);
+        }
+
+        public String getMangledNameForFunction(Function function) {
+            if (function.getProgram() != this.program){
+                throw new IllegalArgumentException("Function %s does not belong to program %s".formatted(function, this.program.getName()));
+            }
+            StringPropertyMap mangledNameMap = this.program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP);
+            if (mangledNameMap == null){
+                throw new IllegalStateException("Mangled name property map not found for supposedly known program %s".formatted(this.program.getName()));
+            }
+            return mangledNameMap.getString(function.getEntryPoint());
+        }
+
 
     }
 
     /// Holding this object serves as the proof that a Function has an associated FunctionID
     public static record FunctionWithID(
             Function function,
-            FunctionID functionID
+            TypedApiInterface.FunctionID functionID
     ) {}
 }

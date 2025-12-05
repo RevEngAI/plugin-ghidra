@@ -3,8 +3,8 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -18,7 +18,7 @@ import java.util.Comparator;
 
 
 /**
- * Shows a dialog with a table of {@link LegacyAnalysisResult} for a given {@link BinaryHash},
+ * Shows a dialog with a table of {@link LegacyAnalysisResult} for a given {@link TypedApiInterface.BinaryHash},
  * and fires an event when the user picks an analysis
  */
 public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
@@ -34,7 +34,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         this.program = program;
         this.ghidraRevengService = tool.getService(GhidraRevengService.class);
 
-        var hash = new BinaryHash(program.getExecutableSHA256());
+        var hash = new TypedApiInterface.BinaryHash(program.getExecutableSHA256());
         recentAnalysesTableModel = new RecentAnalysesTableModel(tool, hash, this.program.getImageBase());
         recentAnalysesTable = new GhidraFilterTable<>(recentAnalysesTableModel);
 

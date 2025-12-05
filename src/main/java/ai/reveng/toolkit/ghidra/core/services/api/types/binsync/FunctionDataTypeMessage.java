@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
+import ai.reveng.model.FunctionInfoOutput;
 import org.json.JSONObject;
 
 /**
@@ -227,14 +228,17 @@ import org.json.JSONObject;
  *
  *  This object isn't part of the BinSync types
  *  The func_deps members are either typedefs or structures
+ *
+ * @deprecated see {@link FunctionInfoOutput}
  */
+@Deprecated
 public record FunctionDataTypeMessage(
         FunctionArtifact func_types,
         FunctionDependencies func_deps
 ) {
     public static FunctionDataTypeMessage fromJsonObject(JSONObject dataTypes) {
         return new FunctionDataTypeMessage(
-                FunctionArtifact.fromJsonObject(dataTypes.getJSONObject("func_types")),
+                FunctionArtifact.fromJsonObject(dataTypes. getJSONObject("func_types")),
                 FunctionDependencies.fromJsonObject(dataTypes.getJSONArray("func_deps"))
 
         );

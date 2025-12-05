@@ -1,7 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
@@ -35,7 +34,7 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
-    public AnalysisOptionsBuilder hash(BinaryHash hash) {
+    public AnalysisOptionsBuilder hash(TypedApiInterface.BinaryHash hash) {
         options.put("sha_256_hash", hash.sha256());
         return this;
     }
@@ -66,7 +65,7 @@ public class AnalysisOptionsBuilder {
 
     public static AnalysisOptionsBuilder forProgram(Program program) {
         return new AnalysisOptionsBuilder()
-                .hash(new BinaryHash(program.getExecutableSHA256()))
+                .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))
                 .fileName(program.getName())
                 .functionBoundaries(
                         program.getImageBase().getOffset(),

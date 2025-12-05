@@ -22,6 +22,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.BinaryLevel
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -132,13 +133,13 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                                 "Analysis must have completed before running auto unstrip");
                         return;
                     }
-                    var knownProgram = apiService.getKnownProgram(program);
-                    if (knownProgram.isEmpty()){
+                    var analysedProgram = apiService.getAnalysedProgram(program);
+                    if (analysedProgram.isEmpty()){
                         Msg.info(this, "Program has no saved binary ID");
                         return;
                     }
 
-                    var autoUnstrip = new AutoUnstripDialog(tool, knownProgram.get());
+                    var autoUnstrip = new AutoUnstripDialog(tool, analysedProgram.get());
 
                     tool.showDialog(autoUnstrip);
                 })
@@ -259,7 +260,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 	public void readDataState(SaveState saveState) {
 		int[] rawCollectionIDs = saveState.getInts("collectionIDs", new int[0]);
 		var restoredCollections = Arrays.stream(rawCollectionIDs)
-				.mapToObj(CollectionID::new)
+				.mapToObj(TypedApiInterface.CollectionID::new)
 				.map(cID -> apiService.getApi().getCollectionInfo(cID))
 				.toList();
 		apiService.setActiveCollections(restoredCollections);
@@ -267,7 +268,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	@Override
 	public void writeDataState(SaveState saveState) {
-		int[] collectionIDs = apiService.getActiveCollections().stream().map(Collection::collectionID).mapToInt(CollectionID::id).toArray();
+		int[] collectionIDs = apiService.getActiveCollections().stream().map(Collection::collectionID).mapToInt(TypedApiInterface.CollectionID::id).toArray();
 		saveState.putInts("collectionIDs", collectionIDs);
 	}
 

@@ -5,6 +5,7 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
@@ -159,6 +160,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
 
         // Check that an analysed program is now known
         assert service.getAnalysedProgram(program).isPresent();
+        var analyzedProgram = service.getAnalysedProgram(program).get();
 
         // Check that the function names have been updated to the one returned by the portal
         assertEquals("portal_name_demangled", exampleFunc.getName());
@@ -175,19 +177,15 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
 
 
         // Check the function ID has been stored in the program options
-        var funcIDMap = service.getFunctionMap(program);
-
-        var storedFunc = funcIDMap.get(new FunctionID(1));
+        var funcIDMap = analyzedProgram.getFunctionMap();
+        var storedFunc = funcIDMap.get(new TypedApiInterface.FunctionID(1));
 
         Assert.assertNotNull(storedFunc);
         assertEquals("portal_name_demangled", storedFunc.getName());
 
         // Check the function mangled name has been stored
-        var mangledNamesMap = service.getFunctionMangledNamesMap(program);
-
-        assertTrue(mangledNamesMap.isPresent());
-        assertEquals("portal_name_mangled", mangledNamesMap.get().getString(exampleFunc.getEntryPoint()));
-
+//        assertEquals("portal_name_mangled", mangledNamesMap.get().getString(exampleFunc.getEntryPoint()));
+        assertEquals("portal_name_mangled", analyzedProgram.getMangledNameForFunction(exampleFunc));
         // TODO: What else should happen when the analysis is finished?
     }
 }

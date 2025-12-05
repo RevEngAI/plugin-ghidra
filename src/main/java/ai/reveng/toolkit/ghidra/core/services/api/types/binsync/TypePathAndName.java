@@ -7,12 +7,28 @@ public record TypePathAndName(
         String[] path
 ) {
 
+
+
+    /// based on `ArtifactLifter.parse_scoped_type` from binsync
+    /// Takes strings like:
+    ///
+    /// - "uint32_t"
+    /// - "stdint::uint32_t"
+    /// - "DWARF::stdio.h::off_t"
+    /// @param str
+    /// @return
     public static TypePathAndName fromString(String str){
-        String[] parts = str.split("/");
-        String name = parts[parts.length - 1];
-        String[] path = new String[parts.length - 1];
-        System.arraycopy(parts, 0, path, 0, parts.length - 1);
-        return new TypePathAndName(name, path);
+        // split into path and name on "::"
+        if (str.contains("::")) {
+            String[] pathPlusType = str.split("::");
+            var baseType = pathPlusType[pathPlusType.length - 1];
+
+            String[] parts = new String[pathPlusType.length - 1];
+            System.arraycopy(pathPlusType, 0, parts, 0, pathPlusType.length - 1);
+            return new TypePathAndName(baseType, parts);
+        } else {
+            return new TypePathAndName(str, new String[0]);
+        }
     }
 
     public CategoryPath toCategoryPath(){

@@ -1,10 +1,8 @@
 package ai.reveng.toolkit.ghidra.devplugin;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Function;
@@ -17,8 +15,8 @@ import java.util.Optional;
 public class RevEngMetadataProvider extends ComponentProviderAdapter {
     private final JPanel panel;
     private final JTextField serverField;
-    AnalysisID analysisID;
-    FunctionID functionID;
+    TypedApiInterface.AnalysisID analysisID;
+    TypedApiInterface.FunctionID functionID;
     Function function;
 
     JTextField binaryIDField;

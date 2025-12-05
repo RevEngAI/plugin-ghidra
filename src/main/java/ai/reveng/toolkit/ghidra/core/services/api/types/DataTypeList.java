@@ -1,10 +1,14 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
+import ai.reveng.model.FunctionDataTypesList;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import org.json.JSONObject;
 
 /**
  * Example in data_types_batch_response.json
+ * @deprecated Use OpenAPI {@link FunctionDataTypesList}
  */
+@Deprecated
 public record DataTypeList(
         int totalCount,
         int totalDataTypesCount,
@@ -22,7 +26,7 @@ public record DataTypeList(
         return new DataTypeList(totalCount, totalDataTypesCount, dataTypes);
     }
 
-    public FunctionDataTypeStatus statusForFunction(FunctionID functionID) {
+    public FunctionDataTypeStatus statusForFunction(TypedApiInterface.FunctionID functionID) {
         for (FunctionDataTypeStatus status : dataTypes) {
             if (status.functionID().equals(functionID)) {
                 return status;

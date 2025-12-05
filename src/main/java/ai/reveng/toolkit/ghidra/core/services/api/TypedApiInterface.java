@@ -6,8 +6,9 @@ import java.util.List;
 import java.util.Optional;
 
 import ai.reveng.model.*;
+import ai.reveng.model.AutoUnstripResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AutoUnstripResponse;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.InvalidAPIInfoException;
 
 import javax.annotation.Nullable;
@@ -21,15 +22,26 @@ import ai.reveng.invoker.ApiException;
  *
  * It aims to stick close to the API functions themselves.
  * E.g. if a feature is implemented via two API calls, it should be implemented as two methods here.
- *
+ * "Typed" refers to using special types for IDs like {@link AnalysisID} and {@link FunctionID}, rather than raw integers or strings.
  * Wrapping this feature into one conceptual method should then happen inside the {@link ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService}
- *
+ * This exists as an interface so tests can mock it out more easily.
  *
  */
 public interface TypedApiInterface {
-    // Analysis
-//    @Deprecated
-//    BinaryID legacyAnalyse(AnalysisOptionsBuilder binHash) throws ApiException;
+    /// Data type to represent the RevEng.AI API concept of a function ID
+    record FunctionID(long value){}
+
+    /// This is a special box type for an analysis ID
+    /// It enforces that the integer is specifically an analysis ID,
+    /// and it implies that the user has (at least read) access to this ID
+    record AnalysisID(int id) {}
+    // TODO: could add a box type for an analysis that the user has _write_ access to
+
+    record CollectionID(int id) {}
+
+    /// Data type for all reveng API responses or parameters that are a binary hash (as returned by the upload method)
+    /// The existence of a BinaryHash implies that there is a binary with this hash on the server
+    record BinaryHash(String sha256) {}
 
     default AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
         throw new UnsupportedOperationException("analyse not implemented yet");
@@ -66,6 +78,19 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("upload not implemented yet");
     }
 
+
+    /**
+     * Special filters for the collection search endpoint
+     * https://api.reveng.ai/v2/docs#tag/Collections/operation/list_collections_v2_collections_get
+     */
+    enum SearchFilter {
+        official_only,
+        user_only,
+        team_only,
+        public_only,
+        hide_empty
+    }
+
     default List<Collection> searchCollections(String searchTerm,
                                                      @Nullable List<SearchFilter> filter,
                                                      int limit,
@@ -98,6 +123,17 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionDataTypes not implemented yet");
     }
 
+    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID) {
+        return listFunctionDataTypesForAnalysis(analysisID, null);
+    }
+
+    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
+        throw new UnsupportedOperationException("listFunctionDataTypesForAnalysis not implemented yet");
+    }
+
+    default FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
+        throw new UnsupportedOperationException("listFunctionDataTypesForFunctions not implemented yet");
+    }
 
     @Deprecated
     default AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
@@ -134,11 +170,22 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
     }
 
-    default AutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
+    ///
+    /// Typed Box Placeholder for {@link AutoUnstripResponse}
+    record TypedAutoUnstripResponse(
+            AutoUnstripResponse autoUnstripResponse
+    ) {
+    }
+
+    /// {@link MatchedFunctionSuggestion}
+    record TypedAutoUnstripMatch(MatchedFunctionSuggestion suggestedFunction) { }
+
+
+    default TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
         throw new UnsupportedOperationException("autoUnstrip not implemented yet");
     }
 
-    default AutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
+    default TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
         throw new UnsupportedOperationException("aiUnstrip not implemented yet");
     }
 
@@ -158,11 +205,11 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getAnalysisBasicInfo not implemented yet");
     }
 
-    default FunctionMatchingBatchResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
+    default FunctionMatchingResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
         throw new UnsupportedOperationException("analysisFunctionMatching not implemented yet");
     }
 
-    default FunctionMatchingBatchResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
+    default FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
         throw new UnsupportedOperationException("functionFunctionMatching not implemented yet");
     }
 

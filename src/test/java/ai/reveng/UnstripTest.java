@@ -1,9 +1,12 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.model.AutoUnstripResponse;
+import ai.reveng.model.MatchedFunctionSuggestion;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
-import ai.reveng.toolkit.ghidra.core.services.api.types.*;
+import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
@@ -26,15 +29,22 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
 
 
             @Override
-            public AutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
-                return new AutoUnstripResponse(
-                        100,
-                        "STATUS",
-                        0,
-                        List.of(new AutoUnstripResponse.Match(new FunctionID(1), 0x1000, "unstripped_function_name", "unstripped_function_name_demangled" ) ),
-                        false,
-                        null
-                );
+            public TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
+                var r = new AutoUnstripResponse()
+                        .progress(100)
+                        .status("STATUS")
+                        .applied(false)
+                        .totalTime(0)
+                        .matches(List.of(
+                                new MatchedFunctionSuggestion()
+                                        .functionId(1L)
+                                        .functionVaddr(0x1000L)
+                                        .suggestedName("unstripped_function_name")
+                                        .suggestedDemangledName("unstripped_function_name_demangled")
+                                        )
+                        );
+
+                return new TypedAutoUnstripResponse(r);
             }
 
             @Override
@@ -77,14 +87,13 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
     public void testProgressingUnstrip() throws Exception {
         var tool = env.getTool();
         Iterator<AutoUnstripResponse> responses = List.of(
-                new AutoUnstripResponse(
-                        0,
-                        "QUEUED",
-                        0,
-                        List.of(),
-                        false,
-                        null
-                ),
+                new AutoUnstripResponse()
+                        .progress(0)
+                        .status("QUEUED")
+                        .applied(false)
+                        .totalTime(0)
+                        .matches(List.of())
+                ,
 // The poll interval is not configurable, so we can only test two responses before hitting a Ghidra test timeout
 //                new AutoUnstripResponse(
 //                        50,
@@ -94,22 +103,26 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
 //                        false,
 //                        null
 //                ),
-                new AutoUnstripResponse(
-                        100,
-                        "COMPLETED",
-                        0,
-                        List.of(new AutoUnstripResponse.Match(new FunctionID(1), 0x1000, "unstripped_function_name", "unstripped_function_name_demangled") ),
-                        false,
-                        null
-                )
+                new AutoUnstripResponse()
+                        .progress(100)
+                        .status("COMPLETED")
+                        .totalTime(1)
+                        .matches(List.of(
+                                new MatchedFunctionSuggestion()
+                                        .functionId(1L)
+                                        .functionVaddr(0x1000L)
+                                        .suggestedName("unstripped_function_name")
+                                        .suggestedDemangledName("unstripped_function_name_demangled")
+                        ))
+                        .applied(false)
         ).iterator();
 
         var service = addMockedService(tool, new UnimplementedAPI() {
 
 
             @Override
-            public AutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
-                return responses.next();
+            public TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
+                return new TypedAutoUnstripResponse(responses.next());
             }
 
             @Override

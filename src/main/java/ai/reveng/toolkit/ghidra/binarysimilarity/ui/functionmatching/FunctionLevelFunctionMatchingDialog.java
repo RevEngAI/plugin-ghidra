@@ -2,6 +2,10 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Function;
@@ -88,40 +92,18 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     }
 
     @Override
-    protected FunctionMatchResult createFunctionMatchResult(Function localFunction, MatchedFunction match, Long matcherFunctionId) {
-        String bestMatchName = match.getFunctionName();
-        String bestMatchMangledName = match.getMangledName();
-        String similarity = match.getSimilarity() != null ?
-            String.format("%.2f%%", match.getSimilarity().doubleValue()) : "N/A";
-        String confidence = match.getConfidence() != null ?
-            String.format("%.2f%%", match.getConfidence().doubleValue()) : "N/A";
-        String matchedHash = match.getSha256Hash();
-        String binary = match.getBinaryName();
-
-        return new FunctionMatchResult(
-            bestMatchName,
-            bestMatchMangledName,
-            similarity,
-            confidence,
-            matchedHash,
-            binary,
-            matcherFunctionId
-        );
-    }
-
-    @Override
     protected String[] getTableColumnNames() {
         return new String[]{"Matched Function", "Similarity", "Confidence", "Matched Hash", "Matched Binary"};
     }
 
     @Override
-    protected Object[] getTableRowData(FunctionMatchResult result) {
+    protected Object[] getTableRowData(GhidraFunctionMatchWithSignature result) {
         return new Object[]{
-            result.bestMatchName(),
-            result.similarity(),
-            result.confidence(),
-            result.matchedHash(),
-            result.binary()
+            result.functionMatch().nearest_neighbor_function_name(),
+            result.functionMatch().similarity(),
+            result.functionMatch().confidence(),
+            result.functionMatch().nearest_neighbor_sha_256_hash().sha256(),
+            result.functionMatch().nearest_neighbor_binary_name()
         };
     }
 
@@ -169,11 +151,11 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     }
 
     @Override
-    protected boolean matchesFilter(FunctionMatchResult result) {
+    protected boolean matchesFilter(GhidraFunctionMatchWithSignature result) {
         String filterText = functionFilterField.getText().trim().toLowerCase();
-        return result.bestMatchName().toLowerCase().contains(filterText) ||
-               result.matchedHash().toLowerCase().contains(filterText) ||
-               result.binary().toLowerCase().contains(filterText);
+        return result.functionMatch().nearest_neighbor_function_name().toLowerCase().contains(filterText) ||
+               result.functionMatch().nearest_neighbor_sha_256_hash().sha256().toLowerCase().contains(filterText) ||
+               result.functionMatch().nearest_neighbor_binary_name().toLowerCase().contains(filterText);
     }
 
     @Override

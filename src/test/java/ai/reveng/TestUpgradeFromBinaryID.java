@@ -3,7 +3,6 @@ package ai.reveng;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
@@ -13,6 +12,7 @@ import org.junit.Test;
 
 import java.util.Optional;
 
+@SuppressWarnings("deprecation") // This test ensures upgrade from deprecated Binary ID usage
 public class TestUpgradeFromBinaryID extends RevEngMockableHeadedIntegrationTest {
 
     /// Tests the logic for handling a program that has only a binary ID stored in its properties
