@@ -39,7 +39,7 @@ and use it for Binary Code Similarity to help you Reverse Engineer stripped bina
 
 ## Installation
 
-The builds for latest stable version of the RevEng.AI Ghidra plugin for common Ghidra versions can be downloaded from the [Releases](https://github.com/revengai/plygin-ghidra/releases/latest) page.
+The builds for latest stable version of the RevEng.AI Ghidra plugin for common Ghidra versions can be downloaded from the [Releases](https://github.com/revengai/plugin-ghidra/releases/latest) page.
 
 ### Supported Ghidra versions
 
