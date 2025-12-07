@@ -1,7 +1,9 @@
 package ai.reveng.toolkit.ghidra.core.services.api.mocks;
 
+import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,6 +11,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Objects;
 
 public class UnimplementedAPI implements TypedApiInterface {
@@ -49,5 +52,12 @@ public class UnimplementedAPI implements TypedApiInterface {
             throw new RuntimeException(e);
         }
 
+    }
+
+    /// This gets called when registering the initial mock analysis
+    /// it just pretends that there is no type info available
+    @Override
+    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
+        return new FunctionDataTypesList();
     }
 }

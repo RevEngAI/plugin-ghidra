@@ -2,6 +2,7 @@ package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.AutoUnstripResponse;
+import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.model.MatchedFunctionSuggestion;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -11,6 +12,7 @@ import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
+import org.jetbrains.annotations.Nullable;
 import org.junit.Test;
 
 import java.util.Iterator;
@@ -27,12 +29,12 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
         var tool = env.getTool();
         var service = addMockedService(tool, new UnimplementedAPI() {
 
-
+            boolean autoUnstripCalled = false;
             @Override
             public TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
                 var r = new AutoUnstripResponse()
                         .progress(100)
-                        .status("STATUS")
+                        .status("COMPLETED")
                         .applied(false)
                         .totalTime(0)
                         .matches(List.of(
@@ -43,7 +45,7 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
                                         .suggestedDemangledName("unstripped_function_name_demangled")
                                         )
                         );
-
+                autoUnstripCalled = true;
                 return new TypedAutoUnstripResponse(r);
             }
 
@@ -59,14 +61,19 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
 
             @Override
             public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
-                return List.of(new FunctionInfo(new FunctionID(1), "default_function_info_name",  "default_function_info_name_mangled",0x1000L, 10));
+                if (!autoUnstripCalled) {
+                    return List.of(new FunctionInfo(new FunctionID(1), "FUN_0x1000",  "FUN_0x1000",0x1000L, 10));
+                }
+                else {
+                    return List.of(new FunctionInfo(new FunctionID(1), "unstripped_function_name_demangled", "unstripped_function_name_mangled",0x1000L, 10));
+                }
             }
         });
 
         addPlugin(tool, BinarySimilarityPlugin.class);
         var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
         var func = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
-
+        builder.createMemory("test", "01000", 0x100);
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
 
         env.showTool(programWithID.program());
@@ -137,8 +144,18 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
 
             @Override
             public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
-                // the function info will return a name, but it will _not_ be the unstripped name
-                return List.of(new FunctionInfo(new FunctionID(1), "default_function_info_name", "default_function_info_name_mangled",0x1000L, 10));
+                // the function info will return a name, but it will _not_ be the unstripped name by default
+                if (responses.hasNext()) {
+                    return List.of(new FunctionInfo(new FunctionID(1), "FUN_0x1000", "FUN_0x1000",0x1000L, 10));
+                } else {
+                    return List.of(new FunctionInfo(new FunctionID(1), "unstripped_function_name_demangled", "unstripped_function_name_mangled",0x1000L, 10));
+                }
+            }
+
+            @Override
+            public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID) {
+                var list = new FunctionDataTypesList();
+                return list;
             }
         });
 
@@ -146,7 +163,7 @@ public class UnstripTest extends RevEngMockableHeadedIntegrationTest{
         var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
         // We provide no function name, so ghidra will assign the default "FUN_1000" name
         var func = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
-
+        builder.createMemory("test", "01000", 0x100);
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
 
         env.showTool(programWithID.program());

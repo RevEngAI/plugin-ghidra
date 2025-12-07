@@ -22,6 +22,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Structure;
+import ghidra.program.model.listing.CircularDependencyException;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionSignature;
 import ghidra.program.model.listing.Program;
@@ -33,6 +34,7 @@ import ghidra.util.Msg;
 import ghidra.util.data.DataTypeParser;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
+import ghidra.util.exception.InvalidInputException;
 import ghidra.util.exception.NoValueException;
 import ghidra.util.task.TaskMonitor;
 import org.jetbrains.annotations.NotNull;
@@ -50,6 +52,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_NAMESPACE;
 import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.OPTION_KEY_ANALYSIS_ID;
 
 
@@ -123,6 +126,19 @@ public class GhidraRevengService {
         return new ProgramWithID(program, analysisID);
     }
 
+    private Namespace getRevEngAINameSpace(Program program) {
+        Namespace revengMatchNamespace = null;
+        try {
+            revengMatchNamespace = program.getSymbolTable().getOrCreateNameSpace(
+                    program.getGlobalNamespace(),
+                    REVENG_AI_NAMESPACE,
+                    SourceType.ANALYSIS
+            );
+        } catch (DuplicateNameException | InvalidInputException e) {
+            throw new RuntimeException(e);
+        }
+        return revengMatchNamespace;
+    }
     /**
      * Tries to find a BinaryID for a given program
      * If the program already has a BinaryID associated with it, it will return that
@@ -321,6 +337,17 @@ public class GhidraRevengService {
 
         int failedRenames = 0;
 
+        var revEngNamespace = getRevEngAINameSpace(analysedProgram.program());
+
+        Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
+                .collect(
+                        Collectors.toMap(
+                                FunctionInfo::functionID,
+                                fi -> fi
+                        )
+                );
+
+
         Map<TypedApiInterface.FunctionID, @NotNull FunctionDataTypesListItem> signatureMap = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID).getItems()
                 .stream()
                 .filter(item -> item.getStatus().equals("completed"))
@@ -350,11 +377,12 @@ public class GhidraRevengService {
             }
 
             // Get the current name on  the server side
-            FunctionDetails details = api.getFunctionDetails(fID.get().functionID);
+//            FunctionDetails details = api.getFunctionDetails(fID.get().functionID);
+            FunctionInfo details = functionInfoMap.get(fID.get().functionID);
 
             // Extract the mangled name from Ghidra
-            var revEngMangledName = details.mangledFunctionName();
-            var revEngDemangledName = details.demangledName();
+            var revEngMangledName = details.functionMangledName();
+            var revEngDemangledName = details.functionName();
 
             // Skip invalid function mangled names
             if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
@@ -399,6 +427,11 @@ public class GhidraRevengService {
                         // but just to be safe and make that assumption explicit we check it explicitly
                         if (!function.getSymbol().getName(false).equals(revEngDemangledName)) {
                             Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                            try {
+                                function.setParentNamespace(revEngNamespace);
+                            } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+                                throw new RuntimeException(e);
+                            }
                             var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
                                     .applyTo(analysedProgram.program());
                             if (success) {
