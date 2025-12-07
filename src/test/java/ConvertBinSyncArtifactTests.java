@@ -22,6 +22,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+@Ignore("Integration tests that rely on mock data from files")
 public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
 
     TypedApiInterface.AnalysisID analysisID = new TypedApiInterface.AnalysisID(1337);

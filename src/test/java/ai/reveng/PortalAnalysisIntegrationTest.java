@@ -1,6 +1,10 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.model.FunctionDataTypesList;
+import ai.reveng.model.FunctionDataTypesListItem;
+import ai.reveng.model.FunctionInfoOutput;
+import ai.reveng.model.FunctionTypeOutput;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
@@ -16,9 +20,11 @@ import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
+import org.jetbrains.annotations.Nullable;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,41 +51,64 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
             }
 
             @Override
-            public Optional<FunctionDataTypeStatus> getFunctionDataTypes(AnalysisID analysisID, FunctionID functionID) {
-                var ds = new FunctionDataTypeStatus(
-                        true,
-                        Optional.of(
-                                new FunctionDataTypeMessage(
-                                        new FunctionArtifact(
-                                                0x4000L,
-                                                0x100,
-                                                new FunctionHeader(
-                                                        null,
-                                                        "portal_name_demangled",
-                                                        0x4000L,
-                                                        "int",
-                                                        new FunctionArgument[]{
-                                                                new FunctionArgument(0, 8,
-                                                                        null,
-                                                                        "named_param_1",
-                                                                        "char *"
-                                                                ),
-                                                        }
+            public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
 
-                                                ),
-                                                new StackVariable[]{}
-                                        ),
-                                        new FunctionDependencies(
-                                                new Typedef[]{},
-                                                new Struct[]{}
-                                        )
-                                )
-                        ),
-                        "completed",
-                        null,
-                        functionID
-                );
-                return Optional.of(ds);
+                try {
+                    var list = FunctionDataTypesList.fromJson(
+                            """
+                                       {
+                                           "total_count": 1,
+                                           "total_data_types_count": 1,
+                                           "items": [
+                                             {
+                                               "completed": true,
+                                               "status": "completed",
+                                               "data_types": {
+                                                 "func_types": {
+                                                   "addr": 1052960,
+                                                   "size": 22,
+                                                   "header": {
+                                                     "name": "portal_name_demangled",
+                                                     "addr": 1052960,
+                                                     "type": "int",
+                                                     "args": {
+                                                       "0x0": {
+                                                         "offset": 0,
+                                                         "name": "ctx",
+                                                         "type": "ossl_typ.h::EVP_PKEY_CTX *",
+                                                         "size": 1
+                                                       }
+                                                     }
+                                                   },
+                                                   "name": "portal_name_demangled",
+                                                   "type": "int",
+                                                   "artifact_type": "Function"
+                                                 },
+                                                 "func_deps": [
+                                                   {
+                                                     "name": "evp_pkey_ctx_st",
+                                                     "size": 0,
+                                                     "members": {},
+                                                     "artifact_type": "Struct"
+                                                   },
+                                                   {
+                                                     "name": "EVP_PKEY_CTX",
+                                                     "type": "ossl_typ.h::evp_pkey_ctx_st",
+                                                     "artifact_type": "Typedef"
+                                                   }
+                                                 ]
+                                               },
+                                               "function_id": 1
+                                             }
+                                             ]                                          
+                                             }
+                                    """
+                    );
+                    return list;
+
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
 
             @Override
@@ -166,7 +195,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         assertEquals("portal_name_demangled", exampleFunc.getName());
 
         var signature = exampleFunc.getSignature(true);
-        assertEquals("int portal_name_demangled(char * named_param_1)", signature.getPrototypeString());
+        assertEquals("int portal_name_demangled(EVP_PKEY_CTX * ctx)", signature.getPrototypeString());
         // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x
         // So we only test this for Ghidra 11.3 and above
         ApplicationVersion version = new ApplicationVersion(Application.getApplicationVersion());

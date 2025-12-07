@@ -6,7 +6,7 @@ public class HelperTests {
 
     @Test
     public void testPathSplitting(){
-        var path = TypePathAndName.fromString("a/b/c");
+        var path = TypePathAndName.fromString("a::b::c");
         assert path.name().equals("c");
         assert path.path().length == 2;
         assert path.path()[0].equals("a");
