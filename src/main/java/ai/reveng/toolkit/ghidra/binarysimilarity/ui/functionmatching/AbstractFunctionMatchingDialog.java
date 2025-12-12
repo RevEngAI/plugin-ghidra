@@ -192,7 +192,13 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             resultsToShow = filteredFunctionMatchResults;
         }
 
-        DefaultTableModel model = new DefaultTableModel(getTableColumnNames(), 0);
+        DefaultTableModel model = new DefaultTableModel(getTableColumnNames(), 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                //all cells false
+                return false;
+            }
+        };
         for (FunctionMatchResult result : resultsToShow) {
             model.addRow(getTableRowData(result));
         }
