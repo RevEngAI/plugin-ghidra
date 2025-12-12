@@ -1,8 +1,8 @@
 package ai.reveng.toolkit.ghidra.core;
 
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ghidra.framework.plugintool.PluginEvent;
 import ghidra.program.model.listing.Program;
 
@@ -21,38 +21,35 @@ import ghidra.program.model.listing.Program;
  */
 public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
     private final AnalysisStatus status;
-    private final ProgramWithBinaryID programWithBinaryID;
+    private final GhidraRevengService.ProgramWithID programWithID;
 
-    public RevEngAIAnalysisStatusChangedEvent(String sourceName, ProgramWithBinaryID programWithBinaryID, AnalysisStatus status) {
+    public RevEngAIAnalysisStatusChangedEvent(String sourceName, GhidraRevengService.ProgramWithID programWithID, AnalysisStatus status) {
         super(sourceName, "RevEngAI Analysis Finished");
-        if (status == null || programWithBinaryID == null) {
+        if (status == null || programWithID == null) {
             throw new IllegalArgumentException("args cannot be null");
         }
         this.status = status;
-        this.programWithBinaryID = programWithBinaryID;
+        this.programWithID = programWithID;
     }
 
     public AnalysisStatus getStatus() {
         return status;
     }
 
-    public ProgramWithBinaryID getProgramWithBinaryID() {
-        return programWithBinaryID;
+    public GhidraRevengService.ProgramWithID getProgramWithBinaryID() {
+        return programWithID;
     }
 
     public Program getProgram() {
-        return programWithBinaryID.program();
+        return programWithID.program();
     }
 
-    public BinaryID getBinaryID() {
-        return programWithBinaryID.binaryID();
-    }
 
     @Override
     public String toString() {
         return "RevEngAIAnalysisStatusChangedEvent{" +
                 "status=" + status +
-                ", programWithBinaryID=" + programWithBinaryID +
+                ", programWithBinaryID=" + programWithID +
                 '}';
     }
 }

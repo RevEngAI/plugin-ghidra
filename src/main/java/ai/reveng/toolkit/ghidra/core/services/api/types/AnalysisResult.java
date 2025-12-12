@@ -1,33 +1,20 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
 
+import ai.reveng.model.Basic;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
-import org.json.JSONObject;
 
-/*
- */
+/// This is a remnant of an older class that contained the analysis result data directly.
+/// Now it's a wrapper around the generated Basic class with some shim methods for convenience.
 public record AnalysisResult(
-        AnalysisID analysisID,
-        String binary_name,
-        String creation,
-        Integer model_id,
-        String model_name,
-        BinaryHash sha_256_hash,
-        AnalysisStatus status
-//        AnalysisScope analysis_scope,
+        TypedApiInterface.AnalysisID analysisID,
+        Basic base_response_basic
 ) {
-    public static AnalysisResult fromJSONObject(TypedApiInterface api, JSONObject json) {
-//        throw new UnsupportedOperationException("fromJSONObject not implemented yet");
-        var analysisId = new AnalysisID(json.getInt("analysis_id"));
-        var analysisStatus = api.status(analysisId);
-        return new AnalysisResult(
-                analysisId,
-                json.getString("binary_name"),
-                json.getString("creation"),
-                json.has("model_id") ? json.getInt("model_id") : null,
-                json.getString("model_name"),
-                new BinaryHash(json.getString("sha_256_hash")),
-                analysisStatus
-        );
+    public TypedApiInterface.BinaryHash sha_256_hash() {
+        return new TypedApiInterface.BinaryHash(base_response_basic().getSha256Hash());
+    }
+
+    public String binary_name() {
+        return base_response_basic.getBinaryName();
     }
 }

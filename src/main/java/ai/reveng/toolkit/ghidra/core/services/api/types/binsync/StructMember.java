@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
+import ai.reveng.model.StructureMember;
 import org.json.JSONObject;
 
 /**
@@ -20,6 +21,16 @@ public record StructMember(
                 jsonObject.getInt("offset"),
                 jsonObject.getString("type"),
                 jsonObject.getInt("size")
+        );
+    }
+
+    public static StructMember fromOpenAPI(StructureMember structureMember) {
+        return new StructMember(
+                structureMember.getLastChange(),
+                structureMember.getName(),
+                structureMember.getOffset(),
+                structureMember.getType(),
+                structureMember.getSize()
         );
     }
 }

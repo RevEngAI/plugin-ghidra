@@ -1,8 +1,8 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.collectiondialog;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
 import docking.action.builder.ActionBuilder;
 import generic.theme.GIcon;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
  * <p>
  * <p>
  * <p>
- * Currently, collections are "flat", and effectively a set of {@link ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID} <br>
+ * Currently, collections are "flat", and effectively a set of {@link TypedApiInterface.AnalysisID} <br>
  * In the future they may support hierarchies/nesting<br>
  * <p>
  * This dialog allows sharing the collection choice logic between all components that need to select a collection,
@@ -154,7 +154,7 @@ public class DataSetControlPanelComponent extends ComponentProviderAdapter {
                     // Get all rows that are already selected to be included
                     var selectedBinaries = binaryTableModel.getModelData().stream().filter(BinaryRowObject::include).toList();
 //
-                    Set<AnalysisID> selectedSet = selectedBinaries.stream().map(row -> row.analysisResult().analysisID() ).collect(Collectors.toSet());
+                    Set<TypedApiInterface.AnalysisID> selectedSet = selectedBinaries.stream().map(row -> row.analysisResult().analysisID() ).collect(Collectors.toSet());
                     binaryTableModel.clearData();
 //
                     var searchTerm = analysisSearchTextBox.getText();

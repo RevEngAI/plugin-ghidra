@@ -3,9 +3,8 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -19,7 +18,7 @@ import java.util.Comparator;
 
 
 /**
- * Shows a dialog with a table of {@link LegacyAnalysisResult} for a given {@link BinaryHash},
+ * Shows a dialog with a table of {@link LegacyAnalysisResult} for a given {@link TypedApiInterface.BinaryHash},
  * and fires an event when the user picks an analysis
  */
 public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
@@ -35,7 +34,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         this.program = program;
         this.ghidraRevengService = tool.getService(GhidraRevengService.class);
 
-        var hash = new BinaryHash(program.getExecutableSHA256());
+        var hash = new TypedApiInterface.BinaryHash(program.getExecutableSHA256());
         recentAnalysesTableModel = new RecentAnalysesTableModel(tool, hash, this.program.getImageBase());
         recentAnalysesTable = new GhidraFilterTable<>(recentAnalysesTableModel);
 
@@ -65,7 +64,8 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
                         if ("Analysis ID".equals(columnName)) {
                             LegacyAnalysisResult result = recentAnalysesTable.getModel().getRowObject(row);
                             if (result != null) {
-                                ghidraRevengService.openPortalFor(result);
+                                var analysisID = ghidraRevengService.getApi().getAnalysisIDfromBinaryID(result.binary_id());
+                                ghidraRevengService.openPortalFor(analysisID);
                             }
                         }
                     }
@@ -98,7 +98,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private void pickAnalysis(LegacyAnalysisResult result) {
         var service = tool.getService(GhidraRevengService.class);
         var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-        var programWithID = new ProgramWithBinaryID(program, result.binary_id(), analysisID);
+        var programWithID = new GhidraRevengService.ProgramWithID(program, analysisID);
 
         tool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(

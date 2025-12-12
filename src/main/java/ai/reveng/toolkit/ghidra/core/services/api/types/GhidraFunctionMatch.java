@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ghidra.program.model.listing.Function;
 
 /**
@@ -11,20 +12,9 @@ public record GhidraFunctionMatch(
         Function function,
         FunctionMatch functionMatch
 ) {
-
-    public String nearest_neighbor_function_name() {
-        return functionMatch.nearest_neighbor_function_name();
-    }
-
-    public String nearest_neighbor_binary_name() {
-        return functionMatch.nearest_neighbor_binary_name();
-    }
-
-    public FunctionID nearest_neighbor_id() {
+    // The following methods are just convenience methods to access the FunctionMatch fields
+    // This simplifies using this class in a stream with method references
+    public TypedApiInterface.FunctionID nearest_neighbor_id() {
         return functionMatch.nearest_neighbor_id();
     }
-    public double similarity() {
-        return functionMatch.similarity();
-    }
-
 }

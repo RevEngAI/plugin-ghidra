@@ -17,11 +17,9 @@ package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.about.AboutDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.misc.AnalysisLogComponent;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses.RecentAnalysisDialog;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.help.HelpDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
@@ -29,8 +27,6 @@ import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoun
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
-import docking.ActionContext;
 import docking.action.DockingAction;
 import docking.action.builder.ActionBuilder;
 import docking.widgets.OptionDialog;
@@ -44,6 +40,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskBuilder;
+import ghidra.util.task.TaskMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -133,10 +130,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         // Disable the action if no program is open
                         return false;
                     }
-                    boolean isKnown = revengService.isKnownProgram(currentProgram);
-                    boolean shouldEnable = !isKnown;
-
-                    return shouldEnable;
+                    return revengService.getKnownProgram(currentProgram).isEmpty();
                 })
                 .onAction(context -> {
                     var program = tool.getService(ProgramManager.class).getCurrentProgram();
@@ -180,8 +174,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                     if (currentProgram == null) {
                         return false;
                     }
-                    boolean isKnown = revengService.isKnownProgram(currentProgram);
-                    return !isKnown;
+                    return revengService.getKnownProgram(currentProgram).isEmpty();
                 })
 				.onAction(context -> {
 					var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
@@ -203,12 +196,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         // Disable the action if no program is open
                         return false;
                     }
-                    return revengService.isKnownProgram(currentProgram);
+                    return revengService.getKnownProgram(currentProgram).isPresent();
                 })
 				.onAction(context -> {
 					var program = tool.getService(ProgramManager.class).getCurrentProgram();
-					var analysisID = this.revengService.getAnalysisIDFor(program);
-					var displayText = analysisID.map(id -> "analysis " + id.id()).get();
+					var knownProgram = this.revengService.getKnownProgram(program);
+					var displayText = knownProgram.map(p -> "analysis " + p.analysisID().id()).orElseThrow();
 
 					var result = OptionDialog.showOptionDialogWithCancelAsDefaultButton(
 							tool.getToolFrame(),
@@ -238,18 +231,17 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         // Disable the action if no program is open
                         return false;
                     }
-                    return revengService.isKnownProgram(currentProgram);
+                    return revengService.getKnownProgram(currentProgram).isPresent();
                 })
 				.onAction(context -> {
 					var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
-					var binID = revengService.getBinaryIDFor(currentProgram).orElseThrow();
-					var analysisID = revengService.getApi().getAnalysisIDfromBinaryID(binID);
-					var logs = revengService.getAnalysisLog(analysisID);
+					var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
+					var logs = revengService.getAnalysisLog(knownProgram.analysisID());
 					analysisLogComponent.setLogs(logs);
-					AnalysisStatus status = revengService.pollStatus(binID);
+					AnalysisStatus status = revengService.status(knownProgram);
                     tool.getService(ReaiLoggingService.class).info("Check Status: " + status);
 					Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Check status",
-							"Status of analysis " + analysisID.id() + ": " + status);
+							"Status of analysis " + knownProgram + ": " + status);
 				})
 				.menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "Check status" })
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
@@ -262,37 +254,71 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         // Disable the action if no program is open
                         return false;
                     }
-                    return revengService.isKnownProgram(currentProgram);
+                    return revengService.getKnownProgram(currentProgram).isPresent();
                 })
                 .onAction(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
-                    var binID = revengService.getBinaryIDFor(currentProgram).orElseThrow();
-                    revengService.openPortal("analyses", String.valueOf(binID.value()));
+                    var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
+                    revengService.openPortalFor(knownProgram);
                 })
                 .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "View in portal" })
                 .menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
                 .buildAndInstall(tool);
 	}
 
-	@Override
+    @Override
+    protected void programOpened(Program program) {
+        super.programOpened(program);
+        // When a program is opened, we check if it has an associated analysis (not necessarily finished yet)
+        var knownProgram = revengService.getKnownProgram(program);
+        if (knownProgram.isPresent()) {
+            log.info("Opened known program: {}", knownProgram.get());
+            var analysedProgram = revengService.getAnalysedProgram(program);
+            if (analysedProgram.isPresent()) {
+                // Nothing to do, we already have loaded the function IDs and similar
+                log.info("Loaded analysed program: {}", analysedProgram);
+            } else {
+                // There is an associated program that hasn't been fully loaded yet
+                // This can happen if the analysis was started in a previous session but hadn't finished when closing Ghidra
+                // Either the analysis is finished already now, or we want to actively wait for it to finish
+                log.info("Detected known program that hasn't been fully loaded yet: {}", knownProgram.get());
+                var status = revengService.status(knownProgram.get());
+                switch (status) {
+                    case Complete -> {
+                        tool.firePluginEvent(
+                                new RevEngAIAnalysisStatusChangedEvent(
+                                        "programOpened",
+                                        knownProgram.get(),
+                                        status));
+                    }
+                    case Queued, Processing -> {
+                        // This is the same code as above, but it has the implicit assumption that someone
+                        /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
+                        tool.firePluginEvent(
+                                new RevEngAIAnalysisStatusChangedEvent(
+                                        "programOpened",
+                                        knownProgram.get(),
+                                        status));
+                    }
+
+
+                    case Error -> {
+                        // The analysis failed on the server side
+                        Msg.showError(this, null, "Analysis Error",
+                                "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                    }
+                }
+            }
+        } else {
+            log.info("Opened unknown program: {}", program.getName());
+        }
+    }
+
+    @Override
 	protected void programActivated(Program program) {
 		super.programActivated(program);
-
-		if (!revengService.isKnownProgram(program)){
-			var maybeBinID = revengService.getBinaryIDFor(program);
-			if (maybeBinID.isEmpty()){
-				Msg.info(this, "Program has no saved binary ID");
-				return;
-			}
-			var binID = maybeBinID.get();
-			AnalysisStatus status = revengService.pollStatus(binID);
-			var analysisID = revengService.getApi().getAnalysisIDfromBinaryID(binID);
-			tool.firePluginEvent(
-					new RevEngAIAnalysisStatusChangedEvent(
-					"programActivated",
-							new ProgramWithBinaryID(program, binID, analysisID),
-							status));
-		}
+        // Any ComponentProviders that need to refresh based on the current program should be notified here
+        analysisLogComponent.programActivated(program);
 	}
 
     @Override
@@ -308,12 +334,14 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 // If the analysis is complete, we refresh the function signatures from the server
                 var program = analysisEvent.getProgramWithBinaryID();
                 try {
-                    revengService.registerFinishedAnalysisForProgram(program);
+                    // TODO: Can we get a better taskmonitor here?
+                    // Or should we never do something here that warrants a monitor in the first place?
+                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
+                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
                 } catch (Exception e) {
                     Msg.error(this, "Error registering finished analysis for program " + program, e);
                     return;
                 }
-                tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", program));
             }
         }
     }

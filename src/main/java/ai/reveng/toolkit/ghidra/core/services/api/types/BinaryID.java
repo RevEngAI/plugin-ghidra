@@ -6,6 +6,7 @@ package ai.reveng.toolkit.ghidra.core.services.api.types;
  * They are called binary ID in the API doc, but they should be thought of as _analysis_ ids
  * for a single binary (identified by hash), there can be multiple analyses, which are distinguished by this ID
  */
+@Deprecated
 public record BinaryID(int value) implements Comparable<BinaryID> {
     public BinaryID {
         if (value < 0) {
