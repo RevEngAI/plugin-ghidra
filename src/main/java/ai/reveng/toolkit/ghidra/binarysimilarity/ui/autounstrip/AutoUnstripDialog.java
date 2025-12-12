@@ -213,7 +213,13 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
     }
 
     private void updateResultsTable() {
-        DefaultTableModel model = new DefaultTableModel(new Object[]{"Virtual Address", "Original Name", "New Name"}, 0);
+        DefaultTableModel model = new DefaultTableModel(new Object[]{"Virtual Address", "Original Name", "New Name"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                //all cells false
+                return false;
+            }
+        };
         for (RenameResult result : renameResults) {
             model.addRow(new Object[]{result.virtualAddress, result.originalName, result.newName});
         }
