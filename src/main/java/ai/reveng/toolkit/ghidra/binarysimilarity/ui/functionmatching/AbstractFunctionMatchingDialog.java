@@ -1,13 +1,17 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
 import ai.reveng.model.*;
+import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.CollectionSelectionPanel;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.BinarySelectionPanel;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import com.google.common.collect.BiMap;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.exception.DuplicateNameException;
@@ -28,7 +32,7 @@ import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_
 
 public abstract class AbstractFunctionMatchingDialog extends RevEngDialogComponentProvider {
     protected final GhidraRevengService revengService;
-    protected final ProgramWithBinaryID programWithBinaryID;
+    protected final GhidraRevengService.AnalysedProgram analyzedProgram;
 
     // UI Components
     protected JPanel contentPanel;
@@ -50,43 +54,44 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     // Data
     protected Basic analysisBasicInfo;
-    protected FunctionMatchingBatchResponse functionMatchingResponse;
-    protected final List<FunctionMatchResult> functionMatchResults;
-    protected final List<FunctionMatchResult> filteredFunctionMatchResults;
+    protected FunctionMatchingResponse functionMatchingResponse;
+    protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
+    protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 
     // Polling configuration
     protected static final int POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
 
-    // Inner class to hold function match results
-    protected record FunctionMatchResult(
-            String virtualAddress,
-            String functionName,
-            String bestMatchName,
-            String bestMatchMangledName,
-            String similarity,
-            String confidence,
-            String matchedHash,
-            String binary,
-            Long matcherFunctionId
-    ) {
-        // Constructor for function-level dialog (without virtual address and function name)
-        public FunctionMatchResult(String bestMatchName, String bestMatchMangledName, String similarity,
-                                   String confidence, String matchedHash, String binary, Long matcherFunctionId) {
-            this("", "", bestMatchName, bestMatchMangledName, similarity, confidence, matchedHash, binary, matcherFunctionId);
-        }
-    }
+//    /// Inner class to hold function match results
+//    /// @deprecated {@link ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch}
+//    public record FunctionMatchResult(
+//            String virtualAddress,
+//            String functionName,
+//            String bestMatchName,
+//            String bestMatchMangledName,
+//            String similarity,
+//            String confidence,
+//            String matchedHash,
+//            String binary,
+//            Long matcherFunctionId
+//    ) {
+//        // Constructor for function-level dialog (without virtual address and function name)
+//        public FunctionMatchResult(String bestMatchName, String bestMatchMangledName, String similarity,
+//                                   String confidence, String matchedHash, String binary, Long matcherFunctionId) {
+//            this("", "", bestMatchName, bestMatchMangledName, similarity, confidence, matchedHash, binary, matcherFunctionId);
+//        }
+//    }
 
     protected AbstractFunctionMatchingDialog(String title, Boolean isModal, GhidraRevengService revengService,
-                                           ProgramWithBinaryID programWithBinaryID) {
+                                           GhidraRevengService.AnalysedProgram analyzedProgram) {
         super(title, isModal);
         this.revengService = revengService;
-        this.programWithBinaryID = programWithBinaryID;
+        this.analyzedProgram = analyzedProgram;
         this.taskMonitorComponent = new TaskMonitorComponent(false, true);
         this.functionMatchResults = new ArrayList<>();
         this.filteredFunctionMatchResults = new ArrayList<>();
 
         try {
-            this.analysisBasicInfo = revengService.getBasicDetailsForAnalysis(programWithBinaryID.analysisID());
+            this.analysisBasicInfo = revengService.getBasicDetailsForAnalysis(analyzedProgram.analysisID());
         } catch (Exception e) {
             JOptionPane.showMessageDialog(null,
                     "Failed to fetch analysis details: " + e.getMessage(),
@@ -123,27 +128,37 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected abstract void pollFunctionMatchingStatus();
 
-    protected void processFunctionMatchingResults(FunctionMatchingBatchResponse response) {
+    protected void processFunctionMatchingResults(FunctionMatchingResponse response) {
         functionMatchResults.clear();
-
-        var functionMap = revengService.getFunctionMap(programWithBinaryID.program());
+        List<GhidraFunctionMatch> matches = new ArrayList<>();
+        final BiMap<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
 
         response.getMatches().forEach(matchResult -> {
+            // Retrieve the local function name
+            var funcId = new TypedApiInterface.FunctionID(matchResult.getFunctionId());
+            Function localFunction = functionMap.get(funcId);
+            if (localFunction == null) {
+                // If we can't find the local function, skip this match (boundaries do not match the remote ones)
+                return;
+            }
             // Process each matched function in this result
             matchResult.getMatchedFunctions().forEach(match -> {
-                // Retrieve the local function name
-                Function localFunction = functionMap.get(new FunctionID(matchResult.getFunctionId()));
-
-                if (localFunction == null) {
-                    // If we can't find the local function, skip this match (boundaries do not match the remote ones)
-                    return;
-                }
-
                 // Create function match result using the abstract method
-                FunctionMatchResult result = createFunctionMatchResult(localFunction, match, matchResult.getFunctionId());
-                functionMatchResults.add(result);
+                FunctionMatch result = FunctionMatch.fromMatchedFunctionAPIType(match, funcId);
+                GhidraFunctionMatch ghidraResult = new GhidraFunctionMatch(localFunction, result);
+//                FunctionMatch result = createFunctionMatchResult(localFunction, match, funcId);
+                matches.add(ghidraResult);
             });
         });
+
+        // Get the type info for all matches
+        var ghidraResultsWithSignatures = revengService.getSignatures(matches);
+
+        // For all matches we got, create a GhidraFunctionMatchWithSignature object (signature can be null!)
+        for (GhidraFunctionMatch match : matches) {
+            var sig = ghidraResultsWithSignatures.get(match);
+            functionMatchResults.add(new GhidraFunctionMatchWithSignature(match.function(), match.functionMatch(), sig));
+        }
 
         // Apply any existing function filter after getting results
         onFunctionFilterChanged();
@@ -152,7 +167,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         SwingUtilities.invokeLater(this::updateResultsTable);
     }
 
-    protected abstract FunctionMatchResult createFunctionMatchResult(Function localFunction, MatchedFunction match, Long matcherFunctionId);
 
     protected void updateUI() {
         if (functionMatchingResponse == null) return;
@@ -182,7 +196,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected void updateResultsTable() {
         // Determine which results to show based on whether we have an active filter
         String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
-        List<FunctionMatchResult> resultsToShow;
+        List<GhidraFunctionMatchWithSignature> resultsToShow;
 
         if (filterText.isEmpty()) {
             // No filter text, show all results
@@ -199,7 +213,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 return false;
             }
         };
-        for (FunctionMatchResult result : resultsToShow) {
+        for (GhidraFunctionMatchWithSignature result : resultsToShow) {
             model.addRow(getTableRowData(result));
         }
         resultsTable.setModel(model);
@@ -235,7 +249,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected abstract String[] getTableColumnNames();
-    protected abstract Object[] getTableRowData(FunctionMatchResult result);
+    protected abstract Object[] getTableRowData(GhidraFunctionMatchWithSignature result);
     protected abstract String getTableTitle();
     protected abstract int getTableSelectionMode();
     protected abstract void configureTableColumns();
@@ -717,7 +731,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         updateResultsTable();
     }
 
-    protected abstract boolean matchesFilter(FunctionMatchResult result);
+    protected abstract boolean matchesFilter(GhidraFunctionMatchWithSignature result);
 
     // Utility methods
     public int getThreshold() {
@@ -777,10 +791,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             hideError();
         }
 
-        List<FunctionMatchResult> resultsToShow = filteredFunctionMatchResults.isEmpty() ?
+        List<GhidraFunctionMatchWithSignature> resultsToShow = filteredFunctionMatchResults.isEmpty() ?
             functionMatchResults : filteredFunctionMatchResults;
 
-        List<FunctionMatchResult> selectedMatches = new ArrayList<>();
+        List<GhidraFunctionMatchWithSignature> selectedMatches = new ArrayList<>();
         for (int row : selectedRows) {
             if (row < resultsToShow.size()) {
                 selectedMatches.add(resultsToShow.get(row));
@@ -791,76 +805,26 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         importFunctionNames(selectedMatches);
     }
 
-    protected void batchRenameFunctions(List<FunctionMatchResult> functionMatches) {
-        var matches = functionMatches.stream()
-                .map(result -> {
-                    var func = new FunctionRenameMap();
-                    func.setFunctionId(result.matcherFunctionId());
-                    func.setNewName(result.bestMatchName());
-                    func.setNewMangledName(result.bestMatchMangledName());
-                    return func;
-                })
-                .toList();
-
-        var functionsListRename = new FunctionsListRename();
-        functionsListRename.setFunctions(matches);
-
+    protected void batchRenameFunctions(List<GhidraFunctionMatchWithSignature> functionMatches) {
         try {
-            revengService.batchRenameFunctions(functionsListRename);
+            revengService.batchRenamingGhidraMatchesWithSignatures(functionMatches);
         } catch (Exception e) {
             showError("Failed to rename functions: " + e.getMessage());
         }
     }
 
-    protected void importFunctionNames(List<FunctionMatchResult> functionMatches) {
-        var program = programWithBinaryID.program();
-        var mangledNameMapOpt = revengService.getFunctionMangledNamesMap(program);
-        var functionMap = revengService.getFunctionMap(program);
+    protected void importFunctionNames(List<GhidraFunctionMatchWithSignature> functionMatches) {
+        var program = analyzedProgram.program();
 
         program.withTransaction("Apply Function Matching Renames", () -> {
-            try {
-                var revengMatchNamespace = program.getSymbolTable().getOrCreateNameSpace(
-                        program.getGlobalNamespace(),
-                        REVENG_AI_NAMESPACE,
-                        SourceType.ANALYSIS
-                );
-
-                functionMatches.forEach(match -> {
-                    var funcID = new FunctionID(match.matcherFunctionId());
-                    Function func = functionMap.get(funcID);
-
-                    var revEngMangledName = match.bestMatchMangledName();
-                    var revEngDemangledName = match.bestMatchName();
-
-                    if (func != null &&
-                            func.getSymbol().getSource() != SourceType.USER_DEFINED &&
-                            !func.isThunk() &&
-                            !func.isExternal() &&
-                            !revEngMangledName.contains(" ") &&
-                            !revEngDemangledName.contains(" ")
-                    ) {
-                        try {
-                            func.setName(revEngDemangledName, SourceType.ANALYSIS);
-                            func.setParentNamespace(revengMatchNamespace);
-
-                            mangledNameMapOpt.ifPresent(mangledNameMap -> {
-                                try {
-                                    mangledNameMap.add(func.getEntryPoint(), revEngMangledName);
-                                } catch (Exception e) {
-                                    handleError("Failed to update mangled name map for function at " + func.getEntryPoint() + ": " + e.getMessage());
-                                }
-                            });
-
-                        } catch (Exception e) {
-                            handleError("Failed to rename function at " + func.getEntryPoint() + ": " + e.getMessage());
-                        }
+                    for (GhidraFunctionMatchWithSignature match : functionMatches) {
+                        // We don't pass a service, because we don't need to update individual functions on the portal
+                        // batchRenameFunctions already does that for us
+                        var cmd = new ApplyMatchCmd(null, analyzedProgram, match, false);
+                        cmd.applyTo(program);
                     }
-                });
-            } catch (DuplicateNameException | InvalidInputException e) {
-                throw new RuntimeException(e);
-            }
-        });
-
+                }
+        );
         SwingUtilities.invokeLater(this::updateResultsTable);
     }
 

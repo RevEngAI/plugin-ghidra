@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import org.json.JSONObject;
 
 import java.util.List;
@@ -18,7 +19,7 @@ import java.util.List;
  * @param tags
  */
 public record Collection(
-        CollectionID collectionID,
+        TypedApiInterface.CollectionID collectionID,
         String collectionName,
         String description,
         Integer modelID,
@@ -26,11 +27,11 @@ public record Collection(
         String collectionScope,
         String creationDate,
         List<String> tags,
-        List<AnalysisID> binaries
+        List<TypedApiInterface.AnalysisID> binaries
 ) {
     public static Collection fromJSONObject(JSONObject json){
         return new Collection(
-                new CollectionID(json.getInt("collection_id")),
+                new TypedApiInterface.CollectionID(json.getInt("collection_id")),
                 json.getString("collection_name"),
                 json.getString("description"),
                 json.getInt("model_id"),
@@ -38,7 +39,7 @@ public record Collection(
                 json.getString("collection_scope"),
                 json.getString("created_at"),
                 json.has("tags") ? json.getJSONArray("tags").toList().stream().map(Object::toString).toList() : null,
-                json.has("binaries") ? json.getJSONArray("binaries").toList().stream().map( rawID -> new AnalysisID((Integer) rawID)).toList() : null
+                json.has("binaries") ? json.getJSONArray("binaries").toList().stream().map( rawID -> new TypedApiInterface.AnalysisID((Integer) rawID)).toList() : null
         );
     }
 }

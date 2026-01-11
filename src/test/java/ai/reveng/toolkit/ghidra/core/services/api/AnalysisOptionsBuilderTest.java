@@ -2,7 +2,6 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.model.AnalysisCreateRequest;
 import ai.reveng.model.Tag;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryHash;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -16,7 +15,7 @@ public class AnalysisOptionsBuilderTest {
     public void testToAnalysisCreateRequest_WithNoTags() {
         // Create a builder with no tags
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("a".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("a".repeat(64)))
                 .fileName("test.bin");
 
         AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
@@ -31,7 +30,7 @@ public class AnalysisOptionsBuilderTest {
     public void testToAnalysisCreateRequest_WithValidTags() {
         // Create a builder with valid tags
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("b".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("b".repeat(64)))
                 .fileName("test.bin")
                 .addTag("malware")
                 .addTag("suspicious");
@@ -54,7 +53,7 @@ public class AnalysisOptionsBuilderTest {
     public void testToAnalysisCreateRequest_WithEmptyStringTag() {
         // Create a builder with an empty string tag
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("c".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("c".repeat(64)))
                 .fileName("test.bin")
                 .addTag("")
                 .addTag("   ") // whitespace only
@@ -72,7 +71,7 @@ public class AnalysisOptionsBuilderTest {
     public void testToAnalysisCreateRequest_WithMultipleTags() {
         // Create a builder with multiple tags using addTags method
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("d".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("d".repeat(64)))
                 .fileName("test.bin")
                 .addTags(Arrays.asList("tag1", "tag2", "tag3"));
 
@@ -87,7 +86,7 @@ public class AnalysisOptionsBuilderTest {
     public void testToAnalysisCreateRequest_WithOnlyEmptyTags() {
         // Create a builder with only empty/whitespace tags
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("e".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("e".repeat(64)))
                 .fileName("test.bin")
                 .addTag("")
                 .addTag("   ")
@@ -108,7 +107,7 @@ public class AnalysisOptionsBuilderTest {
         String hash = "f".repeat(64);
 
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash(hash))
+                .hash(new TypedApiInterface.BinaryHash(hash))
                 .fileName(filename);
 
         AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
@@ -121,7 +120,7 @@ public class AnalysisOptionsBuilderTest {
     public void testGetTags() {
         // Test the getTags method
         AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
-                .hash(new BinaryHash("a".repeat(64)))
+                .hash(new TypedApiInterface.BinaryHash("a".repeat(64)))
                 .fileName("test.bin");
 
         // Initially should be empty

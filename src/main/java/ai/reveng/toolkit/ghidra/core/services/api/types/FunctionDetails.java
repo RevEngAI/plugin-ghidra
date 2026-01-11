@@ -1,31 +1,33 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
-import org.json.JSONObject;
+import ai.reveng.model.FunctionsDetailResponse;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 
 /**
  * Record representing detailed function information from the RevEng.AI API
  */
 public record FunctionDetails(
-        FunctionID functionId,
-        String functionName,
+        TypedApiInterface.FunctionID functionId,
+        String mangledFunctionName,
         Long functionVaddr,
         Long functionSize,
-        AnalysisID analysisId,
-        BinaryID binaryId,
+        TypedApiInterface.AnalysisID analysisId,
         String binaryName,
-        BinaryHash sha256Hash
+        TypedApiInterface.BinaryHash sha256Hash,
+        String demangledName
 
 ) {
-    public static FunctionDetails fromJSON(JSONObject json) {
+
+    public static FunctionDetails fromServerResponse(FunctionsDetailResponse response) {
         return new FunctionDetails(
-                new FunctionID(json.getInt("function_id")),
-                json.getString("function_name_mangled"),
-                json.getLong("function_vaddr"),
-                json.getLong("function_size"),
-                new AnalysisID(json.getInt("analysis_id")),
-                new BinaryID(json.getInt("binary_id")),
-                json.getString("binary_name"),
-                new BinaryHash(json.getString("sha_256_hash"))
+                new TypedApiInterface.FunctionID(response.getFunctionId()),
+                response.getFunctionNameMangled(),
+                response.getFunctionVaddr(),
+                response.getFunctionSize().longValue(),
+                new TypedApiInterface.AnalysisID(response.getAnalysisId()),
+                response.getBinaryName(),
+                new TypedApiInterface.BinaryHash(response.getSha256Hash()),
+                response.getFunctionName()
         );
     }
 }

@@ -1,6 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.cmds;
 
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.Task;
@@ -10,9 +11,7 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.groupingBy;
 
@@ -23,12 +22,12 @@ import static java.util.stream.Collectors.groupingBy;
  *
  */
 public class ComputeTypeInfoTask extends Task {
-    private final List<FunctionID> functions;
+    private final List<TypedApiInterface.FunctionID> functions;
     private final GhidraRevengService service;
     private final DataTypeAvailableCallback callback;
 
     public ComputeTypeInfoTask(GhidraRevengService service,
-                               List<FunctionID> functions,
+                               List<TypedApiInterface.FunctionID> functions,
                                @Nullable DataTypeAvailableCallback callback) {
         super("Computing Type Info", true, true, false);
         this.service = service;
@@ -49,7 +48,7 @@ public class ComputeTypeInfoTask extends Task {
                     service.getApi().generateFunctionDataTypes(analysisID, functions.stream().map(FunctionDetails::functionId).toList());
                 });
 
-        Set<FunctionID> missing = new HashSet<>(functions);
+        Set<TypedApiInterface.FunctionID> missing = new HashSet<>(functions);
 
         while (!missing.isEmpty()) {
             try {
@@ -76,6 +75,6 @@ public class ComputeTypeInfoTask extends Task {
     }
 
     public interface DataTypeAvailableCallback {
-        void dataTypeAvailable(FunctionID functionID, FunctionDataTypeStatus dataTypeStatus);
+        void dataTypeAvailable(TypedApiInterface.FunctionID functionID, FunctionDataTypeStatus dataTypeStatus);
     }
 }

@@ -1,35 +1,21 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.autounstrip;
 
+import ai.reveng.model.AutoUnstripResponse;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AutoUnstripResponse;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
-import ai.reveng.toolkit.ghidra.core.types.ProgramWithBinaryID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
-import ghidra.program.model.address.Address;
-import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.Program;
-import ghidra.program.model.symbol.SourceType;
-import ghidra.util.exception.DuplicateNameException;
-import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitorComponent;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
-import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_NAMESPACE;
-
 public class AutoUnstripDialog extends RevEngDialogComponentProvider {
-    private final AnalysisID analysisID;
+    private final GhidraRevengService.AnalysedProgram analysedProgram;
     private final GhidraRevengService revengService;
-    private final Program program;
-    private AutoUnstripResponse autoUnstripResponse;
 
     // UI components
     private JLabel statusLabel;
@@ -40,23 +26,16 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
     private final TaskMonitorComponent taskMonitorComponent;
     private JTable resultsTable;
     private JScrollPane resultsScrollPane;
-    private final List<RenameResult> renameResults;
 
     // Polling configuration
     private static final int POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
 
-    // Inner class to hold rename results
-        private record RenameResult(String virtualAddress, String originalName, String newName) {
-    }
-
-    public AutoUnstripDialog(PluginTool tool, ProgramWithBinaryID analysisID) {
+    public AutoUnstripDialog(PluginTool tool, GhidraRevengService.AnalysedProgram analysedProgram) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip", true);
 
-        this.analysisID = analysisID.analysisID();
-        this.program = analysisID.program();
+        this.analysedProgram = analysedProgram;
         this.revengService = tool.getService(GhidraRevengService.class);
         this.taskMonitorComponent = new TaskMonitorComponent(false, true);
-        this.renameResults = new ArrayList<>();
 
         // Initialize UI
         addDismissButton();
@@ -86,14 +65,18 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
     private void pollAutoUnstripStatus() {
         SwingUtilities.invokeLater(() -> {
             try {
-                autoUnstripResponse = revengService.getApi().autoUnstrip(analysisID);
-                updateUI();
+                var autoUnstripResponse = revengService.autoUnstrip(analysedProgram).autoUnstripResponse();
+                updateUI(autoUnstripResponse);
 
                 // Check if we're done
-                if (autoUnstripResponse.progress() >= 100 || Objects.equals(autoUnstripResponse.status(), "COMPLETED")) {
+                if (autoUnstripResponse.getProgress() >= 100 || Objects.equals(autoUnstripResponse.getStatus(), "COMPLETED")) {
                     stopPolling();
+                    // Pull function information (names and types) from the server, instead of dealing with matches
+                    // in the auto unstrip response
+                    var changes = revengService.pullFunctionInfoFromAnalysis(analysedProgram, taskMonitorComponent);
                     taskMonitorComponent.setVisible(false);
-                    importFunctionNames(autoUnstripResponse);
+
+                    SwingUtilities.invokeLater(() -> updateResultsTable(changes));
                 }
             } catch (Exception e) {
                 handleError("Failed to poll auto unstrip status: " + e.getMessage());
@@ -102,96 +85,35 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
         });
     }
 
-    private void importFunctionNames(AutoUnstripResponse autoUnstripResponse) {
-        var functionMgr = program.getFunctionManager();
-
-        // Retrieve the mangled names map once outside the transaction
-        var mangledNameMapOpt = revengService.getFunctionMangledNamesMap(program);
-
-        // Retrieve the function ID map once outside the transaction
-        var functionMap = revengService.getFunctionMap(program);
-
-        program.withTransaction("Apply Auto-Unstrip Function Names", () -> {
-                    try {
-                        var revengMatchNamespace = program.getSymbolTable().getOrCreateNameSpace(
-                                program.getGlobalNamespace(),
-                                REVENG_AI_NAMESPACE,
-                                SourceType.ANALYSIS
-                        );
-
-                        autoUnstripResponse.matches().forEach(match -> {
-                            Address addr = program.getAddressFactory().getDefaultAddressSpace().getAddress(match.function_vaddr());
-                            Function func = functionMgr.getFunctionAt(addr);
-
-                            var revEngMangledName = match.suggested_name();
-                            var revEngDemangledName = match.suggested_demangled_name();
-                            var functionID = functionMap.get(new FunctionID(match.function_id().value()));
-
-                            if (
-                                    func != null &&
-                                    // Do not override user-defined function names
-                                    func.getSymbol().getSource() != SourceType.USER_DEFINED &&
-                                    // Exclude thunks and external functions
-                                    !func.isThunk() &&
-                                    !func.isExternal() &&
-                                    // Only accept valid names (no spaces)
-                                    !revEngMangledName.contains(" ") &&
-                                    !revEngDemangledName.contains(" ")
-                                    // Only rename if the function ID is known (boundaries matched)
-                                    && functionID != null
-                            ) {
-                                try {
-                                    // Capture original name before renaming
-                                    String originalName = func.getName();
-
-                                    func.setName(revEngDemangledName, SourceType.ANALYSIS);
-                                    func.setParentNamespace(revengMatchNamespace);
-
-                                    // Update the mangled name map with the RevEng.AI mangled name
-                                    mangledNameMapOpt.ifPresent(mangledNameMap -> {
-                                        try {
-                                            mangledNameMap.add(func.getEntryPoint(), revEngMangledName);
-                                        } catch (Exception e) {
-                                            handleError("Failed to update mangled name map for function at " + addr + ": " + e.getMessage());
-                                        }
-                                    });
-
-                                    // Add to rename results
-                                    renameResults.add(new RenameResult(String.format("%08x", match.function_vaddr()), originalName, revEngDemangledName));
-                                } catch (Exception e) {
-                                    handleError("Failed to rename function at " + addr + ": " + e.getMessage());
-                                }
-                            }
-                        });
-                    } catch (DuplicateNameException | InvalidInputException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-        );
-
-        // Show results table after import is complete
-        SwingUtilities.invokeLater(this::updateResultsTable);
-    }
-
-    private void updateUI() {
+    private void updateUI(AutoUnstripResponse autoUnstripResponse) {
         if (autoUnstripResponse == null) return;
 
         // Update progress bar
-        taskMonitorComponent.setProgress(autoUnstripResponse.progress());
-        taskMonitorComponent.setMessage(autoUnstripResponse.progress() + "%");
+        taskMonitorComponent.setProgress(autoUnstripResponse.getProgress());
+        taskMonitorComponent.setMessage(autoUnstripResponse.getProgress() + "%");
 
         // Update status
-        statusLabel.setText("Status: " + getFriendlyStatusMessage(autoUnstripResponse.status()));
+        statusLabel.setText("Status: " + getFriendlyStatusMessage(autoUnstripResponse.getStatus()));
 
         // Handle error message - dynamically add/remove error panel
-        if (autoUnstripResponse.error_message() != null && !autoUnstripResponse.error_message().isEmpty()) {
-            showError(autoUnstripResponse.error_message());
+        if (autoUnstripResponse.getErrorMessage() != null && !autoUnstripResponse.getErrorMessage().isEmpty()) {
+            showError(autoUnstripResponse.getErrorMessage());
         } else {
             hideError();
         }
 
+        final var map = analysedProgram.getFunctionMap();
+        var currentRenameResults = autoUnstripResponse.getMatches().stream().map(match -> {
+            // This functionID is for the local/origin function and not the matched/neighbour function!
+            var functionId = new TypedApiInterface.FunctionID(match.getFunctionId());
+            var function = map.get(functionId);
+            if (function == null) {
+                return null;
+            }
+            return new GhidraRevengService.RenameResult(function, function.getName(), match.getSuggestedName());
+        }).filter(Objects::nonNull).toList();
         // Update results table
-        updateResultsTable();
+        updateResultsTable(currentRenameResults);
     }
 
     /**
@@ -212,7 +134,7 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
         };
     }
 
-    private void updateResultsTable() {
+    private void updateResultsTable(java.util.List<GhidraRevengService.RenameResult> renameResults) {
         DefaultTableModel model = new DefaultTableModel(new Object[]{"Virtual Address", "Original Name", "New Name"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -220,8 +142,8 @@ public class AutoUnstripDialog extends RevEngDialogComponentProvider {
                 return false;
             }
         };
-        for (RenameResult result : renameResults) {
-            model.addRow(new Object[]{result.virtualAddress, result.originalName, result.newName});
+        for (GhidraRevengService.RenameResult result : renameResults) {
+            model.addRow(new Object[]{result.virtualAddress(), result.originalName(), result.newName()});
         }
         resultsTable.setModel(model);
 

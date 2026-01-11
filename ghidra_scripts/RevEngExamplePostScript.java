@@ -1,6 +1,7 @@
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.ApiInfo;
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.script.GhidraScript;
 
 public class RevEngExamplePostScript extends GhidraScript {
@@ -12,9 +13,6 @@ public class RevEngExamplePostScript extends GhidraScript {
         ghidraRevengService.upload(currentProgram);
 
         AnalysisOptionsBuilder options = AnalysisOptionsBuilder.forProgram(currentProgram);
-        var binID = ghidraRevengService.analyse(currentProgram, options, monitor);
-
-        // Wait for analysis to finish
-        ghidraRevengService.waitForFinishedAnalysis(monitor, binID, null, null);
+        var analyzedProgram = ghidraRevengService.analyse(currentProgram, options, monitor);
     }
 }

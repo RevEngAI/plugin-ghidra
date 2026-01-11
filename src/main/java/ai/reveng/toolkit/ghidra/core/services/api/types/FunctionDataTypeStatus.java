@@ -1,5 +1,7 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
+import ai.reveng.model.FunctionDataTypes;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.FunctionDataTypeMessage;
 import org.json.JSONObject;
 
@@ -44,14 +46,16 @@ import java.util.Optional;
  *   },
  *   "status": "completed"
  * }
+ * @deprecated Use {@link FunctionDataTypes} instead
  */
+@Deprecated
 public record FunctionDataTypeStatus(
         boolean completed,
         Optional<FunctionDataTypeMessage> data_types,
 //        JSONObject data_types,
         String status,
         @Nullable Integer dataTypesVersion,
-        @Nullable FunctionID functionID
+        @Nullable TypedApiInterface.FunctionID functionID
         ) {
 
     public static FunctionDataTypeStatus fromJson(JSONObject json) {
@@ -67,7 +71,7 @@ public record FunctionDataTypeStatus(
                 !json.isNull("data_types") ? Optional.of(FunctionDataTypeMessage.fromJsonObject(json.getJSONObject("data_types"))) : Optional.empty(),
                 json.getString("status"),
                 dataTypesVersion,
-                json.has("function_id") ? new FunctionID(json.getInt("function_id")) : null
+                json.has("function_id") ? new TypedApiInterface.FunctionID(json.getInt("function_id")) : null
         );
     }
 }

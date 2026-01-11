@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
+import ai.reveng.model.FunctionTypeOutput;
 import org.json.JSONObject;
 
 import java.util.ArrayList;

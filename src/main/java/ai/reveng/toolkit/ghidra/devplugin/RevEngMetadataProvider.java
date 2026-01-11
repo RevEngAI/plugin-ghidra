@@ -1,10 +1,8 @@
 package ai.reveng.toolkit.ghidra.devplugin;
 
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionID;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Function;
@@ -17,9 +15,8 @@ import java.util.Optional;
 public class RevEngMetadataProvider extends ComponentProviderAdapter {
     private final JPanel panel;
     private final JTextField serverField;
-    BinaryID binaryID;
-    AnalysisID analysisID;
-    FunctionID functionID;
+    TypedApiInterface.AnalysisID analysisID;
+    TypedApiInterface.FunctionID functionID;
     Function function;
 
     JTextField binaryIDField;
@@ -69,7 +66,6 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
     }
 
     private void clear() {
-        binaryID = null;
         analysisID = null;
         functionID = null;
         function = null;
@@ -82,8 +78,7 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
 
         var kProg = api.getKnownProgram(program);
         kProg.ifPresent(p -> {
-            binaryID = p.binaryID();
-            analysisID = api.getApi().getAnalysisIDfromBinaryID(binaryID);
+            analysisID = p.analysisID();
         });
         refresh();
 
@@ -93,7 +88,6 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
      * Updates the component with the latest information
      */
     private void refresh() {
-        binaryIDField.setText(binaryID == null ? "" : binaryID.toString());
         analysisIDField.setText(analysisID == null ? "" : analysisID.toString());
         functionIDField.setText(functionID == null ? "" : functionID.toString());
         functionField.setText(function == null ? "" : function.toString());
@@ -107,11 +101,11 @@ public class RevEngMetadataProvider extends ComponentProviderAdapter {
             var func = loc.getProgram().getFunctionManager().getFunctionContaining(loc.getAddress());
             if (func != null) {
                 function = func;
-                var kProg = revengService.getKnownProgram(loc.getProgram());
+                var kProg = revengService.getAnalysedProgram(loc.getProgram());
                 kProg.ifPresent(p -> {
-                    Optional<FunctionID> f = revengService.getFunctionIDFor(p, func);
+                    Optional<GhidraRevengService.FunctionWithID> f = p.getIDForFunction(func);
                     f.ifPresent(functionID -> {
-                        this.functionID = functionID;
+                        this.functionID = functionID.functionID();
                     });
                 });
             }

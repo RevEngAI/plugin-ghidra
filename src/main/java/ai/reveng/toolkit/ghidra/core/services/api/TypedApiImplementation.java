@@ -3,8 +3,8 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 import ai.reveng.api.*;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.api.types.AutoUnstripResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyCollection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
@@ -39,15 +39,12 @@ import static ai.reveng.toolkit.ghidra.core.services.api.LoggingInterceptor.*;
 import static ai.reveng.toolkit.ghidra.core.services.api.Utils.mapJSONArray;
 import static java.net.http.HttpClient.Version.HTTP_1_1;
 
-/**
- * The main implementation of the RevEng HTTP API
- * Design notes:
- * - every method should correspond to a single API endpoint
- * - every method should simply execute the request and return the response
- *      - i.e. no smart checks relying on other API calls to check if e.g. a binary has already been uploaded
- *
- *
- */
+/// The main implementation of the RevEng HTTP API
+/// It partially relies on the old manual implementation, but should be migrated to the OpenAPI generated client over time
+/// Design notes:
+/// - every method should correspond to a single API endpoint
+/// - every method should simply execute the request and return the response
+///      - i.e. no smart checks relying on other API calls to check if e.g. a binary has already been uploaded
 public class TypedApiImplementation implements TypedApiInterface {
     private final HttpClient httpClient;
     private final String baseUrl;
@@ -60,8 +57,10 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsCoreApi functionsCoreApi;
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
+    private final FunctionsDataTypesApi functionsDataTypesApi;
 
     // Cache for binary ID to analysis ID mappings
+    @Deprecated
     private final Map<BinaryID, AnalysisID> binaryToAnalysisCache = new HashMap<>();
 
     // Cache for analysis basic info to avoid repeated API calls
@@ -101,6 +100,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
         this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
+        this.functionsDataTypesApi = new FunctionsDataTypesApi(apiClient);
 
         this.baseUrl = baseUrl + "/";
         this.httpClient = HttpClient.newBuilder()
@@ -139,6 +139,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     Not all parameters are required, for example /search?search=sha_256_hash:<hash> only searches for binaries and collection with hashes like <hash>.
 
      */
+    @Deprecated
     public List<LegacyAnalysisResult> search(BinaryHash hash) {
         Map<String, String> params = new HashMap<>();
         params.put("sha256_hash", hash.sha256());
@@ -195,13 +196,13 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public BinaryID analyse(AnalysisOptionsBuilder builder) throws ApiException {
-        var analysisRequest = builder.toAnalysisCreateRequest();
-        var result = this.analysisCoreApi.createAnalysis(analysisRequest);
-
-        return new BinaryID(result.getData().getBinaryId());
+    public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+        var analysisRequest = options.toAnalysisCreateRequest();
+        var result = this.analysisCoreApi.createAnalysis(analysisRequest, null);
+        return new AnalysisID(result.getData().getAnalysisId());
     }
 
+    @Deprecated
     @Override
     public AnalysisStatus status(BinaryID binaryID) throws ApiException {
         var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
@@ -212,18 +213,20 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public AnalysisStatus status(AnalysisID analysisID) {
-        var request = requestBuilderForEndpoint("analyses/%s/status".formatted(analysisID.id()))
-                .GET()
-                .build();
-        return AnalysisStatus.valueOf(sendVersion2Request(request).getJsonData().getString("analysis_status"));
+    public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
+        var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
+        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
     }
 
     @Override
-    public List<FunctionInfo> getFunctionInfo(BinaryID binaryID) throws ApiException {
-        var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
+    public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
 
-        var response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+        BaseResponseAnalysisFunctions response = null;
+        try {
+            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+        } catch (ApiException e) {
+            throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+        }
 
         return response.getData().getFunctions().stream().map(f -> (
                 new FunctionInfo(
@@ -340,6 +343,7 @@ public class TypedApiImplementation implements TypedApiInterface {
      * @return the analysis id
      */
     @Override
+    @Deprecated
     public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID){
         // Check cache first
         AnalysisID cachedResult = binaryToAnalysisCache.get(binaryID);
@@ -384,13 +388,39 @@ public class TypedApiImplementation implements TypedApiInterface {
     @Override
     public DataTypeList getFunctionDataTypes(List<FunctionID> functionIDS) {
         String queryString = functionIDS.stream().map( f -> "function_ids=" + f.value() ).reduce((a, b) -> a + "&" + b).orElseThrow();
-
         var request = requestBuilderForEndpoint("functions", "data_types?", queryString)
                 .GET()
                 .header("Content-Type", "application/json" )
                 .build();
         var response = sendVersion2Request(request);
         return DataTypeList.fromJson(response.getJsonData());
+    }
+
+    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID id, List<FunctionID> ids) {
+        try {
+            List<Integer> functionIds = null;
+            if (ids == null) {
+                functionIds = null;
+            } else {
+                functionIds = ids.stream().map(FunctionID::value).map(Long::intValue).toList();
+            }
+            var r = functionsDataTypesApi.listFunctionDataTypesForAnalysis(id.id(), functionIds);
+            var data = r.getData();
+            return data;
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
+        try {
+            var r = functionsDataTypesApi.listFunctionDataTypesForFunctions(functionIDs.stream().map(FunctionID::value).map(Long::intValue).toList());
+            var data = r.getData();
+            return data;
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -505,11 +535,19 @@ public class TypedApiImplementation implements TypedApiInterface {
      */
     @Override
     public AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(id.id()))
-                .GET()
-                .build();
-        var response = sendVersion2Request(request);
-        return AnalysisResult.fromJSONObject(this, response.getJsonData());
+        try {
+            var response = analysisCoreApi.getAnalysisBasicInfo(id.id());
+            var data = response.getData();
+            if (data == null) {
+                throw new RuntimeException("Unexpected null data for analysis ID: " + id.id());
+            }
+            return new AnalysisResult(
+                    id,
+                    data
+            );
+        } catch (ApiException e) {
+            throw new IllegalArgumentException("Could not find analysis with ID: " + id.id());
+        }
     }
 
     /**
@@ -519,40 +557,32 @@ public class TypedApiImplementation implements TypedApiInterface {
      */
     @Override
     public FunctionDetails getFunctionDetails(FunctionID id) {
-        var request = requestBuilderForEndpoint("functions", String.valueOf(id.value()))
-                .GET()
-                .build();
-        var response = sendVersion2Request(request);
-        return FunctionDetails.fromJSON(response.getJsonData());
+        BaseResponseFunctionsDetailResponse dets = null;
+        try {
+            dets = functionsCoreApi.getFunctionDetails((int) id.value());
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+        return FunctionDetails.fromServerResponse(dets.getData());
+
     }
 
     @Override
-    public AutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
-        JSONObject params = new JSONObject();
-        params.put("apply", true);
-        params.put("min_similarity", 90); // 90%
-        params.put("confidence_threshold", 90); // 90%
-        params.put("min_group_size", 1); // At least 1 function in the group
-
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(analysisID.id()), "functions", "auto-unstrip")
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-
-        return AutoUnstripResponse.fromJSONObject(sendRequest(request));
+    public TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
+        try {
+            return new TypedAutoUnstripResponse(functionsCoreApi.autoUnstrip(analysisID.id(), new AutoUnstripRequest()));
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
-    public AutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
-        JSONObject params = new JSONObject();
-        params.put("apply", true);
-
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(analysisID.id()), "functions", "ai-unstrip")
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-
-        return AutoUnstripResponse.fromJSONObject(sendRequest(request));
+    public TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
+        try {
+            return new TypedAutoUnstripResponse(functionsCoreApi.aiUnstrip(analysisID.id(), new AiUnstripRequest()));
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -596,12 +626,12 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public FunctionMatchingBatchResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
+    public FunctionMatchingResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
         return this.functionsCoreApi.analysisFunctionMatching(analysisID.id(), request);
     }
 
     @Override
-    public FunctionMatchingBatchResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
+    public FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
         return this.functionsCoreApi.batchFunctionMatching(request);
     }
 
