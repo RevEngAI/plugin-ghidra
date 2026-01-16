@@ -38,7 +38,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         env.addPlugin(BinarySimilarityPlugin.class);
 
         // Create a test program with a function
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X86, this);
+        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         // Register the program as analyzed (this triggers associateFunctionInfo internally)
@@ -88,7 +88,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X86, this);
+        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -124,7 +124,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X86, this);
+        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -158,7 +158,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X86, this);
+        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -194,7 +194,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X86, this);
+        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);

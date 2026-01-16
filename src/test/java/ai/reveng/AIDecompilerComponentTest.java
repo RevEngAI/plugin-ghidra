@@ -99,7 +99,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
 
         var binarySimilarityPlugin = env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var func2 = builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
 
@@ -157,7 +157,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         var service = addMockedService(tool, ratingsAPI);
 
         var binarySimilarityPlugin = env.addPlugin(BinarySimilarityPlugin.class);
-        var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var func2 = builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
 

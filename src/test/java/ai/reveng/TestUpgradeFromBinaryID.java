@@ -18,7 +18,7 @@ public class TestUpgradeFromBinaryID extends RevEngMockableHeadedIntegrationTest
     /// Tests the logic for handling a program that has only a binary ID stored in its properties
     @Test
     public void test() throws Exception {
-        var builder = new ProgramBuilder("upgrade-test", ProgramBuilder._8051, this);
+        var builder = new ProgramBuilder("upgrade-test", ProgramBuilder._X64, this);
         var tId = builder.getProgram().startTransaction("Set Binary ID");
         builder.getProgram()
                 .getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)

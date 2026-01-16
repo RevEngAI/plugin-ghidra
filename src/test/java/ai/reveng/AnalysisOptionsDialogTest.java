@@ -44,7 +44,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testWithMockModels() throws Exception {
 
         var reService = new GhidraRevengService( new MockApi() {});
-        var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
 
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);

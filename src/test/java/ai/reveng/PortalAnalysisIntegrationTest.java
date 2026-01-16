@@ -135,7 +135,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                 return new AnalysisID(1);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._8051, this);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         // Add an example function
         var exampleFunc = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
         /// Tell Ghidra that the function signature source is just default,

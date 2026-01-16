@@ -22,7 +22,7 @@ import static org.junit.Assert.*;
 public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTest {
 
     private GhidraRevengService.ProgramWithID getPlaceHolderID() throws Exception{
-        var builder = new ghidra.program.database.ProgramBuilder("mock", ProgramBuilder._8051, this);
+        var builder = new ghidra.program.database.ProgramBuilder("mock", ProgramBuilder._X64, this);
         // Add an example function
         var program = builder.getProgram();
         return new GhidraRevengService.ProgramWithID(
