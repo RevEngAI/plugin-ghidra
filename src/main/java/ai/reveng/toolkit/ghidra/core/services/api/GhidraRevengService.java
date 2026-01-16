@@ -910,7 +910,10 @@ public class GhidraRevengService {
     }
 
     public void openPortalFor(TypedApiInterface.AnalysisID analysisID) {
-        openPortal("analyses", String.valueOf(analysisID.id()));
+        // The URL expects the old binary ID in the path, and then the analysis ID in the query
+        // if the binary ID is valid, it takes precedence,
+        // and we have to provide _something_ for the overall URL to be valid, but we can just pass a placeholder value
+        openPortal("analyses", String.format("placeholder?analysis-id=%s", analysisID.id()));
     }
 
     public void openPortal(String... subPath) {
