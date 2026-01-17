@@ -171,6 +171,22 @@ public class GhidraRevengService {
         }
         return Optional.empty();
     }
+
+    /// This is a helper to get the AnalysisID from the BinaryID, in the rare cases that this is required
+    /// Currently the only known case is when opening the analysis on the portal in the browser
+    private Optional<BinaryID> getBinaryIDFromAnalysisID(TypedApiInterface.AnalysisID analysisID) {
+        try {
+            var info = api.getAnalysisBasicInfo(analysisID);
+            var results = api.search(new TypedApiInterface.BinaryHash(info.getSha256Hash()));
+            var binaryId = results.stream().filter( r -> r.analysis_id().equals(analysisID))
+                .findAny().map( r -> r.binary_id());
+            return binaryId;
+
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFromOptions(
             Program program
     ) {
@@ -910,10 +926,13 @@ public class GhidraRevengService {
     }
 
     public void openPortalFor(TypedApiInterface.AnalysisID analysisID) {
+        var binaryID = getBinaryIDFromAnalysisID(analysisID);
         // The URL expects the old binary ID in the path, and then the analysis ID in the query
         // if the binary ID is valid, it takes precedence,
         // and we have to provide _something_ for the overall URL to be valid, but we can just pass a placeholder value
-        openPortal("analyses", String.format("placeholder?analysis-id=%s", analysisID.id()));
+        openPortal("analyses", String.format("%s?analysis-id=%s",
+                binaryID.map(BinaryID::value).orElse(-1),
+                analysisID.id()));
     }
 
     public void openPortal(String... subPath) {
@@ -1021,6 +1040,7 @@ public class GhidraRevengService {
 
     public ProgramWithID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
         var analysisID = api.analyse(analysisOptionsBuilder);
+
         return addAnalysisIDtoProgramOptions(program, analysisID);
     }
 
