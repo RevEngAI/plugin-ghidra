@@ -54,5 +54,11 @@ jobs:
       - name: Build
         run: ./gradlew buildExtension
 
+      - name: Check SLA timestamps
+        run: ls -l $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/*
+
+      - name: Precompile slaspec
+        run: $GHIDRA_INSTALL_DIR/support/sleigh $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/x86-64.slaspec
+
       - name: Run tests
         run: xvfb-run ./gradlew test --info

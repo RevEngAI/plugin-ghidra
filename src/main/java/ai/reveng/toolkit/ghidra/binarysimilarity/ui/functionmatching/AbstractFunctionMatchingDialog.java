@@ -13,9 +13,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import com.google.common.collect.BiMap;
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.symbol.SourceType;
-import ghidra.util.exception.DuplicateNameException;
-import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitorComponent;
 import ghidra.util.Msg;
 import resources.ResourceManager;
@@ -27,8 +24,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-
-import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_NAMESPACE;
 
 public abstract class AbstractFunctionMatchingDialog extends RevEngDialogComponentProvider {
     protected final GhidraRevengService revengService;
@@ -52,6 +47,9 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected Timer pollTimer;
     protected JPanel renameButtonsPanel;
 
+    // Assembly comparison panel
+    protected AssemblyDiffPanel assemblyDiffPanel;
+
     // Data
     protected Basic analysisBasicInfo;
     protected FunctionMatchingResponse functionMatchingResponse;
@@ -60,26 +58,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     // Polling configuration
     protected static final int POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
-
-//    /// Inner class to hold function match results
-//    /// @deprecated {@link ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch}
-//    public record FunctionMatchResult(
-//            String virtualAddress,
-//            String functionName,
-//            String bestMatchName,
-//            String bestMatchMangledName,
-//            String similarity,
-//            String confidence,
-//            String matchedHash,
-//            String binary,
-//            Long matcherFunctionId
-//    ) {
-//        // Constructor for function-level dialog (without virtual address and function name)
-//        public FunctionMatchResult(String bestMatchName, String bestMatchMangledName, String similarity,
-//                                   String confidence, String matchedHash, String binary, Long matcherFunctionId) {
-//            this("", "", bestMatchName, bestMatchMangledName, similarity, confidence, matchedHash, binary, matcherFunctionId);
-//        }
-//    }
 
     protected AbstractFunctionMatchingDialog(String title, Boolean isModal, GhidraRevengService revengService,
                                            GhidraRevengService.AnalysedProgram analyzedProgram) {
@@ -106,7 +84,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         addWorkPanel(buildMainPanel());
 
         // Set dialog size to be wider
-        setPreferredSize(1000, 800);
+        setPreferredSize(1200, 1000);
 
         // Don't start function matching automatically - wait for user to click Match button
         statusLabel.setText("Ready - adjust filters and click 'Match Functions' to begin search");
@@ -521,7 +499,25 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         resultsTable.setAutoCreateRowSorter(true);
         resultsScrollPane = new JScrollPane(resultsTable);
         resultsScrollPane.setBorder(BorderFactory.createTitledBorder("Function Matching Results"));
-        resultsContainer.add(resultsScrollPane, BorderLayout.CENTER);
+
+        // Add selection listener for assembly comparison
+        resultsTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                onTableSelectionChanged();
+            }
+        });
+
+        // Create assembly comparison panel
+        assemblyDiffPanel = new AssemblyDiffPanel();
+
+        // Create vertical split pane with results table on top and assembly comparison below
+        JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+        mainSplitPane.setTopComponent(resultsScrollPane);
+        mainSplitPane.setBottomComponent(assemblyDiffPanel);
+        mainSplitPane.setResizeWeight(0.4);
+        mainSplitPane.setDividerLocation(250);
+
+        resultsContainer.add(mainSplitPane, BorderLayout.CENTER);
 
         // Rename buttons panel
         renameButtonsPanel = createRenameButtonsPanel();
@@ -529,6 +525,29 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         resultsContainer.add(renameButtonsPanel, BorderLayout.SOUTH);
 
         return resultsContainer;
+    }
+
+    protected void onTableSelectionChanged() {
+        int selectedRow = resultsTable.getSelectedRow();
+        if (selectedRow < 0) {
+            assemblyDiffPanel.clear();
+            return;
+        }
+
+        // Convert view index to model index (in case table is sorted)
+        int modelRow = resultsTable.convertRowIndexToModel(selectedRow);
+
+        // Get the appropriate results list
+        String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
+        List<GhidraFunctionMatchWithSignature> resultsToShow = filterText.isEmpty() ?
+                functionMatchResults : filteredFunctionMatchResults;
+
+        if (modelRow >= resultsToShow.size()) {
+            return;
+        }
+
+        GhidraFunctionMatchWithSignature selectedMatch = resultsToShow.get(modelRow);
+        assemblyDiffPanel.showAssemblyFor(selectedMatch, revengService);
     }
 
     protected JPanel createRenameButtonsPanel() {

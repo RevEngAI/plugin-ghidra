@@ -29,7 +29,11 @@ import ai.reveng.invoker.ApiException;
  */
 public interface TypedApiInterface {
     /// Data type to represent the RevEng.AI API concept of a function ID
-    record FunctionID(long value){}
+    record FunctionID(long value){
+        public Integer asInteger() {
+            return Math.toIntExact(value);
+        }
+    }
 
     /// This is a special box type for an analysis ID
     /// It enforces that the integer is specifically an analysis ID,
@@ -216,5 +220,10 @@ public interface TypedApiInterface {
     default void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
         throw new UnsupportedOperationException("batchRenameFunctions not implemented yet");
     }
+
+    default List<String> getAssembly(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAssembly not implemented yet");
+    }
+
 }
 

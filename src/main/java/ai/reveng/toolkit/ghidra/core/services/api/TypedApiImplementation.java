@@ -639,5 +639,25 @@ public class TypedApiImplementation implements TypedApiInterface {
     public void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
         this.functionsRenamingHistoryApi.batchRenameFunction(functionsList);
     }
+
+    @Override
+    public List<String> getAssembly(FunctionID id) {
+
+        FunctionBlocksResponse blocks;
+        List<String> result =  new ArrayList<>();
+        try {
+            blocks = this.functionsCoreApi.getFunctionBlocks(id.asInteger()).getData();
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+        blocks.getBlocks().stream()
+                .sorted( (b1, b2) -> b1.getMinAddr().compareTo(b2.getMinAddr()) )
+                .forEach(block -> {
+                    result.addAll(block.getAsm());
+                });
+
+        return result;
+    }
+
 }
 
