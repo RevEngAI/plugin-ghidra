@@ -53,7 +53,7 @@ public class ItemSelectionPanel extends JPanel {
         selectedItemsPanel.setLayout(new WrapLayout(FlowLayout.LEFT));
 
         JScrollPane scrollPane = new JScrollPane(selectedItemsPanel);
-        scrollPane.setPreferredSize(new Dimension(0, 100));
+        scrollPane.setPreferredSize(new Dimension(0, 60));
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.setBorder(null); // Remove any border from the scroll pane

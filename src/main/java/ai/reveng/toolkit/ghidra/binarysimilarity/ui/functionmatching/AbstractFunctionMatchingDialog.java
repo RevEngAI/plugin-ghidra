@@ -84,7 +84,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         addWorkPanel(buildMainPanel());
 
         // Set dialog size to be wider
-        setPreferredSize(1000, 800);
+        setPreferredSize(1200, 1000);
 
         // Don't start function matching automatically - wait for user to click Match button
         statusLabel.setText("Ready - adjust filters and click 'Match Functions' to begin search");
