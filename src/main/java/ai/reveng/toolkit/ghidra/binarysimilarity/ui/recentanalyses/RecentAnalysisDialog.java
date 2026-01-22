@@ -98,8 +98,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private void pickAnalysis(LegacyAnalysisResult result) {
         var service = tool.getService(GhidraRevengService.class);
         var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-        var programWithID = new GhidraRevengService.ProgramWithID(program, analysisID);
-
+        var programWithID = service.registerAnalysisForProgram(program, analysisID);
         tool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(
                         "Recent Analysis Dialog",

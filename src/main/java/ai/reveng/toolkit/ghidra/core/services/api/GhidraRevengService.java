@@ -104,6 +104,10 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
+    public ProgramWithID registerAnalysisForProgram(Program program, TypedApiInterface.AnalysisID analysisID) {
+        return addAnalysisIDtoProgramOptions(program, analysisID);
+    }
+
     public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID, TaskMonitor monitor) throws CancelledException {
         var status = status(programWithID);
         if (!status.equals(AnalysisStatus.Complete)){
