@@ -23,7 +23,6 @@ import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
-import javax.swing.text.*;
 import java.awt.*;
 import java.util.Map;
 import java.util.Objects;
@@ -34,6 +33,9 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     private RSyntaxTextArea textArea;
     private RTextScrollPane sp;
     private JEditorPane descriptionArea;
+    private JLabel predictedNameLabel;
+    private JButton usePredictedNameButton;
+    private JPanel predictedNamePanel;
     private JComponent component;
     private Function function;
     private TaskMonitorComponent taskMonitorComponent;
@@ -127,16 +129,33 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
         component = new JPanel(new BorderLayout());
 
+        // Create header panel to hold description and predicted name panel
+        JPanel headerPanel = new JPanel();
+        headerPanel.setLayout(new BoxLayout(headerPanel, BoxLayout.Y_AXIS));
 
+        // Description area
         descriptionArea = new JEditorPane();
         descriptionArea.setContentType("text/html");
         descriptionArea.setEditable(false);
-//        descriptionArea.setLineWrap(true);
         descriptionArea.setText("No function selected or binary not analysed yet with RevEng.AI");
-        descriptionArea.setEditable(false);
-        component.add(descriptionArea, BorderLayout.NORTH);
+        headerPanel.add(descriptionArea);
 
+        // Visual divider
+        headerPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
 
+        // Predicted name panel (between description and code)
+        predictedNamePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        predictedNameLabel = new JLabel("Predicted name: ");
+        usePredictedNameButton = new JButton("Use Predicted Name");
+        usePredictedNameButton.addActionListener(e -> applyPredictedName());
+        predictedNamePanel.add(predictedNameLabel);
+        predictedNamePanel.add(usePredictedNameButton);
+        predictedNamePanel.setVisible(false); // Hidden until we have a prediction
+        headerPanel.add(predictedNamePanel);
+
+        component.add(headerPanel, BorderLayout.NORTH);
+
+        // Code area
         textArea = new RSyntaxTextArea(20, 60);
         textArea.setSyntaxEditingStyle(SyntaxConstants.SYNTAX_STYLE_C);
         textArea.setEditable(false);
@@ -148,6 +167,33 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         taskMonitorComponent.setIndeterminate(true);
         component.add(taskMonitorComponent, BorderLayout.SOUTH);
         return component;
+    }
+
+    /**
+     * Apply the predicted function name to the current function
+     */
+    private void applyPredictedName() {
+        if (function == null) {
+            return;
+        }
+
+        var cachedStatus = cache.get(function);
+        if (cachedStatus == null || cachedStatus.getPredictedFunctionName() == null) {
+            return;
+        }
+
+        String predictedName = cachedStatus.getPredictedFunctionName();
+        var program = function.getProgram();
+
+        int txId = program.startTransaction("Rename function to predicted name");
+        try {
+            function.setName(predictedName, ghidra.program.model.symbol.SourceType.USER_DEFINED);
+            Msg.info(this, "Renamed function to predicted name: " + predictedName);
+        } catch (Exception ex) {
+            Msg.showError(this, this.component, "Failed to rename function:", ex.getMessage(), ex);
+        } finally {
+            program.endTransaction(txId, true);
+        }
     }
 
     @Override
@@ -162,10 +208,19 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         if (status.getStatus().equals("success")) {
             setCode(status.getDecompilation());
             descriptionArea.setText("<html>%s</html>".formatted(status.getSummary()));
-            // TODO: Add action to rename to suggested name
+
+            // Show predicted name if available
+            String predictedName = status.getPredictedFunctionName();
+            if (predictedName != null && !predictedName.isEmpty()) {
+                predictedNameLabel.setText("Predicted name: " + predictedName);
+                predictedNamePanel.setVisible(true);
+            } else {
+                predictedNamePanel.setVisible(false);
+            }
         } else if (status.getStatus().equals("error")) {
             setCode("");
             descriptionArea.setText("Decompilation failed");
+            predictedNamePanel.setVisible(false);
         }
     }
 
@@ -178,6 +233,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         this.function = null;
         setCode("");
         descriptionArea.setText("");
+        predictedNamePanel.setVisible(false);
     }
 
     public void refresh(GhidraRevengService.FunctionWithID function) {
