@@ -458,13 +458,17 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
-
-        HttpRequest request = requestBuilderForEndpoint("ai-decompilation/" + functionID.value(), "?summarise=true")
-                .GET()
-                .build();
-        return AIDecompilationStatus.fromJSONObject(sendVersion2Request(request).getJsonData());
-
+    public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
+        try {
+            var response = functionsAiDecompilationApi.getAiDecompilationTaskResult(
+                functionID.value(),  // Long functionId
+                true,               // summarise
+                true                // generateInlineComments
+            );
+            return response.getData();
+        } catch (ApiException e) {
+            throw new RuntimeException("Failed to poll AI decompilation status", e);
+        }
     }
 
     /**
