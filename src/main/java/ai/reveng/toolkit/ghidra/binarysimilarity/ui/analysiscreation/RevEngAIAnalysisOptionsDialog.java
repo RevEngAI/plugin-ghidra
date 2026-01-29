@@ -1,10 +1,12 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionselection.FunctionSelectionPanel;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
 
 import javax.annotation.Nullable;
@@ -16,6 +18,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JCheckBox advancedAnalysisCheckBox;
     private JCheckBox dynamicExecutionCheckBox;
     private final Program program;
+    private final PluginTool tool;
     private JRadioButton privateScope;
     private JRadioButton publicScope;
     private JTextField tagsTextBox;
@@ -24,18 +27,20 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JCheckBox identifyCVECheckBox;
     private JCheckBox generateSBOMCheckBox;
     private JComboBox<String> architectureComboBox;
+    private FunctionSelectionPanel functionSelectionPanel;
     private boolean okPressed = false;
 
-    public static RevEngAIAnalysisOptionsDialog withModelsFromServer(Program program, GhidraRevengService reService) {
-        return new RevEngAIAnalysisOptionsDialog(program);
+    public static RevEngAIAnalysisOptionsDialog withModelsFromServer(Program program, GhidraRevengService reService, PluginTool tool) {
+        return new RevEngAIAnalysisOptionsDialog(program, tool);
     }
 
-    public RevEngAIAnalysisOptionsDialog(Program program) {
+    public RevEngAIAnalysisOptionsDialog(Program program, PluginTool tool) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Configure Analysis for %s".formatted(program.getName()), true);
         this.program = program;
+        this.tool = tool;
 
         buildInterface();
-        setPreferredSize(320, 380);
+        setPreferredSize(600, 550);
     }
 
     private void buildInterface() {
@@ -144,17 +149,23 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         workPanel.add(tagsLabel);
         workPanel.add(tagsTextBox);
 
+        workPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
+
+        // Add function selection panel
+        functionSelectionPanel = new FunctionSelectionPanel(tool);
+        functionSelectionPanel.initForProgram(program);
+        workPanel.add(functionSelectionPanel);
+
         addCancelButton();
         addOKButton();
 
         okButton.setText("Start Analysis");
     }
 
-    public @Nullable AnalysisOptionsBuilder getOptionsFromUI() {
-        if (!okPressed) {
-            return null;
-        }
-        var options = AnalysisOptionsBuilder.forProgram(program);
+    public AnalysisOptionsBuilder getOptionsFromUI() {
+        // Use the selected functions from the function selection panel
+        var selectedFunctions = functionSelectionPanel.getSelectedFunctions();
+        var options = AnalysisOptionsBuilder.forProgramWithFunctions(program, selectedFunctions);
 
         options.skipScraping(!scrapeExternalTagsBox.isSelected());
         options.skipCapabilities(!identifyCapabilitiesCheckBox.isSelected());
@@ -181,6 +192,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         // Close dialog
         okPressed = true;
         close();
+    }
+
+    public boolean isOkPressed() {
+        return okPressed;
     }
 
     @Override
