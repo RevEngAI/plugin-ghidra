@@ -26,6 +26,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.tasks.AttachToAnalysisTask;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
 import docking.action.DockingAction;
 import docking.action.builder.ActionBuilder;
@@ -44,6 +45,7 @@ import ghidra.util.task.TaskMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.swing.*;
 import java.util.Objects;
 
 /**
@@ -140,10 +142,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         return;
                     }
                     var ghidraService = tool.getService(GhidraRevengService.class);
-                    var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, ghidraService);
+                    var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, ghidraService, tool);
                     tool.showDialog(dialog);
                     var analysisOptions = dialog.getOptionsFromUI();
-                    if (analysisOptions != null) {
+                    if (dialog.isOkPressed()) {
                         // User clicked OK
                         // Prepare Task that starts the analysis (uploading the binary and registering the analysis)
                         var task = new StartAnalysisTask(program, analysisOptions, revengService, analysisLogComponent, tool);
@@ -333,15 +335,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
                 // If the analysis is complete, we refresh the function signatures from the server
                 var program = analysisEvent.getProgramWithBinaryID();
-                try {
-                    // TODO: Can we get a better taskmonitor here?
-                    // Or should we never do something here that warrants a monitor in the first place?
-                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
-                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
-                } catch (Exception e) {
-                    Msg.error(this, "Error registering finished analysis for program " + program, e);
-                    return;
-                }
+                var task = new AttachToAnalysisTask(program, null, revengService, tool);
+                TaskBuilder.withTask(task)
+                        .setCanCancel(false)
+                        .setStatusTextAlignment(SwingConstants.LEADING)
+                        .launchModal();
+
             }
         }
     }
