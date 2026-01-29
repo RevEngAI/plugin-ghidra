@@ -55,6 +55,43 @@ public class Utils {
         addRowToDescriptor(descriptor, columnName, true, columnTypeClass, rowObjectAccessor);
     }
 
+    /**
+     * Helper method to add a column with sort ordinal specification.
+     * @param sortOrdinal 1-based sort priority (1 = primary sort), or -1 for no default sort
+     * @param ascending true for ascending sort, false for descending
+     */
+    public static <ROW_TYPE, COLUMN_TYPE> void addRowToDescriptor(
+            TableColumnDescriptor<ROW_TYPE> descriptor,
+            String columnName,
+            Class<COLUMN_TYPE> columnTypeClass,
+            RowObjectAccessor<ROW_TYPE, COLUMN_TYPE> rowObjectAccessor,
+            int sortOrdinal,
+            boolean ascending) {
+
+        var column = new AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, Object>() {
+            @Override
+            public String getColumnName() {
+                return columnName;
+            }
+
+            @Override
+            public COLUMN_TYPE getValue(ROW_TYPE rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return rowObjectAccessor.access(rowObject);
+            }
+
+            @Override
+            public Class<COLUMN_TYPE> getColumnClass() {
+                return columnTypeClass;
+            }
+
+            @Override
+            public Class<ROW_TYPE> getSupportedRowType() {
+                return null;
+            }
+        };
+        descriptor.addVisibleColumn(column, sortOrdinal, ascending);
+    }
+
 
 
     @FunctionalInterface

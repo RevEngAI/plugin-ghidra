@@ -108,7 +108,35 @@ public class GhidraRevengService {
         return addAnalysisIDtoProgramOptions(program, analysisID);
     }
 
+    /**
+     * Registers an analysis for a program and stores a function filter for later use.
+     * The filter will be applied when registerFinishedAnalysisForProgram is called.
+     *
+     * @param program The program to register
+     * @param analysisID The analysis ID to associate
+     * @param selectedFunctions The functions to include when mapping (null for all functions)
+     * @return The program with associated analysis ID
+     */
+    public ProgramWithID registerAnalysisForProgram(Program program, TypedApiInterface.AnalysisID analysisID,
+            @Nullable List<Function> selectedFunctions) {
+        return addAnalysisIDtoProgramOptions(program, analysisID);
+    }
+
     public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID, TaskMonitor monitor) throws CancelledException {
+        // Check if there's a pending function filter for this analysis
+        return registerFinishedAnalysisForProgram(programWithID, null, monitor);
+    }
+
+    /**
+     * Registers a finished analysis for a program, optionally filtering which functions get mapped.
+     *
+     * @param programWithID The program with associated analysis ID
+     * @param selectedFunctions Optional list of functions to include. If null, all functions are included.
+     * @param monitor Task monitor for cancellation
+     * @return The analysed program with function ID mappings
+     */
+    public AnalysedProgram registerFinishedAnalysisForProgram(ProgramWithID programWithID,
+            @Nullable List<Function> selectedFunctions, TaskMonitor monitor) throws CancelledException {
         var status = status(programWithID);
         if (!status.equals(AnalysisStatus.Complete)){
             throw new IllegalStateException("Analysis %s is not complete yet, current status: %s"
@@ -116,7 +144,15 @@ public class GhidraRevengService {
         }
         statusCache.put(programWithID.analysisID, AnalysisStatus.Complete);
 
-        var analysedProgram = associateFunctionInfo(programWithID);
+        // Convert selected functions to a set of entry point addresses for filtering
+        Set<Address> functionFilter = null;
+        if (selectedFunctions != null) {
+            functionFilter = selectedFunctions.stream()
+                    .map(Function::getEntryPoint)
+                    .collect(Collectors.toSet());
+        }
+
+        var analysedProgram = associateFunctionInfo(programWithID, functionFilter, monitor);
         pullFunctionInfoFromAnalysis(analysedProgram, monitor);
         monitor.checkCancelled();
         return analysedProgram;
@@ -255,11 +291,13 @@ public class GhidraRevengService {
     /// analysis is associated with the program
     /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(AnalysedProgram ,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private AnalysedProgram associateFunctionInfo(ProgramWithID knownProgram) {
+    private AnalysedProgram associateFunctionInfo(ProgramWithID knownProgram, @Nullable Set<Address> functionFilter, TaskMonitor monitor) throws CancelledException {
         var analysisID = knownProgram.analysisID();
         var program = knownProgram.program();
         List<FunctionInfo> functionInfo = null;
         functionInfo = api.getFunctionInfo(analysisID);
+
+        monitor.checkCancelled();
         var transactionID = program.startTransaction("Associate Function Info");
 
         // Create the FunctionID map
@@ -282,6 +320,7 @@ public class GhidraRevengService {
         LongPropertyMap finalFunctionIDMap = functionIDMap;
 
         int ghidraBoundariesMatchedFunction = 0;
+        int skippedByFilter = 0;
         for (FunctionInfo info : functionInfo) {
             var oFunc = getFunctionFor(info, program);
             if (oFunc.isEmpty()) {
@@ -289,6 +328,13 @@ public class GhidraRevengService {
                 continue;
             }
             var func = oFunc.get();
+
+            // Skip functions not in the filter (if filter is provided)
+            if (functionFilter != null && !functionFilter.contains(func.getEntryPoint())) {
+                skippedByFilter++;
+                continue;
+            }
+
             // There are two ways to think about the size of a function
             // They diverge for non-contiguous functions
             var funcSizeByAddressCount = func.getBody().getNumAddresses();
@@ -313,7 +359,7 @@ public class GhidraRevengService {
         AtomicInteger ghidraFunctionCount = new AtomicInteger();
         program.getFunctionManager().getFunctions(true).forEach(
                 func -> {
-                    if (!func.isExternal() && !func.isThunk()){
+                    if (isRelevantForAnalysis(func)){
                         ghidraFunctionCount.getAndIncrement();
 
                         if (analysedProgram.getIDForFunction(func).isEmpty()) {
@@ -323,12 +369,14 @@ public class GhidraRevengService {
                 }
         );
         // Print summary
+        String filterInfo = functionFilter != null ? " (%d skipped by filter)".formatted(skippedByFilter) : "";
         Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary",
                 ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
-                        "boundaries. For better results, please start a new analysis from this plugin.").formatted(
+                        "boundaries%s. For better results, please start a new analysis from this plugin.").formatted(
                         functionInfo.size(),
                         ghidraBoundariesMatchedFunction,
-                        ghidraFunctionCount.get()
+                        ghidraFunctionCount.get(),
+                        filterInfo
                 ));
 
         return analysedProgram;
@@ -348,7 +396,7 @@ public class GhidraRevengService {
     /// * the type signature of the function
     ///
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
-    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
+    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID, Set, TaskMonitor)}
     ///
     public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
         var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
@@ -384,8 +432,7 @@ public class GhidraRevengService {
                 continue;
             }
             var ghidraMangledName = function.getSymbol().getName(false);
-            // Skip external and thunk functions because we don't support them
-            if (function.isExternal() || function.isThunk()) {
+            if (!isRelevantForAnalysis(function)) {
                 Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
                 continue;
             }
@@ -559,16 +606,44 @@ public class GhidraRevengService {
                 program.getUsrPropertyManager().getStringPropertyMap(REAI_FUNCTION_MANGLED_MAP) != null;
     }
 
+    /**
+     * Returns whether a function is relevant for sending to the RevEng.AI backend.
+     * External and thunk functions are excluded because the backend cannot process them.
+     */
+    public static boolean isRelevantForAnalysis(Function function) {
+        return !function.isExternal() && !function.isThunk();
+    }
+
     public static List<FunctionBoundary> exportFunctionBoundaries(Program program){
         List<FunctionBoundary> result = new ArrayList<>();
         Address imageBase = program.getImageBase();
         program.getFunctionManager().getFunctions(true).forEach(
                 function -> {
+                    if (!isRelevantForAnalysis(function)) {
+                        return;
+                    }
                     var start = function.getEntryPoint();
                     var end = function.getBody().getMaxAddress();
                     result.add(new FunctionBoundary(function.getSymbol().getName(false), start.getOffset(), end.getOffset()));
                 }
         );
+        return result;
+    }
+
+    /**
+     * Export function boundaries for a specific list of functions.
+     *
+     * @param program The program containing the functions
+     * @param functions The list of functions to export
+     * @return List of function boundaries for the specified functions
+     */
+    public static List<FunctionBoundary> exportFunctionBoundaries(Program program, List<Function> functions) {
+        List<FunctionBoundary> result = new ArrayList<>();
+        for (Function function : functions) {
+            var start = function.getEntryPoint();
+            var end = function.getBody().getMaxAddress();
+            result.add(new FunctionBoundary(function.getSymbol().getName(false), start.getOffset(), end.getOffset()));
+        }
         return result;
     }
 
@@ -940,6 +1015,10 @@ public class GhidraRevengService {
     }
     public void openPortalFor(TypedApiInterface.FunctionID f){
         openFunctionInPortal(f);
+    }
+
+    public void openPortalFor(FunctionWithID functionWithID) {
+        openPortalFor(functionWithID.functionID);
     }
 
     public void openPortalFor(AnalysisResult analysisResult) {

@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import org.json.JSONArray;
@@ -32,6 +33,26 @@ public class AnalysisOptionsBuilder {
         symbols.put("functions", functions);
         options.put("symbols", symbols);
         return this;
+    }
+
+    /**
+     * Sets function boundaries from a list of Ghidra Functions.
+     * This allows filtering which functions are included in the analysis.
+     *
+     * @param base The base address offset
+     * @param selectedFunctions The list of Ghidra Functions to include
+     * @return this builder for method chaining
+     */
+    public AnalysisOptionsBuilder functionBoundariesFromGhidraFunctions(long base, List<Function> selectedFunctions) {
+        List<FunctionBoundary> boundaries = selectedFunctions.stream()
+                .filter(GhidraRevengService::isRelevantForAnalysis)
+                .map(function -> new FunctionBoundary(
+                        function.getSymbol().getName(false),
+                        function.getEntryPoint().getOffset(),
+                        function.getBody().getMaxAddress().getOffset()
+                ))
+                .toList();
+        return functionBoundaries(base, boundaries);
     }
 
     public AnalysisOptionsBuilder hash(TypedApiInterface.BinaryHash hash) {
@@ -71,6 +92,24 @@ public class AnalysisOptionsBuilder {
                         program.getImageBase().getOffset(),
                         GhidraRevengService.exportFunctionBoundaries(program
                         )
+                );
+    }
+
+    /**
+     * Creates an AnalysisOptionsBuilder for a program with a specific list of functions.
+     * Only the specified functions will be included in the analysis.
+     *
+     * @param program The Ghidra program
+     * @param selectedFunctions The list of functions to include in the analysis
+     * @return A new AnalysisOptionsBuilder configured for the program with filtered functions
+     */
+    public static AnalysisOptionsBuilder forProgramWithFunctions(Program program, List<Function> selectedFunctions) {
+        return new AnalysisOptionsBuilder()
+                .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))
+                .fileName(program.getName())
+                .functionBoundariesFromGhidraFunctions(
+                        program.getImageBase().getOffset(),
+                        selectedFunctions
                 );
     }
 

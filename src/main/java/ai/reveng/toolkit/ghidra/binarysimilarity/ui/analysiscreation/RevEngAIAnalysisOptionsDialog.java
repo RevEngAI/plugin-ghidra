@@ -2,10 +2,12 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation;
 
 import ai.reveng.model.ConfigResponse;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionselection.FunctionSelectionPanel;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.Swing;
@@ -25,6 +27,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JCheckBox dynamicExecutionCheckBox;
     private final Program program;
     private final GhidraRevengService service;
+    private final PluginTool tool;
     private JRadioButton privateScope;
     private JRadioButton publicScope;
     private JTextField tagsTextBox;
@@ -33,22 +36,25 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JCheckBox identifyCVECheckBox;
     private JCheckBox generateSBOMCheckBox;
     private JComboBox<String> architectureComboBox;
+    private FunctionSelectionPanel functionSelectionPanel;
     private boolean okPressed = false;
+    private boolean configCheckPassed = false;
 
     private JLabel fileSizeWarningLabel;
     private JLabel loadingLabel;
 
-    public static RevEngAIAnalysisOptionsDialog withModelsFromServer(Program program, GhidraRevengService reService) {
-        return new RevEngAIAnalysisOptionsDialog(program, reService);
+    public static RevEngAIAnalysisOptionsDialog withModelsFromServer(Program program, GhidraRevengService reService, PluginTool tool) {
+        return new RevEngAIAnalysisOptionsDialog(program, tool, reService);
     }
 
-    public RevEngAIAnalysisOptionsDialog(Program program, GhidraRevengService service) {
+    public RevEngAIAnalysisOptionsDialog(Program program, PluginTool tool, GhidraRevengService service) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Configure Analysis for %s".formatted(program.getName()), true);
         this.program = program;
         this.service = service;
+        this.tool = tool;
 
         buildInterface();
-        setPreferredSize(320, 420);
+        setPreferredSize(600, 550);
 
         fetchConfigAsync();
     }
@@ -176,18 +182,26 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         loadingLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         workPanel.add(loadingLabel);
 
+        workPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
+
+        // Add function selection panel
+        functionSelectionPanel = new FunctionSelectionPanel(tool);
+        functionSelectionPanel.initForProgram(program);
+        functionSelectionPanel.getTableModel().addTableModelListener(e -> updateStartButtonState());
+        workPanel.add(functionSelectionPanel);
+
+
         addCancelButton();
         addOKButton();
 
         okButton.setText("Start Analysis");
-        okButton.setEnabled(false); // Disabled until config check completes
+        okButton.setEnabled(false); // Disabled until config check completes and functions are selected
     }
 
-    public @Nullable AnalysisOptionsBuilder getOptionsFromUI() {
-        if (!okPressed) {
-            return null;
-        }
-        var options = AnalysisOptionsBuilder.forProgram(program);
+    public AnalysisOptionsBuilder getOptionsFromUI() {
+        // Use the selected functions from the function selection panel
+        var selectedFunctions = functionSelectionPanel.getSelectedFunctions();
+        var options = AnalysisOptionsBuilder.forProgramWithFunctions(program, selectedFunctions);
 
         options.skipScraping(!scrapeExternalTagsBox.isSelected());
         options.skipCapabilities(!identifyCapabilitiesCheckBox.isSelected());
@@ -216,6 +230,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         close();
     }
 
+    public boolean isOkPressed() {
+        return okPressed;
+    }
+
     @Override
     public JComponent getComponent() {
         return super.getComponent();
@@ -239,7 +257,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         if (config == null) {
             // Config fetch failed, allow upload attempt (server will reject if too large)
-            okButton.setEnabled(true);
+            configCheckPassed = true;
+            updateStartButtonState();
             return;
         }
 
@@ -251,7 +270,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         long fileSize = getProgramFileSize();
         if (fileSize < 0) {
             // Could not determine file size, allow upload attempt
-            okButton.setEnabled(true);
+            configCheckPassed = true;
+            updateStartButtonState();
             return;
         }
 
@@ -262,11 +282,17 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
                     "<html><center>File size (%s) exceeds<br>server limit (%s)</center></html>"
                             .formatted(fileSizeStr, maxSizeStr));
             fileSizeWarningLabel.setVisible(true);
-            okButton.setEnabled(false);
+            configCheckPassed = false;
+            updateStartButtonState();
         } else {
             fileSizeWarningLabel.setVisible(false);
-            okButton.setEnabled(true);
+            configCheckPassed = true;
+            updateStartButtonState();
         }
+    }
+
+    private void updateStartButtonState() {
+        okButton.setEnabled(configCheckPassed && functionSelectionPanel.getSelectedCount() > 0);
     }
 
     private long getProgramFileSize() {
