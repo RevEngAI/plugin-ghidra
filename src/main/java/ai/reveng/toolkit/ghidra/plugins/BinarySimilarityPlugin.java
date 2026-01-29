@@ -25,7 +25,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import docking.action.builder.ActionBuilder;
 import ghidra.app.context.ProgramLocationActionContext;
@@ -56,7 +55,7 @@ import java.util.Arrays;
 	category = PluginCategoryNames.COMMON,
 	shortDescription = "Support for Binary Similarity Features of RevEng.AI Toolkit.",
 	description = "Enable features that support binary similarity operations, including binary upload, and auto-renaming",
-	servicesRequired = { GhidraRevengService.class, ProgramManager.class, ExportFunctionBoundariesService.class, ReaiLoggingService.class },
+	servicesRequired = { GhidraRevengService.class, ProgramManager.class, ReaiLoggingService.class },
 	eventsConsumed = { RevEngAIAnalysisResultsLoaded.class, }
 )
 //@formatter:on
@@ -189,9 +188,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                     if (apiService == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
-                            // Exclude thunks and external functions because we do not support them in the portal
-                            && !func.isExternal()
-                            && !func.isThunk()
+                            && GhidraRevengService.isRelevantForAnalysis(func)
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
@@ -217,9 +214,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 					if (apiService == null) return false;
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 					return func != null
-                            // Exclude thunks and external functions because we do not support them in the portal
-                            && !func.isExternal()
-                            && !func.isThunk()
+                            && GhidraRevengService.isRelevantForAnalysis(func)
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
 				})
 				.onAction(context -> {
