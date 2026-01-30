@@ -17,8 +17,6 @@ package ai.reveng;
 
 import static org.junit.Assert.*;
 
-import java.util.*;
-
 import javax.swing.*;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
@@ -41,17 +39,22 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     }
 
     @Test
-    public void testWithMockModels() throws Exception {
+    public void testBasicOptionsDialog() throws Exception {
 
         var reService = new GhidraRevengService( new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
-
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
             DockingWindowManager.showDialog(null, dialog);
         });
         waitForSwing();
+        waitFor(
+                () -> {
+                    JButton okButton = (JButton) getInstanceField("okButton", dialog);
+                    return okButton.isEnabled();
+                }
+        );
         runSwing(() -> {
             JButton okButton = (JButton) getInstanceField("okButton", dialog);
             okButton.doClick();

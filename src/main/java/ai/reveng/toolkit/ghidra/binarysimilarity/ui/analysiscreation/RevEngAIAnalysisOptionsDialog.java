@@ -1,21 +1,30 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation;
 
+import ai.reveng.model.ConfigResponse;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
+import ghidra.util.Swing;
 
 import javax.annotation.Nullable;
 import javax.swing.*;
 import java.awt.*;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider {
     private JCheckBox advancedAnalysisCheckBox;
     private JCheckBox dynamicExecutionCheckBox;
     private final Program program;
+    private final GhidraRevengService service;
     private JRadioButton privateScope;
     private JRadioButton publicScope;
     private JTextField tagsTextBox;
@@ -26,16 +35,22 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JComboBox<String> architectureComboBox;
     private boolean okPressed = false;
 
+    private JLabel fileSizeWarningLabel;
+    private JLabel loadingLabel;
+
     public static RevEngAIAnalysisOptionsDialog withModelsFromServer(Program program, GhidraRevengService reService) {
-        return new RevEngAIAnalysisOptionsDialog(program);
+        return new RevEngAIAnalysisOptionsDialog(program, reService);
     }
 
-    public RevEngAIAnalysisOptionsDialog(Program program) {
+    public RevEngAIAnalysisOptionsDialog(Program program, GhidraRevengService service) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Configure Analysis for %s".formatted(program.getName()), true);
         this.program = program;
+        this.service = service;
 
         buildInterface();
-        setPreferredSize(320, 380);
+        setPreferredSize(320, 420);
+
+        fetchConfigAsync();
     }
 
     private void buildInterface() {
@@ -47,6 +62,15 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         // Create title panel
         JPanel titlePanel = createTitlePanel("Create new analysis for this binary");
         workPanel.add(titlePanel, BorderLayout.NORTH);
+
+        // File size warning label (hidden by default)
+        fileSizeWarningLabel = new JLabel();
+        fileSizeWarningLabel.setForeground(Color.RED);
+        fileSizeWarningLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        fileSizeWarningLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        fileSizeWarningLabel.setVisible(false);
+        fileSizeWarningLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        workPanel.add(fileSizeWarningLabel);
 
         // Add Platform Drop Down
         var platformComboBox = new JComboBox<>(new String[]{
@@ -144,10 +168,19 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         workPanel.add(tagsLabel);
         workPanel.add(tagsTextBox);
 
+        // Loading indicator (shown while fetching config)
+        loadingLabel = new JLabel("Checking file size limits...");
+        loadingLabel.setForeground(Color.GRAY);
+        loadingLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        loadingLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        loadingLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        workPanel.add(loadingLabel);
+
         addCancelButton();
         addOKButton();
 
         okButton.setText("Start Analysis");
+        okButton.setEnabled(false); // Disabled until config check completes
     }
 
     public @Nullable AnalysisOptionsBuilder getOptionsFromUI() {
@@ -186,5 +219,81 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     @Override
     public JComponent getComponent() {
         return super.getComponent();
+    }
+
+    private void fetchConfigAsync() {
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return service.getApi().getConfig();
+            } catch (Exception e) {
+                Msg.warn(this, "Failed to fetch server config: " + e.getMessage());
+                return null;
+            }
+        }).thenAccept(config -> {
+            Swing.runNow(() -> handleConfigResponse(config));
+        });
+    }
+
+    private void handleConfigResponse(@Nullable ConfigResponse config) {
+        loadingLabel.setVisible(false);
+
+        if (config == null) {
+            // Config fetch failed, allow upload attempt (server will reject if too large)
+            okButton.setEnabled(true);
+            return;
+        }
+
+        long maxFileSizeBytes = config.getMaxFileSizeBytes().longValue();
+        validateFileSize(maxFileSizeBytes);
+    }
+
+    private void validateFileSize(long maxFileSizeBytes) {
+        long fileSize = getProgramFileSize();
+        if (fileSize < 0) {
+            // Could not determine file size, allow upload attempt
+            okButton.setEnabled(true);
+            return;
+        }
+
+        if (fileSize > maxFileSizeBytes) {
+            String fileSizeStr = formatBytes(fileSize);
+            String maxSizeStr = formatBytes(maxFileSizeBytes);
+            fileSizeWarningLabel.setText(
+                    "<html><center>File size (%s) exceeds<br>server limit (%s)</center></html>"
+                            .formatted(fileSizeStr, maxSizeStr));
+            fileSizeWarningLabel.setVisible(true);
+            okButton.setEnabled(false);
+        } else {
+            fileSizeWarningLabel.setVisible(false);
+            okButton.setEnabled(true);
+        }
+    }
+
+    private long getProgramFileSize() {
+        try {
+            Path filePath;
+            try {
+                filePath = Path.of(program.getExecutablePath());
+            } catch (InvalidPathException e) {
+                // Windows paths may have leading slash like "/C:/file.dll"
+                filePath = Path.of(program.getExecutablePath().substring(1));
+            }
+            return Files.size(filePath);
+        } catch (IOException | InvalidPathException e) {
+            Msg.warn(this, "Could not determine file size: " + e.getMessage());
+            return -1;
+        }
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        } else if (bytes < 1024 * 1024) {
+            return "%.1f KB".formatted(bytes / 1024.0);
+        } else if (bytes < 1024 * 1024 * 1024) {
+            return "%.1f MB".formatted(bytes / (1024.0 * 1024));
+        } else {
+            return "%.1f GB".formatted(bytes / (1024.0 * 1024 * 1024));
+        }
     }
 }
