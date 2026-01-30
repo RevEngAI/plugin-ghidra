@@ -28,6 +28,7 @@ import ai.reveng.invoker.ApiException;
  *
  */
 public interface TypedApiInterface {
+
     /// Data type to represent the RevEng.AI API concept of a function ID
     record FunctionID(long value){
         public Integer asInteger() {
@@ -225,5 +226,8 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getAssembly not implemented yet");
     }
 
+    default ConfigResponse getConfig() throws ApiException {
+        throw new UnsupportedOperationException("getConfig not implemented yet");
+    }
 }
 

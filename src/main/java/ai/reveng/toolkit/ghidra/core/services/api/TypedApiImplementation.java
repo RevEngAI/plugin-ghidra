@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.api.*;
 import ai.reveng.model.*;
+import ai.reveng.model.ConfigResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -48,6 +49,7 @@ import static java.net.http.HttpClient.Version.HTTP_1_1;
 public class TypedApiImplementation implements TypedApiInterface {
     private final HttpClient httpClient;
     private final String baseUrl;
+    private final ConfigApi configApi;
     Map<String, String> headers;
 
     private final AnalysesCoreApi analysisCoreApi;
@@ -101,6 +103,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
         this.functionsDataTypesApi = new FunctionsDataTypesApi(apiClient);
+        this.configApi = new ConfigApi(apiClient);
 
         this.baseUrl = baseUrl + "/";
         this.httpClient = HttpClient.newBuilder()
@@ -666,5 +669,13 @@ public class TypedApiImplementation implements TypedApiInterface {
         return result;
     }
 
+    @Override
+    public ConfigResponse getConfig() {
+        try {
+            return this.configApi.getConfig().getData();
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
 
