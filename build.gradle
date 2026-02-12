@@ -78,7 +78,7 @@ test {
 	maxParallelForks = 3
 	useJUnitPlatform()
     jvmArgs '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
-    systemProperty 'java.awt.headless', 'true'
+//    systemProperty 'java.awt.headless', 'true'
     systemProperty "ghidra.test.property.batch.mode", 'true'
 }
 // Exclude additional files from the built extension
