@@ -24,6 +24,7 @@ public class FunctionSelectionPanel extends JPanel {
     private final FunctionSelectionTableModel tableModel;
     private final GhidraFilterTable<FunctionRowObject> filterTable;
     private final JLabel summaryLabel;
+    private final JLabel warningLabel;
 
     public FunctionSelectionPanel(ServiceProvider serviceProvider) {
         super(new BorderLayout());
@@ -31,6 +32,9 @@ public class FunctionSelectionPanel extends JPanel {
         tableModel = new FunctionSelectionTableModel(serviceProvider);
         filterTable = new GhidraFilterTable<>(tableModel);
         summaryLabel = new JLabel();
+        warningLabel = new JLabel();
+        warningLabel.setForeground(new Color(0xCC7700));
+        warningLabel.setVisible(false);
 
         buildInterface();
 
@@ -83,7 +87,12 @@ public class FunctionSelectionPanel extends JPanel {
         topPanel.add(toolbarPanel, BorderLayout.WEST);
         topPanel.add(summaryPanel, BorderLayout.EAST);
 
-        add(topPanel, BorderLayout.NORTH);
+        JPanel headerPanel = new JPanel();
+        headerPanel.setLayout(new BoxLayout(headerPanel, BoxLayout.Y_AXIS));
+        headerPanel.add(topPanel);
+        headerPanel.add(warningLabel);
+
+        add(headerPanel, BorderLayout.NORTH);
         add(filterTable, BorderLayout.CENTER);
 
         updateSummaryLabel();
@@ -146,9 +155,15 @@ public class FunctionSelectionPanel extends JPanel {
 
         for (FunctionRowObject row : tableModel.getAllRows()) {
             // Reset state from any previous matching
-            row.setEnabled(true);
             row.setRemoteFunctionInfo(null);
 
+            // Keep 1-byte functions permanently disabled
+            if (row.getSize() <= 1) {
+                row.setEnabled(false);
+                continue;
+            }
+
+            row.setEnabled(true);
             long localAddr = row.getAddress().getOffset();
             FunctionInfo match = byAddress.get(localAddr);
             if (match != null && sizeMatches(row, match)) {
@@ -181,6 +196,16 @@ public class FunctionSelectionPanel extends JPanel {
             summaryLabel.setText(String.format("%d of %d functions selected (%d matched remotely)", selected, total, enabled));
         } else {
             summaryLabel.setText(String.format("%d of %d functions selected", selected, total));
+        }
+
+        int tooSmall = tableModel.getTooSmallCount();
+        if (tooSmall > 0) {
+            warningLabel.setText(String.format(
+                    "Warning: %d function(s) have a body of only 1 byte and cannot be selected. " +
+                    "This may indicate issues during auto-analysis.", tooSmall));
+            warningLabel.setVisible(true);
+        } else {
+            warningLabel.setVisible(false);
         }
     }
 }

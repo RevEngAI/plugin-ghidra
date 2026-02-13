@@ -28,6 +28,7 @@ public class FunctionSelectionTableModel extends ThreadedTableModelStub<Function
     static final int SELECT = 0;
 
     private final List<FunctionRowObject> functionList = new ArrayList<>();
+    private int tooSmallCount = 0;
 
     public FunctionSelectionTableModel(ServiceProvider serviceProvider) {
         super("Function Selection Table Model", serviceProvider);
@@ -40,13 +41,20 @@ public class FunctionSelectionTableModel extends ThreadedTableModelStub<Function
      */
     public void initForProgram(Program program) {
         functionList.clear();
+        tooSmallCount = 0;
 
         if (program != null) {
             program.getFunctionManager().getFunctions(true).forEach(function -> {
                 if (!GhidraRevengService.isRelevantForAnalysis(function)) {
                     return;
                 }
-                functionList.add(new FunctionRowObject(function, true));
+                var row = new FunctionRowObject(function, true);
+                // If the function has zero instructions then it's not a valid function to send
+                if (!program.getListing().getInstructions(function.getBody(), true).hasNext()) {
+                    row.setEnabled(false);
+                    tooSmallCount++;
+                }
+                functionList.add(row);
             });
         }
         reload();
@@ -194,6 +202,13 @@ public class FunctionSelectionTableModel extends ThreadedTableModelStub<Function
      */
     public List<FunctionRowObject> getAllRows() {
         return Collections.unmodifiableList(functionList);
+    }
+
+    /**
+     * Returns the count of functions that are too small (1 byte or less) to be analyzed.
+     */
+    public int getTooSmallCount() {
+        return tooSmallCount;
     }
 
     /**

@@ -32,11 +32,21 @@ import ghidra.program.model.listing.Function;
 import org.junit.*;
 
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.data.Undefined;
 
 public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTest {
 
     public AnalysisOptionsDialogTest() {
         super();
+    }
+
+    /**
+     * Adds a NOP instruction at the given address so the function isn't filtered
+     * out by the no-instructions check in FunctionSelectionTableModel.
+     */
+    private static void addInstruction(ProgramBuilder builder, String address) throws Exception {
+        builder.setBytes(address, "90");
+        builder.disassemble(address, 1);
     }
 
     @Test
@@ -46,8 +56,11 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         // Add some functions to the program so the function selection panel has data
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        // Add instruction bytes so the functions aren't filtered out by the no-instructions check
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
 
         var program = builder.getProgram();
         var tool = env.getTool();
@@ -83,9 +96,12 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var reService = new GhidraRevengService(new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
-        builder.createFunction("0x401200");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func3", "0x401200", 100, Undefined.getUndefinedDataType(4));
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
+        addInstruction(builder, "0x401200");
 
         var program = builder.getProgram();
         var tool = env.getTool();
@@ -112,8 +128,10 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var reService = new GhidraRevengService(new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
         // Create external function (extAddress, libName, functionName)
         builder.createExternalFunction(null, "EXTERNAL", "printf");
 
@@ -151,9 +169,12 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var reService = new GhidraRevengService(new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
-        builder.createFunction("0x401200");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func3", "0x401200", 100, Undefined.getUndefinedDataType(4));
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
+        addInstruction(builder, "0x401200");
 
         var program = builder.getProgram();
         var tool = env.getTool();
@@ -194,8 +215,10 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var reService = new GhidraRevengService(new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
 
         var program = builder.getProgram();
         var tool = env.getTool();
@@ -235,9 +258,12 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var reService = new GhidraRevengService(new MockApi() {});
         var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
         builder.createMemory(".text", "0x401000", 0x1000);
-        builder.createFunction("0x401000");
-        builder.createFunction("0x401100");
-        builder.createFunction("0x401200");
+        builder.createEmptyFunction("func1", "0x401000", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func2", "0x401100", 100, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction("func3", "0x401200", 100, Undefined.getUndefinedDataType(4));
+        addInstruction(builder, "0x401000");
+        addInstruction(builder, "0x401100");
+        addInstruction(builder, "0x401200");
 
         var program = builder.getProgram();
         var tool = env.getTool();
