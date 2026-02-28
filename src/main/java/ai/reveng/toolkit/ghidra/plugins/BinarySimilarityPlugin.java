@@ -183,9 +183,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .enabledWhen(context -> {
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
-                            // Exclude thunks and external functions because we do not support them in the portal
-                            && !func.isExternal()
-                            && !func.isThunk()
+                            && GhidraRevengService.isRelevantForAnalysis(func)
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
@@ -208,9 +206,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				.enabledWhen(context -> {
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 					return func != null
-                            // Exclude thunks and external functions because we do not support them in the portal
-                            && !func.isExternal()
-                            && !func.isThunk()
+                            && GhidraRevengService.isRelevantForAnalysis(func)
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
 				})
 				.onAction(context -> {

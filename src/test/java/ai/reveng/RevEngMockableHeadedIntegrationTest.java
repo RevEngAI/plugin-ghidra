@@ -14,11 +14,11 @@ import org.junit.Before;
 import java.io.IOException;
 
 /// Base class
-abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedIntegrationTest {
+abstract public class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedIntegrationTest {
     protected TestEnv env;
 
     @Before
-    public void setup() throws IOException, PluginException {
+    public void setup() throws Exception {
         // For most tests we want to fail if a user visible error would show up.
         // Ghidra already has a nifty feature for that, we just need to activate it
         setErrorGUIEnabled(false);

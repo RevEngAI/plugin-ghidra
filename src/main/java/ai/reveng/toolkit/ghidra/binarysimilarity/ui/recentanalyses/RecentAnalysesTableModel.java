@@ -3,8 +3,10 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import docking.widgets.table.AbstractDynamicTableColumn;
 import docking.widgets.table.TableColumnDescriptor;
 import docking.widgets.table.threaded.ThreadedTableModelStub;
@@ -19,6 +21,7 @@ import ghidra.util.task.TaskMonitor;
 public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnalysisResult> {
     private final TypedApiInterface.BinaryHash hash;
     private final Address imageBase;
+    private final Map<TypedApiInterface.AnalysisID, Integer> functionCountCache = new ConcurrentHashMap<>();
 
     public RecentAnalysesTableModel(PluginTool tool, TypedApiInterface.BinaryHash hash, Address imageBase) {
         super("Recent Analyses Table Model", tool);
@@ -29,7 +32,6 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
     @Override
     protected void doLoad(Accumulator<LegacyAnalysisResult> accumulator, TaskMonitor monitor) throws CancelledException {
         var revEngAIService = serviceProvider.getService(GhidraRevengService.class);
-        var functionBoundariesService = serviceProvider.getService(ExportFunctionBoundariesService.class);
         var loggingService = serviceProvider.getService(ReaiLoggingService.class);
 
         // The search endpoint only returns analyses we have access to so there is no need to filter them.
@@ -49,9 +51,24 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
                         return;
                     }
 
+                    // Fetch the function count while we're on the background thread
+                    try {
+                        var functions = revEngAIService.getApi().getFunctionInfo(result.analysis_id());
+                        functionCountCache.put(result.analysis_id(), functions.size());
+                    } catch (Exception e) {
+                        loggingService.info("[RevEng] Could not fetch function count for " + result.analysis_id() + ": " + e.getMessage());
+                    }
+
                     accumulator.add(result);
                 }
         );
+    }
+
+    /**
+     * Returns the cached remote function count for the given analysis, or null if not yet loaded.
+     */
+    public Integer getFunctionCount(TypedApiInterface.AnalysisID analysisID) {
+        return functionCountCache.get(analysisID);
     }
 
     @Override
@@ -109,6 +126,17 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
             }
         });
 
+        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<LegacyAnalysisResult, Integer, Object>() {
+            @Override
+            public String getColumnName() {
+                return "Functions";
+            }
+
+            @Override
+            public Integer getValue(LegacyAnalysisResult rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return functionCountCache.get(rowObject.analysis_id());
+            }
+        });
 
         return descriptor;
     }

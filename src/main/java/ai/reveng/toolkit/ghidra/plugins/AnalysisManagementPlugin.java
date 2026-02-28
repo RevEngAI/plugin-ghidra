@@ -26,12 +26,18 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.tasks.AttachToAnalysisTask;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
+import docking.ActionContext;
+import docking.ComponentProvider;
 import docking.action.DockingAction;
+import docking.action.MenuData;
+import docking.action.ToolBarData;
 import docking.action.builder.ActionBuilder;
 import docking.widgets.OptionDialog;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
+import ghidra.app.plugin.core.decompile.DecompilerActionContext;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.plugintool.*;
 import docking.options.OptionsService;
@@ -44,6 +50,7 @@ import ghidra.util.task.TaskMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.swing.*;
 import java.util.Objects;
 
 /**
@@ -113,8 +120,76 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
 
         setupActions();
+        installDecompilerToolbarAction();
 
         loggingService.info("CorePlugin initialized");
+    }
+
+    /**
+     * Installs a toolbar action into the Decompiler window's local toolbar.
+     * The action is enabled only when the current function is associated with
+     * an analysis (i.e. has a known FunctionID on the server).
+     */
+    private void installDecompilerToolbarAction() {
+        ComponentProvider decompilerProvider = tool.getComponentProvider("Decompiler");
+        if (decompilerProvider == null) {
+            Msg.warn(this, "Decompiler provider not found, skipping toolbar action installation");
+            return;
+        }
+
+        DockingAction action = new DockingAction("RevEng.AI Actions", getName()) {
+            @Override
+            public boolean isValidContext(ActionContext context) {
+                return context instanceof DecompilerActionContext;
+            }
+
+            @Override
+            public boolean isEnabledForContext(ActionContext context) {
+                if (!(context instanceof DecompilerActionContext ctx)) {
+                    setDescription("Open function in portal");
+                    return false;
+                }
+                if (ctx.isDecompiling() || !ctx.hasRealFunction()) {
+                    setDescription("Open function in portal");
+                    return false;
+                }
+                var program = ctx.getProgram();
+                if (program == null) {
+                    setDescription("Open function in portal");
+                    return false;
+                }
+                var analysedProgram = revengService.getAnalysedProgram(program);
+                if (analysedProgram.isEmpty()) {
+                    setDescription("No analysis associated with this program");
+                    return false;
+                }
+                var function = ctx.getFunction();
+                if (analysedProgram.get().getIDForFunction(function).isEmpty()) {
+                    setDescription("Function has no associated remote function ID");
+                    return false;
+                }
+                setDescription("Open function in portal");
+                return true;
+            }
+
+            @Override
+            public void actionPerformed(ActionContext context) {
+                if (!(context instanceof DecompilerActionContext ctx)) {
+                    return;
+                }
+                var program = ctx.getProgram();
+                if (program == null) {
+                    return;
+                }
+                var analysedProgram = revengService.getAnalysedProgram(program).get();
+                var function = ctx.getFunction();
+                revengService.openPortalFor(analysedProgram.getIDForFunction(function).get());
+            }
+        };
+        action.setToolBarData(new ToolBarData(ReaiPluginPackage.REVENG_16, "ZZ_RevEngAI"));
+        action.setDescription("Open function in portal");
+
+        tool.addLocalAction(decompilerProvider, action);
     }
 
 	private void setupActions() {
@@ -140,10 +215,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         return;
                     }
                     var ghidraService = tool.getService(GhidraRevengService.class);
-                    var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, ghidraService);
+                    var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, ghidraService, tool);
                     tool.showDialog(dialog);
                     var analysisOptions = dialog.getOptionsFromUI();
-                    if (analysisOptions != null) {
+                    if (dialog.isOkPressed()) {
                         // User clicked OK
                         // Prepare Task that starts the analysis (uploading the binary and registering the analysis)
                         var task = new StartAnalysisTask(program, analysisOptions, revengService, analysisLogComponent, tool);
@@ -247,23 +322,37 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
 				.buildAndInstall(tool);
 
-        viewInPortalAction = new ActionBuilder("View in portal", this.getName())
-                .enabledWhen(context -> {
-                    var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
-                    if (currentProgram == null) {
-                        // Disable the action if no program is open
-                        return false;
-                    }
-                    return revengService.getKnownProgram(currentProgram).isPresent();
-                })
-                .onAction(context -> {
-                    var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
-                    var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
-                    revengService.openPortalFor(knownProgram);
-                })
-                .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "View in portal" })
-                .menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
-                .buildAndInstall(tool);
+        viewInPortalAction = new DockingAction("View in portal", getName()) {
+            @Override
+            public boolean isEnabledForContext(ActionContext context) {
+                var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
+                if (currentProgram == null) {
+                    setDescription("No program is open");
+                    return false;
+                }
+                if (revengService.getKnownProgram(currentProgram).isEmpty()) {
+                    setDescription("No analysis associated with this program");
+                    return false;
+                }
+                setDescription("View analysis in RevEng.AI portal");
+                return true;
+            }
+
+            @Override
+            public void actionPerformed(ActionContext context) {
+                var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
+                var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
+                revengService.openPortalFor(knownProgram);
+            }
+        };
+        viewInPortalAction.setToolBarData(new ToolBarData(ReaiPluginPackage.REVENG_16, "ZZ_RevEngAI"));
+        viewInPortalAction.setMenuBarData(
+                new MenuData(
+                        new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "View in portal" },
+                        null,
+                        REAI_ANALYSIS_MANAGEMENT_MENU_GROUP));
+        viewInPortalAction.setDescription("View analysis in RevEng.AI portal");
+        tool.addAction(viewInPortalAction);
 	}
 
     @Override
@@ -333,15 +422,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
                 // If the analysis is complete, we refresh the function signatures from the server
                 var program = analysisEvent.getProgramWithBinaryID();
-                try {
-                    // TODO: Can we get a better taskmonitor here?
-                    // Or should we never do something here that warrants a monitor in the first place?
-                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
-                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
-                } catch (Exception e) {
-                    Msg.error(this, "Error registering finished analysis for program " + program, e);
-                    return;
-                }
+                var task = new AttachToAnalysisTask(program, null, revengService, tool);
+                TaskBuilder.withTask(task)
+                        .setCanCancel(false)
+                        .setStatusTextAlignment(SwingConstants.LEADING)
+                        .launchModal();
+
             }
         }
     }
