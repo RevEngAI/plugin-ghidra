@@ -48,9 +48,7 @@ public class ApplyMatchCmd implements Command<Program> {
         return func != null &&
                 // Do not override user-defined function names
                 func.getSymbol().getSource() != SourceType.USER_DEFINED &&
-                // Exclude thunks and external functions
-                !func.isThunk() &&
-                !func.isExternal() &&
+                GhidraRevengService.isRelevantForAnalysis(func) &&
                 // Only accept valid names (no spaces)
                 !match.functionMatch().nearest_neighbor_mangled_function_name().contains(" ") &&
                 !match.functionMatch().nearest_neighbor_function_name().contains(" ")
