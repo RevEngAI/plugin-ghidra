@@ -26,12 +26,13 @@ public class CollectionTableModel extends ThreadedTableModelStub<CollectionRowOb
 
 	@Override
 	protected void doLoad(Accumulator<CollectionRowObject> accumulator, TaskMonitor monitor){
+		var service = serviceProvider.getService(GhidraRevengService.class);
+		if (service == null) return;
 		monitor.setProgress(0);
 		monitor.setMessage("Loading collections");
-		serviceProvider.getService(GhidraRevengService.class).getActiveCollections().forEach(collection -> {
+		service.getActiveCollections().forEach(collection -> {
 			accumulator.add(new CollectionRowObject(collection, true));
 		});
-
 	}
 
 	@Override

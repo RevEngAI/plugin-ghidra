@@ -21,12 +21,12 @@ public class BinaryTableModel extends ThreadedTableModelStub<BinaryRowObject> {
 
     @Override
     protected void doLoad(Accumulator<BinaryRowObject> accumulator, TaskMonitor monitor) throws CancelledException {
-        serviceProvider.getService(GhidraRevengService.class)
-                .getActiveAnalysisIDsFilter()
+        var service = serviceProvider.getService(GhidraRevengService.class);
+        if (service == null) return;
+        service.getActiveAnalysisIDsFilter()
                 .forEach(
                         analysisResult -> accumulator.add(new BinaryRowObject(analysisResult, true))
                 );
-
     }
 
     @Override

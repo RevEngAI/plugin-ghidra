@@ -76,10 +76,12 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             // This file comes from the release.yml running in the CI
             var inputStream = ResourceManager.getResourceAsStream("reai_ghidra_plugin_version.txt");
-            pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
-            inputStream.close();
+            if (inputStream != null) {
+                pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
+                inputStream.close();
+            }
         } catch (IOException e) {
-
+            // ignore — fall back to "unknown"
         }
         // Looks like:
         // Ghidra/11.3.2-PUBLIC (LINUX(Linux) X86_64(amd64)) RevEng.AI_Plugin/v0.15
