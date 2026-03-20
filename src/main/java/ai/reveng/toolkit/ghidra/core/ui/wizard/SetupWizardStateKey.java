@@ -7,4 +7,5 @@ public enum SetupWizardStateKey {
 	CREDENTIALS_VALIDATED,
 	MODEL,
 	CONFIGFILE,
+	CREDENTIAL_VALIDATOR,
 }

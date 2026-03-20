@@ -4,6 +4,7 @@ import ghidra.framework.plugintool.util.PluginPackage;
 import resources.ResourceManager;
 
 import javax.swing.*;
+import java.nio.file.Path;
 
 /**
  * Top-level package object for RevEng.AI Ghidra Plugins
@@ -27,6 +28,8 @@ public class ReaiPluginPackage extends PluginPackage {
     public static final String OPTION_KEY_ANALYSIS_ID = PREFIX + "Analysis ID";
 
     public static final String REAI_OPTIONS_CATEGORY = "RevEngAI Options";
+
+    public static final Path DEFAULT_CONFIG_PATH = Path.of(System.getProperty("user.home"), ".reai", "reai.json");
 
 
     @Deprecated

@@ -67,4 +67,19 @@ jobs:
         run: $GHIDRA_INSTALL_DIR/support/sleigh $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/x86-64.slaspec
 
       - name: Run tests
-        run: xvfb-run ./gradlew test --info
+        run: xvfb-run ./gradlew test
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-ghidra-${{ matrix.ghidra }}
+          path: build/reports/tests/test/
+
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Tests (Ghidra ${{ matrix.ghidra }})
+          path: build/test-results/test/*.xml
+          reporter: java-junit
