@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -64,10 +64,11 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 	private final AIDecompilationdWindow decompiledWindow;
     private final SimilarFunctionsWindow similarFunctionsWindow;
 
-    private GhidraRevengService apiService;
-
 	public final static String REVENG_AI_NAMESPACE = "RevEng.AI";
 
+	private GhidraRevengService getApiService() {
+		return tool.getService(GhidraRevengService.class);
+	}
 
 	@Override
 	protected void locationChanged(ProgramLocation loc) {
@@ -75,6 +76,11 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
         // If no location, nothing to do
         if (loc == null) {
+            return;
+        }
+
+        var apiService = getApiService();
+        if (apiService == null) {
             return;
         }
 
@@ -90,7 +96,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	/**
 	 * Plugin constructor.
-	 * 
+	 *
 	 * @param tool The plugin tool that this plugin is added to.
 	 */
 	public BinarySimilarityPlugin(PluginTool tool) {
@@ -110,19 +116,13 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 		collectionsComponent.addToTool();
 	}
 
-    /// In `init()` the services are guaranteed to be available
-    @Override
-    public void init() {
-        super.init();
-
-        apiService = tool.getService(GhidraRevengService.class);
-    }
-
 	private void setupActions() {
         new ActionBuilder("Auto Unstrip", this.getName())
                 .menuGroup(ReaiPluginPackage.NAME)
                 .menuPath(ReaiPluginPackage.MENU_GROUP_NAME, "Auto Unstrip")
                 .enabledWhen(context -> {
+                            var apiService = getApiService();
+                            if (apiService == null) return false;
                             var program = tool.getService(ProgramManager.class).getCurrentProgram();
                             if (program != null) {
                                 return apiService.getKnownProgram(program).isPresent();
@@ -132,6 +132,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         }
                 )
                 .onAction(context -> {
+                    var apiService = getApiService();
                     var program = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (apiService.getAnalysedProgram(program).isEmpty()) {
                         Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip",
@@ -155,6 +156,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .menuGroup(ReaiPluginPackage.NAME)
                 .menuPath(ReaiPluginPackage.MENU_GROUP_NAME, "Function Matching")
                 .enabledWhen(context -> {
+                            var apiService = getApiService();
+                            if (apiService == null) return false;
                             var program = tool.getService(ProgramManager.class).getCurrentProgram();
                             if (program != null) {
                                 return apiService.getAnalysedProgram(program).isPresent();
@@ -164,6 +167,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         }
                 )
                 .onAction(context -> {
+                    var apiService = getApiService();
                     var program = tool.getService(ProgramManager.class).getCurrentProgram();
                     var knownProgram = apiService.getAnalysedProgram(program);
                     if (knownProgram.isEmpty()){
@@ -181,6 +185,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
         new ActionBuilder("Match function", this.getName())
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
+                    var apiService = getApiService();
+                    if (apiService == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -189,6 +195,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
+                    var apiService = getApiService();
                     // We know analysed program is present due to enabledWhen
                     var knownProgram = apiService.getAnalysedProgram(context.getProgram()).get();
 
@@ -206,6 +213,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 		new ActionBuilder("AI Decompilation", this.getName())
 				.withContext(ProgramLocationActionContext.class)
 				.enabledWhen(context -> {
+					var apiService = getApiService();
+					if (apiService == null) return false;
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 					return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -214,6 +223,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
 				})
 				.onAction(context -> {
+					var apiService = getApiService();
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     var analysedProgram = apiService.getAnalysedProgram(context.getProgram()).get();
                     var functionWithId = analysedProgram.getIDForFunction(func);
@@ -237,11 +247,14 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
         new ActionBuilder("View function in portal", this.getName())
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
+                    var apiService = getApiService();
+                    if (apiService == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
                 })
                 .onAction(context -> {
+                    var apiService = getApiService();
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     var analysedProgram = apiService.getAnalysedProgram(context.getProgram()).get();
                     var functionWithID = analysedProgram.getIDForFunction(func);
@@ -263,6 +276,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	@Override
 	public void readDataState(SaveState saveState) {
+		var apiService = getApiService();
+		if (apiService == null) return;
 		int[] rawCollectionIDs = saveState.getInts("collectionIDs", new int[0]);
 		var restoredCollections = Arrays.stream(rawCollectionIDs)
 				.mapToObj(TypedApiInterface.CollectionID::new)
@@ -273,6 +288,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	@Override
 	public void writeDataState(SaveState saveState) {
+		var apiService = getApiService();
+		if (apiService == null) return;
 		int[] collectionIDs = apiService.getActiveCollections().stream().map(Collection::collectionID).mapToInt(TypedApiInterface.CollectionID::id).toArray();
 		saveState.putInts("collectionIDs", collectionIDs);
 	}

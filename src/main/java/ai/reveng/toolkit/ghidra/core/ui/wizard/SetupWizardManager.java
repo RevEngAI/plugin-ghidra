@@ -4,7 +4,6 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -55,11 +54,11 @@ public class SetupWizardManager extends AbstractMagePanelManager<SetupWizardStat
 		tool.getOptions(REAI_OPTIONS_CATEGORY).setString(ReaiPluginPackage.OPTION_KEY_MODEL, model);
 		tool.getOptions(REAI_OPTIONS_CATEGORY).setString(REAI_WIZARD_RUN_PREF, "true");
 		
-		String uHome = System.getProperty("user.home");
-		String cDir = ".reai";
-		String cFileName = "reai.json";
-		Path configDirPath = Paths.get(uHome, cDir);
-		Path configFilePath = configDirPath.resolve(cFileName);
+		String configFileOverride = (String) getState().get(SetupWizardStateKey.CONFIGFILE);
+		Path configFilePath = configFileOverride != null
+				? Path.of(configFileOverride)
+				: ReaiPluginPackage.DEFAULT_CONFIG_PATH;
+		Path configDirPath = configFilePath.getParent();
 		
 		// check that our .reai directory exists
 		if (!Files.exists(configDirPath)) {
