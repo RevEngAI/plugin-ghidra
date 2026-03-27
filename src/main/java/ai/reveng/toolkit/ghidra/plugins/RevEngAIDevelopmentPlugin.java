@@ -1,13 +1,16 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
+import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
+import ai.reveng.toolkit.ghidra.devplugin.RevEngFunctionTableProvider;
 import ai.reveng.toolkit.ghidra.devplugin.RevEngMetadataProvider;
 import docking.action.builder.ActionBuilder;
 import docking.options.OptionsService;
 import ghidra.app.DeveloperPluginPackage;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
+import ghidra.framework.plugintool.PluginEvent;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
@@ -32,18 +35,23 @@ import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.DEV_TOOLING_MEN
 	shortDescription = "Helper and Debug Tools for the RevEng.AI Toolkit",
 	description = "Collection of tools that are not relevant for end user use," +
 			"but are useful for developing your own scripts or debugging the RevEng.AI Toolkit",
-	servicesRequired = { OptionsService.class, GhidraRevengService.class }
+	servicesRequired = { OptionsService.class, GhidraRevengService.class },
+	eventsConsumed = { RevEngAIAnalysisResultsLoaded.class }
 )
 //@formatter:on
 public class RevEngAIDevelopmentPlugin extends ProgramPlugin {
 
 	private final RevEngMetadataProvider revEngMetadataProvider;
+	private final RevEngFunctionTableProvider functionTableProvider;
 	private GhidraRevengService apiService;
 
 	public RevEngAIDevelopmentPlugin(PluginTool tool) {
 		super(tool);
 		revEngMetadataProvider = new RevEngMetadataProvider(tool, ReaiPluginPackage.NAME);
 		tool.addComponentProvider(revEngMetadataProvider, false);
+
+		functionTableProvider = new RevEngFunctionTableProvider(tool, ReaiPluginPackage.NAME);
+		tool.addComponentProvider(functionTableProvider, false);
 
 		var generateSignaturesAction = new ActionBuilder("Generate Signatures", ReaiPluginPackage.NAME)
 				.menuPath(DEV_TOOLING_MENU_GROUP_NAME, "Generate Signatures for current program")
@@ -82,12 +90,21 @@ public class RevEngAIDevelopmentPlugin extends ProgramPlugin {
 	@Override
 	protected void programActivated(Program program) {
 		revEngMetadataProvider.setProgram(program);
+		functionTableProvider.setProgram(program);
 	}
 
 	@Override
 	protected void locationChanged(ProgramLocation loc) {
 		super.locationChanged(loc);
 		revEngMetadataProvider.locationChanged(loc);
+	}
+
+	@Override
+	public void processEvent(PluginEvent event) {
+		super.processEvent(event);
+		if (event instanceof RevEngAIAnalysisResultsLoaded) {
+			functionTableProvider.reload();
+		}
 	}
 
 	@Override

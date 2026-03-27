@@ -228,7 +228,7 @@ public class TypedApiImplementation implements TypedApiInterface {
 
         BaseResponseAnalysisFunctions response = null;
         try {
-            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null, null, null, null);
         } catch (ApiException e) {
             throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
         }

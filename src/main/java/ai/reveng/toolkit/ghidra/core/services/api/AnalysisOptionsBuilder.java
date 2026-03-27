@@ -1,217 +1,235 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
+import ai.reveng.model.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import ai.reveng.model.AnalysisCreateRequest;
 import ai.reveng.model.Tag;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 public class AnalysisOptionsBuilder {
-    private JSONObject options;
+    private String fileName;
+    private String sha256Hash;
+    private long sizeInBytes;
+    private final List<String> tags = new ArrayList<>();
+    private AnalysisScope scope;
+    private String architecture;
+    private boolean advancedAnalysis;
+    private boolean skipSBOM;
+    private boolean skipScraping;
+    private boolean skipCVE;
+    private boolean dynamicExecution;
+    private boolean skipCapabilities;
+
+    private Long baseAddress;
+    private List<FunctionBoundary> functionBoundaries;
 
     // Package-private constructor for testing
     AnalysisOptionsBuilder() {
-        options = new JSONObject();
-        options.put("size_in_bytes", 0);
-        options.put("tags", new JSONArray());
     }
 
-    public AnalysisOptionsBuilder functionBoundaries(long base, List<FunctionBoundary> functionList){
-        JSONObject symbols = new JSONObject();
-        symbols.put("base_addr", base);
-
-        JSONArray functions = new JSONArray();
-        functionList.forEach(f -> functions.put(f.toJSON()));
-
-        symbols.put("functions", functions);
-        options.put("symbols", symbols);
+    public AnalysisOptionsBuilder functionBoundaries(long base, List<FunctionBoundary> boundaries) {
+        this.baseAddress = base;
+        this.functionBoundaries = boundaries;
         return this;
     }
 
+    private static FunctionBoundary functionBoundaryForFunction(Function function, Boolean include) {
+        return new FunctionBoundary()
+                .mangledName(function.getSymbol().getName(false))
+                .startAddress(function.getEntryPoint().getOffset())
+                .endAddress(function.getBody().getMaxAddress().getOffset())
+                .includeInAnalysis(include);
+
+    }
+
+    /**
+     * Sets function boundaries from all Ghidra Functions in the program, marking selected ones for analysis.
+     *
+     * @param base The base address offset
+     * @param allFunctions All functions in the program
+     * @param selectedFunctions The functions the user selected for analysis
+     * @return this builder for method chaining
+     */
+    public AnalysisOptionsBuilder functionBoundariesFromGhidraFunctions(long base, List<Function> allFunctions, List<Function> selectedFunctions) {
+        Set<Function> selectedSet = Set.copyOf(selectedFunctions);
+
+        List<FunctionBoundary> all = new ArrayList<>();
+
+        for (Function function : allFunctions) {
+            if (!GhidraRevengService.isRelevantForAnalysis(function)) {
+                continue;
+            }
+
+            all.add(this.functionBoundaryForFunction(function, selectedFunctions.contains(function)));
+        }
+        return functionBoundaries(base, all);
+    }
+
     public AnalysisOptionsBuilder hash(TypedApiInterface.BinaryHash hash) {
-        options.put("sha_256_hash", hash.sha256());
+        this.sha256Hash = hash.sha256();
         return this;
     }
 
     public AnalysisOptionsBuilder advancedAnalysis(boolean advanced) {
-        options.put("advanced_analysis", advanced);
+        this.advancedAnalysis = advanced;
         return this;
     }
 
     public AnalysisOptionsBuilder fileName(String name) {
-        options.put("file_name", name);
+        this.fileName = name;
         return this;
     }
 
     public AnalysisOptionsBuilder size(long size) {
-        options.put("size_in_bytes", size);
+        this.sizeInBytes = size;
         return this;
     }
 
     public long getSize() {
-        return options.optLong("size_in_bytes", 0);
+        return sizeInBytes;
     }
 
-    public AnalysisOptionsBuilder scope(AnalysisScope scope){
-        options.put("binary_scope", scope.scope);
+    public AnalysisOptionsBuilder scope(AnalysisScope scope) {
+        this.scope = scope;
         return this;
     }
 
     public static AnalysisOptionsBuilder forProgram(Program program) {
+        List<FunctionBoundary> result = new ArrayList<>();
+        program.getFunctionManager().getFunctions(true).forEach(
+                function -> {
+                    if (!GhidraRevengService.isRelevantForAnalysis(function)) {
+                        return;
+                    }
+                    result.add(functionBoundaryForFunction(function, true));
+                }
+        );
         return new AnalysisOptionsBuilder()
                 .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))
                 .fileName(program.getName())
                 .functionBoundaries(
                         program.getImageBase().getOffset(),
-                        GhidraRevengService.exportFunctionBoundaries(program
-                        )
+                        result
+                );
+    }
+
+    /**
+     * Creates an AnalysisOptionsBuilder for a program where all functions are sent,
+     * but only the selected ones are marked with includeInAnalysis=true.
+     *
+     * @param program The Ghidra program
+     * @param selectedFunctions The list of functions the user selected for analysis
+     * @return A new AnalysisOptionsBuilder configured for the program
+     */
+    public static AnalysisOptionsBuilder forProgramWithFunctions(Program program, List<Function> selectedFunctions) {
+        List<Function> allFunctions = new ArrayList<>();
+        program.getFunctionManager().getFunctions(true).forEach(allFunctions::add);
+
+        return new AnalysisOptionsBuilder()
+                .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))
+                .fileName(program.getName())
+                .functionBoundariesFromGhidraFunctions(
+                        program.getImageBase().getOffset(),
+                        allFunctions,
+                        selectedFunctions
                 );
     }
 
     public AnalysisOptionsBuilder skipSBOM(boolean b) {
-        options.put("skip_sbom", b);
+        this.skipSBOM = b;
         return this;
     }
 
     public AnalysisOptionsBuilder skipScraping(boolean b) {
-        options.put("skip_scraping", b);
+        this.skipScraping = b;
         return this;
     }
 
     public AnalysisOptionsBuilder skipCVE(boolean b) {
-        options.put("skip_cves", b);
+        this.skipCVE = b;
         return this;
     }
 
     public AnalysisOptionsBuilder dynamicExecution(boolean b) {
-        options.put("dynamic_execution", b);
+        this.dynamicExecution = b;
         return this;
     }
 
     public AnalysisOptionsBuilder skipCapabilities(boolean b) {
-        options.put("skip_capabilities", b);
+        this.skipCapabilities = b;
         return this;
     }
 
     public AnalysisOptionsBuilder addTag(String tag) {
-        options.getJSONArray("tags").put(tag);
+        tags.add(tag);
         return this;
     }
 
     public AnalysisOptionsBuilder addTags(List<String> tags) {
-        JSONArray tagArray = options.getJSONArray("tags");
-        tags.forEach(tagArray::put);
+        this.tags.addAll(tags);
         return this;
     }
 
     public List<String> getTags() {
-        JSONArray tagArray = options.getJSONArray("tags");
-        List<String> tags = new ArrayList<>();
-        for (int i = 0; i < tagArray.length(); i++) {
-            tags.add(tagArray.getString(i));
-        }
-        return tags;
+        return List.copyOf(tags);
     }
 
     public AnalysisOptionsBuilder architecture(String arch) {
-        options.put("isa_options", arch);
+        this.architecture = arch;
         return this;
     }
 
     /**
      * Converts the current AnalysisOptionsBuilder to an AnalysisCreateRequest object
-     * that can be used with the new API endpoints
+     * that can be used with the API endpoints.
      *
      * @return AnalysisCreateRequest object populated with the current options
      */
     public AnalysisCreateRequest toAnalysisCreateRequest() {
-        // Create the request with only the core required fields that we know work
         var request = new AnalysisCreateRequest()
-                .filename(options.getString("file_name"))
-                .sha256Hash(options.getString("sha_256_hash"));
+                .filename(fileName)
+                .sha256Hash(sha256Hash);
 
         // Include tags if any were provided
-        List<String> tagStrings = getTags();
-        if (!tagStrings.isEmpty()) {
-            // Convert string tags to Tag objects, filtering out any empty/null strings
-            List<Tag> tags = tagStrings.stream()
-                    .filter(tagString -> tagString != null && !tagString.trim().isEmpty())
-                    .map(tagString -> new Tag().name(tagString))
-                    .toList();
-
-            // Only set tags if we have valid ones after filtering
-            if (!tags.isEmpty()) {
-                request.setTags(tags);
-            }
+        List<Tag> validTags = tags.stream()
+                .filter(t -> t != null && !t.trim().isEmpty())
+                .map(t -> new Tag().name(t))
+                .toList();
+        if (!validTags.isEmpty()) {
+            request.setTags(validTags);
         }
 
-        if (options.has("binary_scope")) {
-            var scope = options.getString("binary_scope");
-            request.analysisScope(ai.reveng.model.AnalysisScope.fromValue(scope));
+        if (scope != null) {
+            request.analysisScope(ai.reveng.model.AnalysisScope.fromValue(scope.scope));
         }
 
-        if (options.has("symbols")) {
-            JSONObject symbols = options.getJSONObject("symbols");
-
+        if (baseAddress != null && functionBoundaries != null) {
             var symbolsModel = new ai.reveng.model.Symbols()
-                    .baseAddress(symbols.getBigInteger("base_addr"));
+                    .baseAddress(BigInteger.valueOf(baseAddress));
 
-            List<ai.reveng.model.FunctionBoundary> boundaries = new ArrayList<>();
-
-            if (symbols.has("functions")) {
-                JSONArray functions = symbols.getJSONArray("functions");
-                for (int i = 0; i < functions.length(); i++) {
-                    var functionJSON = functions.getJSONObject(i);
-
-                    var functionBoundary = new ai.reveng.model.FunctionBoundary()
-                            .mangledName(functionJSON.getString("mangled_name"))
-                            .startAddress(functionJSON.getLong("start_addr"))
-                            .endAddress(functionJSON.getLong("end_addr"));
-
-                    boundaries.add(functionBoundary);
-                }
-                symbolsModel.setFunctionBoundaries(boundaries);
-            }
-
+            symbolsModel.setFunctionBoundaries(this.functionBoundaries);
             request.setSymbols(symbolsModel);
         }
 
         var analysisConfig = new ai.reveng.model.AnalysisConfig();
-
-        if (options.has("skip_sbom")) {
-            analysisConfig.setGenerateSbom(!options.getBoolean("skip_sbom"));
-        }
-
-        if (options.has("skip_cves")) {
-            analysisConfig.setGenerateCves(!options.getBoolean("skip_cves"));
-        }
-
-        if (options.has("skip_capabilities")) {
-            analysisConfig.setGenerateCapabilities(!options.getBoolean("skip_capabilities"));
-        }
-
-        if (options.has("advanced_analysis")) {
-            analysisConfig.setAdvancedAnalysis(options.getBoolean("advanced_analysis"));
-        }
-
+        analysisConfig.setGenerateSbom(!skipSBOM);
+        analysisConfig.setGenerateCves(!skipCVE);
+        analysisConfig.setGenerateCapabilities(!skipCapabilities);
+        analysisConfig.setAdvancedAnalysis(advancedAnalysis);
         request.setAnalysisConfig(analysisConfig);
 
         var binaryConfig = new ai.reveng.model.BinaryConfig();
-
-        if (options.has("isa_options")) {
-            var isaOption = options.getString("isa_options");
-            if (!isaOption.equals("Auto")) {
-                var isa = ai.reveng.model.ISA.fromValue(isaOption);
-                binaryConfig.setIsa(isa);
-            }
+        if (architecture != null && !architecture.equals("Auto")) {
+            binaryConfig.setIsa(ai.reveng.model.ISA.fromValue(architecture));
         }
-
         request.setBinaryConfig(binaryConfig);
 
         Msg.info(this, "Created AnalysisCreateRequest: " + request);
