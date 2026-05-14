@@ -1,6 +1,7 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.model.AiDecompilationTaskStatus;
 import ai.reveng.model.GetAiDecompilationTask;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
@@ -63,7 +64,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
             public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
                 if (functionID.value() == 2) {
                     return new GetAiDecompilationTask()
-                            .status("success")
+                            .status(AiDecompilationTaskStatus.SUCCESS)
                             .decompilation("int func2(int a) { return a + 1; }")
                             .rawDecompilation("int func2(int a) { return a + 1; }")
                             .summary("Mocked Description Summary for func2")
@@ -71,7 +72,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                             .rawAiSummary("Summary for func2");
                 } else if (functionID.value() == 1) {
                     return new GetAiDecompilationTask()
-                            .status("success")
+                            .status(AiDecompilationTaskStatus.SUCCESS)
                             .decompilation("void func1() { return; }")
                             .rawDecompilation("void func1() { return; }")
                             .summary("Mocked Description Summary")
@@ -225,7 +226,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         @Override
         public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
             return new GetAiDecompilationTask()
-                    .status("success")
+                    .status(AiDecompilationTaskStatus.SUCCESS)
                     .decompilation("void func1() { return; }")
                     .rawDecompilation("void func1() { return; }")
                     .summary("Mocked Description Summary")
