@@ -645,7 +645,7 @@ public class GhidraRevengService {
         // Check if there is an existing process already, because the trigger API will fail with 400 if there is
         var fID = functionWithID.functionID;
         var function = functionWithID.function;
-        if (api.pollAIDecompileStatus(fID).getStatus().equals("uninitialised")){
+        if (api.pollAIDecompileStatus(fID).getStatus() == AiDecompilationTaskStatus.UNINITIALISED){
             // Trigger the decompilation
             api.triggerAIDecompilationForFunctionID(fID);
         }
@@ -660,10 +660,8 @@ public class GhidraRevengService {
             window.setDisplayedValuesBasedOnStatus(function, status);
 
             switch (status.getStatus()) {
-                case "pending":
-                case "uninitialised":
-                case "queued":
-                case "running":
+                case PENDING:
+                case UNINITIALISED:
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException e) {
@@ -671,11 +669,11 @@ public class GhidraRevengService {
                     }
 //                    monitor.incrementProgress(100);
                     break;
-                case "success":
+                case SUCCESS:
                     monitor.setProgress(monitor.getMaximum());
                     window.setDisplayedValuesBasedOnStatus(function, status);
                     return status.getDecompilation();
-                case "error":
+                case ERROR:
                     return "Decompilation failed: %s".formatted(status.getStatus());
                 default:
                     throw new RuntimeException("Unknown status: %s".formatted(status.getStatus()));

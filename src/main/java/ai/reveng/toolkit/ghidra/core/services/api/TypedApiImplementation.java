@@ -132,7 +132,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         if (!bin.exists())
             throw new FileNotFoundException("Binary to upload does not exist");
 
-        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
+        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin.getAbsolutePath(), null, true);
 
         return new BinaryHash(result.getData().getSha256Hash());
     }
@@ -228,7 +228,7 @@ public class TypedApiImplementation implements TypedApiInterface {
 
         BaseResponseAnalysisFunctions response = null;
         try {
-            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null);
+            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null, false, null, null);
         } catch (ApiException e) {
             throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
         }
@@ -468,7 +468,8 @@ public class TypedApiImplementation implements TypedApiInterface {
             var response = functionsAiDecompilationApi.getAiDecompilationTaskResult(
                 functionID.value(),  // Long functionId
                 true,               // summarise
-                true                // generateInlineComments
+                true,               // generateInlineComments
+                null                // forceRegenerate
             );
             return response.getData();
         } catch (ApiException e) {
