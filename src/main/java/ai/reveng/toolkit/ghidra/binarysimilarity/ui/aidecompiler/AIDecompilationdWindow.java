@@ -1,6 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.model.AiDecompilationTaskStatus;
 import ai.reveng.model.GetAiDecompilationTask;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -207,7 +208,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
     public void setDisplayedValuesBasedOnStatus(Function function, GetAiDecompilationTask status) {
         this.function = function;
-        if (status.getStatus().equals("success")) {
+        if (status.getStatus() == AiDecompilationTaskStatus.SUCCESS) {
             setCode(status.getDecompilation());
             descriptionArea.setText("<html>%s</html>".formatted(status.getSummary()));
 
@@ -219,7 +220,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             } else {
                 predictedNamePanel.setVisible(false);
             }
-        } else if (status.getStatus().equals("error")) {
+        } else if (status.getStatus() == AiDecompilationTaskStatus.ERROR) {
             setCode("");
             descriptionArea.setText("Decompilation failed");
             predictedNamePanel.setVisible(false);
@@ -286,13 +287,13 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                     setDisplayedValuesBasedOnStatus(function, status)
             );
         }
-        if (status.getStatus().equals("success")) {
+        if (status.getStatus() == AiDecompilationTaskStatus.SUCCESS) {
             var logger = tool.getService(ReaiLoggingService.class);
             logger.info("AI Decompilation finished for function %s: %s".formatted(function.getName(), status.getDecompilation()));
             if (!hasPendingDecompilations()) {
                 taskMonitorComponent.setVisible(false);
             }
-        } else if (status.getStatus().equals("error")) {
+        } else if (status.getStatus() == AiDecompilationTaskStatus.ERROR) {
             if (!hasPendingDecompilations()) {
                 taskMonitorComponent.setVisible(false);
             }
@@ -300,7 +301,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     private boolean hasPendingDecompilations() {
-        return cache.values().stream().anyMatch(s -> s.getStatus().equals("pending") || s.getStatus().equals("running") || s.getStatus().equals("queued"));
+        return cache.values().stream().anyMatch(s -> s.getStatus() == AiDecompilationTaskStatus.PENDING);
     }
     class AIDecompTask extends Task {
 
@@ -317,7 +318,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         public void run(TaskMonitor monitor) throws CancelledException {
             var fID = functionWithID.functionID();
             // Check if there is an existing process already, because the trigger API will fail with 400 if there is
-            if (service.getApi().pollAIDecompileStatus(fID).getStatus().equals("uninitialised")) {
+            if (service.getApi().pollAIDecompileStatus(fID).getStatus() == AiDecompilationTaskStatus.UNINITIALISED) {
                 // Trigger the decompilation
                 service.getApi().triggerAIDecompilationForFunctionID(fID);
             }
@@ -340,10 +341,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 monitor.setMessage("Waiting for AI Decompilation for %s ... Current status: %s".formatted(functionWithID.function().getName(), lastDecompStatus.getStatus()));
                 monitor.checkCancelled();
                 switch (newStatus.getStatus()) {
-                    case "pending":
-                    case "uninitialised":
-                    case "queued":
-                    case "running":
+                    case PENDING:
+                    case UNINITIALISED:
                         try {
                             // Wait a second before polling again. We don't want to spam the API with requests too often
                             Thread.sleep(1000);
@@ -351,10 +350,10 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                             throw new RuntimeException(e);
                         }
                         break;
-                    case "success":
+                    case SUCCESS:
                         monitor.setProgress(monitor.getMaximum());
                         return;
-                    case "error":
+                    case ERROR:
                         logger.error("Decompilation failed: %s".formatted(newStatus.getDecompilation()));
                         return;
                     default:
