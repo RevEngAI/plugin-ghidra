@@ -80,6 +80,22 @@ test {
     jvmArgs '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
 //    systemProperty 'java.awt.headless', 'true'
     systemProperty "ghidra.test.property.batch.mode", 'true'
+
+    // Ghidra 12.1+ installs a serial filter factory during application initialization. The JVM
+    // only allows this if no ObjectInputStream has been constructed yet, but Gradle's test
+    // worker creates one for IPC before our tests run. Pre-installing the factory via system
+    // property avoids the IllegalStateException. The class only exists on 12.1+, so only set
+    // it when the installation actually has it.
+    def filterFactoryClass = 'ghidra.framework.remote.GhidraSerialFilterFactory'
+    def hasFilterFactory = fileTree(dir: "$ghidraInstallDir/Ghidra/Framework/FileSystem/lib",
+            include: '*.jar').any { jar ->
+        new java.util.zip.ZipFile(jar).withCloseable { zf ->
+            zf.getEntry(filterFactoryClass.replace('.', '/') + '.class') != null
+        }
+    }
+    if (hasFilterFactory) {
+        systemProperty 'jdk.serialFilterFactory', filterFactoryClass
+    }
 }
 // Exclude additional files from the built extension
 // Ex: buildExtension.exclude '.idea/**'
