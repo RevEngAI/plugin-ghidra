@@ -49,12 +49,11 @@ import static java.net.http.HttpClient.Version.HTTP_1_1;
 public class TypedApiImplementation implements TypedApiInterface {
     private final HttpClient httpClient;
     private final String baseUrl;
-    private final ConfigApi configApi;
     Map<String, String> headers;
 
     private final AnalysesCoreApi analysisCoreApi;
-    private final AuthenticationUsersApi authenticationUsersApi;
     private final AnalysesResultsMetadataApi analysesResultsMetadataApi;
+    private final ConfigApi configApi;
     private final SearchApi searchApi;
     private final FunctionsCoreApi functionsCoreApi;
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
@@ -98,7 +97,6 @@ public class TypedApiImplementation implements TypedApiInterface {
         APIKey.setApiKey(apiKey);
 
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
-        this.authenticationUsersApi = new AuthenticationUsersApi(apiClient);
         this.analysesResultsMetadataApi = new AnalysesResultsMetadataApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
@@ -444,15 +442,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public void authenticate() throws InvalidAPIInfoException {
-        try {
-            this.authenticationUsersApi.getRequesterUserInfo();
-        } catch (ApiException e) {
-            throw new InvalidAPIInfoException("Invalid API key", e);
-        }
-    }
-
-    @Override
     public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         JSONObject params = new JSONObject().put("function_id", functionID.value());
         HttpRequest request = requestBuilderForEndpoint("ai-decompilation")
@@ -681,4 +670,3 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 }
-

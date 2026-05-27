@@ -20,7 +20,12 @@ public interface CredentialValidator {
                 throw new InvalidAPIInfoException("hostURI and apiKey must not be null");
             }
             var api = new TypedApiImplementation(apiInfo);
-            api.authenticate();
+            try {
+                // Validate the credentials by making a simple API call that requires authentication.
+                api.getConfig();
+            } catch (Exception e) {
+                throw new InvalidAPIInfoException("Failed to validate API credentials: " + e.getMessage(), e);
+            }
         };
     }
 }
