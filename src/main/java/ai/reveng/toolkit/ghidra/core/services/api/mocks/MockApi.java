@@ -48,12 +48,8 @@ public class MockApi implements TypedApiInterface {
     }
 
     @Override
-    public void authenticate() throws APIAuthenticationException {
-    }
-
-    @Override
     public void renameFunction(FunctionID id, String newName, String newNameMangled) {
-        
+
     }
 
     @Override

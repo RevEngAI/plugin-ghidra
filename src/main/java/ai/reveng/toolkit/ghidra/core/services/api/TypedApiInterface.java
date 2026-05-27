@@ -114,8 +114,6 @@ public interface TypedApiInterface {
 
     String getAnalysisLogs(AnalysisID analysisID);
 
-    void authenticate() throws InvalidAPIInfoException;
-
     default DataTypeList generateFunctionDataTypes(AnalysisID analysisID, List<FunctionID> functionIDS) {
         throw new UnsupportedOperationException("generateFunctionDataTypes not implemented yet");
     }
@@ -230,4 +228,3 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getConfig not implemented yet");
     }
 }
-
