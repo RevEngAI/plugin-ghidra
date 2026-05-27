@@ -130,7 +130,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         if (!bin.exists())
             throw new FileNotFoundException("Binary to upload does not exist");
 
-        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin.getAbsolutePath(), null, true);
+        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
 
         return new BinaryHash(result.getData().getSha256Hash());
     }
