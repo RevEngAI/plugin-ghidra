@@ -920,7 +920,7 @@ public class GhidraRevengService {
 
     public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
         var details = api.getFunctionDetails(functionID);
-        openPortal("analyses", String.format("%s?fn=%s", details.analysisId().id(), functionID.value()));
+        openPortal("analyses", String.format("%s?view=functions&fn=%s", details.analysisId().id(), functionID.value()));
     }
 
     public void openCollectionInPortal(Collection collection) {
