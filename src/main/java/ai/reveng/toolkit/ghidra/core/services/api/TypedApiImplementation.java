@@ -443,26 +443,83 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
-        JSONObject params = new JSONObject().put("function_id", functionID.value());
-        HttpRequest request = requestBuilderForEndpoint("ai-decompilation")
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-        return sendVersion2Request(request).status();
+        try {
+            // POST /v3/functions/{function_id}/ai-decompilation
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), true, null);
+            return Boolean.TRUE.equals(result.getStatus());
+        } catch (ApiException e) {
+            throw new RuntimeException("Failed to trigger AI decompilation", e);
+        }
     }
 
     @Override
-    public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
+    public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
         try {
-            var response = functionsAiDecompilationApi.getAiDecompilationTaskResult(
-                functionID.value(),  // Long functionId
-                true,               // summarise
-                true,               // generateInlineComments
-                null                // forceRegenerate
-            );
-            return response.getData();
+            // GET /v3/functions/{function_id}/ai-decompilation
+            DecompilationData data = functionsAiDecompilationApi.getAiDecompilation(functionID.value());
+            String summary = null;
+            String predictedFunctionName = null;
+            WorkflowProgress.StatusEnum inlineCommentsStatus = null;
+            List<AIDecompilationStatus.InlineCommentEntry> inlineComments = List.of();
+            if (data.getStatus() == DecompilationData.StatusEnum.COMPLETED) {
+                try {
+                    // GET /v3/functions/{function_id}/ai-decompilation/summary
+                    SummaryData summaryData = functionsAiDecompilationApi.getAiDecompilationSummary(functionID.value());
+                    summary = summaryData.getAiSummary() != null ? summaryData.getAiSummary() : summaryData.getSummary();
+                } catch (ApiException e) {
+                    Msg.info(this, "Decompilation completed but summary not yet available for function " + functionID.value());
+                }
+                try {
+                    // GET /v3/functions/{function_id}/ai-decompilation/tokenised — carries the predicted name
+                    TokenisedData tokenised = functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
+                    predictedFunctionName = tokenised.getPredictedFunctionName();
+                } catch (ApiException | RuntimeException e) {
+                    // RuntimeException covers IllegalArgumentException thrown by the SDK's JSON validator
+                    // when the live response omits fields the generated model marks required (e.g. name_map).
+                    Msg.info(this, "Could not fetch predicted function name for function " + functionID.value() + ": " + e.getMessage());
+                }
+                try {
+                    // GET /v3/functions/{function_id}/ai-decompilation/inline-comments/status
+                    WorkflowProgress commentsProgress = functionsAiDecompilationApi.getAiDecompilationInlineCommentsStatus(functionID.value());
+                    inlineCommentsStatus = commentsProgress.getStatus();
+                } catch (ApiException | RuntimeException e) {
+                    Msg.info(this, "Could not fetch inline comments status for function " + functionID.value() + ": " + e.getMessage());
+                }
+                if (inlineCommentsStatus == WorkflowProgress.StatusEnum.COMPLETED) {
+                    try {
+                        // GET /v3/functions/{function_id}/ai-decompilation/inline-comments
+                        CommentsData commentsData = functionsAiDecompilationApi.getAiDecompilationInlineComments(functionID.value());
+                        var rawComments = commentsData.getInlineComments();
+                        if (rawComments != null) {
+                            inlineComments = rawComments.stream()
+                                    .filter(c -> c.getLine() != null && c.getComment() != null)
+                                    .map(c -> new AIDecompilationStatus.InlineCommentEntry(c.getLine(), c.getComment()))
+                                    .toList();
+                        }
+                    } catch (ApiException | RuntimeException e) {
+                        Msg.info(this, "Could not fetch inline comments for function " + functionID.value() + ": " + e.getMessage());
+                    }
+                }
+            }
+            return new AIDecompilationStatus(
+                    data.getStatus(),
+                    data.getDecompilation(),
+                    summary,
+                    predictedFunctionName,
+                    inlineCommentsStatus,
+                    inlineComments);
         } catch (ApiException e) {
             throw new RuntimeException("Failed to poll AI decompilation status", e);
+        }
+    }
+
+    @Override
+    public void triggerAIDecompilationInlineComments(FunctionID functionID) {
+        try {
+            // POST /v3/functions/{function_id}/ai-decompilation/inline-comments
+            functionsAiDecompilationApi.regenerateAiDecompilationInlineComments(functionID.value());
+        } catch (ApiException e) {
+            throw new RuntimeException("Failed to trigger AI decompilation inline comments", e);
         }
     }
 
