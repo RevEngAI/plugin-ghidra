@@ -43,7 +43,7 @@ The builds for latest stable version of the RevEng.AI Ghidra plugin for common G
 
 ### Supported Ghidra versions
 
-We support all versions compatible with Ghidra 11.2+ based on Java 21.
+We support all versions compatible with Ghidra 11.4+ based on Java 21.
 
 #### Building your own plugin (for custom Ghidra forks and versions)
 
