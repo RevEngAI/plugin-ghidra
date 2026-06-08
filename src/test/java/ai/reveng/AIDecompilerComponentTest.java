@@ -1,13 +1,13 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
-import ai.reveng.model.AiDecompilationTaskStatus;
-import ai.reveng.model.GetAiDecompilationTask;
+import ai.reveng.model.DecompilationData;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
+import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
@@ -61,23 +61,23 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
             }
 
             @Override
-            public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
                 if (functionID.value() == 2) {
-                    return new GetAiDecompilationTask()
-                            .status(AiDecompilationTaskStatus.SUCCESS)
-                            .decompilation("int func2(int a) { return a + 1; }")
-                            .rawDecompilation("int func2(int a) { return a + 1; }")
-                            .summary("Mocked Description Summary for func2")
-                            .aiSummary("Mocked Description Summary for func2")
-                            .rawAiSummary("Summary for func2");
+                    return new AIDecompilationStatus(
+                            DecompilationData.StatusEnum.COMPLETED,
+                            "int func2(int a) { return a + 1; }",
+                            "Mocked Description Summary for func2",
+                            null,
+                            null,
+                            java.util.List.of());
                 } else if (functionID.value() == 1) {
-                    return new GetAiDecompilationTask()
-                            .status(AiDecompilationTaskStatus.SUCCESS)
-                            .decompilation("void func1() { return; }")
-                            .rawDecompilation("void func1() { return; }")
-                            .summary("Mocked Description Summary")
-                            .aiSummary("Mocked Description Summary")
-                            .rawAiSummary("Summary");
+                    return new AIDecompilationStatus(
+                            DecompilationData.StatusEnum.COMPLETED,
+                            "void func1() { return; }",
+                            "Mocked Description Summary",
+                            null,
+                            null,
+                            java.util.List.of());
                 } else {
                     throw new RuntimeException("Unknown FunctionID");
                 }
@@ -107,7 +107,7 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
 
         // get AIDecompiledWindow, and some internal fields for testing
         var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
-        Map<Function, GetAiDecompilationTask> aiDecompCache = (Map<Function, GetAiDecompilationTask>) getInstanceField("cache", aiDecompComponent);
+        Map<Function, AIDecompilationStatus> aiDecompCache = (Map<Function, AIDecompilationStatus>) getInstanceField("cache", aiDecompComponent);
         RSyntaxTextArea textArea = (RSyntaxTextArea) getInstanceField("textArea", aiDecompComponent);
 
         // Make sure it's hidden to start with
@@ -224,14 +224,14 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         }
 
         @Override
-        public GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
-            return new GetAiDecompilationTask()
-                    .status(AiDecompilationTaskStatus.SUCCESS)
-                    .decompilation("void func1() { return; }")
-                    .rawDecompilation("void func1() { return; }")
-                    .summary("Mocked Description Summary")
-                    .aiSummary("Mocked Description Summary")
-                    .rawAiSummary("Summary");
+        public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+            return new AIDecompilationStatus(
+                    DecompilationData.StatusEnum.COMPLETED,
+                    "void func1() { return; }",
+                    "Mocked Description Summary",
+                    null,
+                    null,
+                    java.util.List.of());
         }
 
         @Override

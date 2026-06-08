@@ -152,8 +152,12 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("triggerAIDecompilationForFunctionID not implemented yet");
     }
 
-    default GetAiDecompilationTask pollAIDecompileStatus(FunctionID functionID) {
+    default AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
         throw new UnsupportedOperationException("pollAIDecompileStatus not implemented yet");
+    }
+
+    default void triggerAIDecompilationInlineComments(FunctionID functionID) {
+        throw new UnsupportedOperationException("triggerAIDecompilationInlineComments not implemented yet");
     }
 
     void renameFunction(FunctionID id, String newName, String newNameMangled);

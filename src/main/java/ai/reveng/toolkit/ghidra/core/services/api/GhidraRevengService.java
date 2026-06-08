@@ -645,12 +645,10 @@ public class GhidraRevengService {
         // Check if there is an existing process already, because the trigger API will fail with 400 if there is
         var fID = functionWithID.functionID;
         var function = functionWithID.function;
-        if (api.pollAIDecompileStatus(fID).getStatus() == AiDecompilationTaskStatus.UNINITIALISED){
+        if (api.pollAIDecompileStatus(fID).status() == DecompilationData.StatusEnum.UNINITIALISED){
             // Trigger the decompilation
             api.triggerAIDecompilationForFunctionID(fID);
         }
-
-        String lastStatus;
 
         while (true) {
             if (monitor.isCancelled()) {
@@ -659,28 +657,25 @@ public class GhidraRevengService {
             var status = api.pollAIDecompileStatus(fID);
             window.setDisplayedValuesBasedOnStatus(function, status);
 
-            switch (status.getStatus()) {
+            switch (status.status()) {
                 case PENDING:
+                case RUNNING:
                 case UNINITIALISED:
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException e) {
                         throw new RuntimeException(e);
                     }
-//                    monitor.incrementProgress(100);
                     break;
-                case SUCCESS:
+                case COMPLETED:
                     monitor.setProgress(monitor.getMaximum());
                     window.setDisplayedValuesBasedOnStatus(function, status);
-                    return status.getDecompilation();
-                case ERROR:
-                    return "Decompilation failed: %s".formatted(status.getStatus());
+                    return status.decompilation();
+                case FAILED:
+                    return "Decompilation failed: %s".formatted(status.status());
                 default:
-                    throw new RuntimeException("Unknown status: %s".formatted(status.getStatus()));
+                    throw new RuntimeException("Unknown status: %s".formatted(status.status()));
             }
-
-
-
         }
     }
 
@@ -925,7 +920,7 @@ public class GhidraRevengService {
 
     public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
         var details = api.getFunctionDetails(functionID);
-        openPortal("analyses", String.format("%s?fn=%s", details.analysisId().id(), functionID.value()));
+        openPortal("analyses", String.format("%s?view=functions&fn=%s", details.analysisId().id(), functionID.value()));
     }
 
     public void openCollectionInPortal(Collection collection) {
