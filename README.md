@@ -155,7 +155,7 @@ right-clicking on a function in Ghidra's listing or decompiler view and selectin
 The window will show you the AI generated decompilation of the selected function as well as a
 natural language explanation of what the function does.
 
-The window can be pinned and will update as you select different functions in Ghidra.
+The window can be pinned by dragging the blue top bar and will update as you select different functions in Ghidra.
 
 ![AI Decompilation Window](screenshots/ai-decompilation.png)
 
