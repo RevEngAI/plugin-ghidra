@@ -381,6 +381,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             var api = service.getApi();
             AIDecompilationStatus lastDecompStatus = null;
             boolean inlineCommentsTriggered = false;
+            boolean summaryTriggered = false;
             while (true) {
                 var newStatus = api.pollAIDecompileStatus(id);
                 if (lastDecompStatus == null
@@ -413,6 +414,16 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                         if (commentsStatus == WorkflowProgress.StatusEnum.FAILED) {
                             logger.error("Inline comments generation failed for function %s".formatted(functionWithID.function().getName()));
                             return;
+                        }
+                        if (!summaryTriggered) {
+                            // Summary generation is no longer automatic on the create-decompilation call;
+                            // callers must POST to kick it off, like inline comments.
+                            summaryTriggered = true;
+                            try {
+                                api.triggerAIDecompilationSummary(id);
+                            } catch (RuntimeException e) {
+                                logger.error("Failed to trigger summary: %s".formatted(e.getMessage()));
+                            }
                         }
                         if (!inlineCommentsTriggered) {
                             // Trigger on first entry to COMPLETED regardless of reported status: if comments

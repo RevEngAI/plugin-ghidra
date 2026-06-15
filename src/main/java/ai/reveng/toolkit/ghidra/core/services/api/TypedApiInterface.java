@@ -160,6 +160,10 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("triggerAIDecompilationInlineComments not implemented yet");
     }
 
+    default void triggerAIDecompilationSummary(FunctionID functionID) {
+        throw new UnsupportedOperationException("triggerAIDecompilationSummary not implemented yet");
+    }
+
     void renameFunction(FunctionID id, String newName, String newNameMangled);
 
     default FunctionNameScore getNameScore(FunctionMatch match) {

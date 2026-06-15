@@ -523,6 +523,16 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 
+    @Override
+    public void triggerAIDecompilationSummary(FunctionID functionID) {
+        try {
+            // POST /v3/functions/{function_id}/ai-decompilation/summary
+            functionsAiDecompilationApi.regenerateAiDecompilationSummary(functionID.value());
+        } catch (ApiException e) {
+            throw new RuntimeException("Failed to trigger AI decompilation summary", e);
+        }
+    }
+
     /**
      * https://api.reveng.ai/v2/docs#tag/Functions-overview/operation/rename_function_id_v2_functions_rename__function_id__post
      *
