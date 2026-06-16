@@ -2,6 +2,7 @@ package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.DecompilationData;
+import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -68,7 +69,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                             "int func2(int a) { return a + 1; }",
                             "Mocked Description Summary for func2",
                             null,
-                            null,
+                            WorkflowProgress.StatusEnum.COMPLETED,
+                            WorkflowProgress.StatusEnum.COMPLETED,
                             java.util.List.of());
                 } else if (functionID.value() == 1) {
                     return new AIDecompilationStatus(
@@ -76,7 +78,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                             "void func1() { return; }",
                             "Mocked Description Summary",
                             null,
-                            null,
+                            WorkflowProgress.StatusEnum.COMPLETED,
+                            WorkflowProgress.StatusEnum.COMPLETED,
                             java.util.List.of());
                 } else {
                     throw new RuntimeException("Unknown FunctionID");
@@ -230,7 +233,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                     "void func1() { return; }",
                     "Mocked Description Summary",
                     null,
-                    null,
+                    WorkflowProgress.StatusEnum.COMPLETED,
+                    WorkflowProgress.StatusEnum.COMPLETED,
                     java.util.List.of());
         }
 

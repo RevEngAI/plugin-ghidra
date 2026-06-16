@@ -386,6 +386,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 var newStatus = api.pollAIDecompileStatus(id);
                 if (lastDecompStatus == null
                         || !Objects.equals(newStatus.status(), lastDecompStatus.status())
+                        || !Objects.equals(newStatus.summaryStatus(), lastDecompStatus.summaryStatus())
                         || !Objects.equals(newStatus.inlineCommentsStatus(), lastDecompStatus.inlineCommentsStatus())
                         || newStatus.inlineComments().size() != lastDecompStatus.inlineComments().size()) {
                     lastDecompStatus = newStatus;
@@ -415,6 +416,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                             logger.error("Inline comments generation failed for function %s".formatted(functionWithID.function().getName()));
                             return;
                         }
+                        var summaryStatus = newStatus.summaryStatus();
                         if (!summaryTriggered) {
                             // Summary generation is no longer automatic on the create-decompilation call;
                             // callers must POST to kick it off, like inline comments.
@@ -425,10 +427,15 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                                 logger.error("Failed to trigger summary: %s".formatted(e.getMessage()));
                             }
                         }
-                        if (!inlineCommentsTriggered) {
-                            // Trigger on first entry to COMPLETED regardless of reported status: if comments
-                            // haven't been requested (or the status endpoint was unreachable), POSTing kicks
-                            // them off; if they're already running the server treats it as a regenerate.
+                        if (summaryStatus == WorkflowProgress.StatusEnum.FAILED) {
+                            // Server requires a summary to exist before inline comments can be generated;
+                            // if the summary failed there's no point triggering comments.
+                            logger.error("Summary generation failed for function %s; skipping inline comments".formatted(functionWithID.function().getName()));
+                            return;
+                        }
+                        if (summaryStatus == WorkflowProgress.StatusEnum.COMPLETED && !inlineCommentsTriggered) {
+                            // Gate the inline-comments POST on summary completion — the server rejects it
+                            // with HTTP 400 otherwise ("A summary is required before inline comments can be generated").
                             inlineCommentsTriggered = true;
                             try {
                                 api.triggerAIDecompilationInlineComments(id);

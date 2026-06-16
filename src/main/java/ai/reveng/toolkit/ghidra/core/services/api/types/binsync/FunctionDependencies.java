@@ -21,7 +21,7 @@ public record FunctionDependencies(
         Struct[] structs
 ) {
 
-    public static FunctionDependencies fromOpenAPI(List<FunctionInfoInputFuncDepsInner> deps) {
+    public static FunctionDependencies fromOpenAPI(List<FuncDepsInner> deps) {
         if (deps.isEmpty()) {
             return null;
         }

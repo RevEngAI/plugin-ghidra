@@ -14,14 +14,17 @@ import java.util.List;
  * endpoints; this record stitches them back together so callers can treat
  * polling as a single operation.
  *
- * `summary`, `predictedFunctionName`, `inlineCommentsStatus` and
- * `inlineComments` are only populated once `status` reaches `COMPLETED`.
+ * Summary/inline-comments fields are only populated once `status` reaches
+ * `COMPLETED`. The server rejects an inline-comments trigger until the
+ * summary has been generated, so consumers must gate that POST on
+ * `summaryStatus == COMPLETED`.
  */
 public record AIDecompilationStatus(
         DecompilationData.StatusEnum status,
         @Nullable String decompilation,
         @Nullable String summary,
         @Nullable String predictedFunctionName,
+        @Nullable WorkflowProgress.StatusEnum summaryStatus,
         @Nullable WorkflowProgress.StatusEnum inlineCommentsStatus,
         List<InlineCommentEntry> inlineComments
 ) {

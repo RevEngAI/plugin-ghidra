@@ -445,7 +445,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         try {
             // POST /v3/functions/{function_id}/ai-decompilation
-            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), true, null);
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), false, null);
             return Boolean.TRUE.equals(result.getStatus());
         } catch (ApiException e) {
             throw new RuntimeException("Failed to trigger AI decompilation", e);
@@ -459,9 +459,17 @@ public class TypedApiImplementation implements TypedApiInterface {
             DecompilationData data = functionsAiDecompilationApi.getAiDecompilation(functionID.value());
             String summary = null;
             String predictedFunctionName = null;
+            WorkflowProgress.StatusEnum summaryStatus = null;
             WorkflowProgress.StatusEnum inlineCommentsStatus = null;
             List<AIDecompilationStatus.InlineCommentEntry> inlineComments = List.of();
             if (data.getStatus() == DecompilationData.StatusEnum.COMPLETED) {
+                try {
+                    // GET /v3/functions/{function_id}/ai-decompilation/summary/status
+                    WorkflowProgress summaryProgress = functionsAiDecompilationApi.getAiDecompilationSummaryStatus(functionID.value());
+                    summaryStatus = summaryProgress.getStatus();
+                } catch (ApiException | RuntimeException e) {
+                    Msg.info(this, "Could not fetch summary status for function " + functionID.value() + ": " + e.getMessage());
+                }
                 try {
                     // GET /v3/functions/{function_id}/ai-decompilation/summary
                     SummaryData summaryData = functionsAiDecompilationApi.getAiDecompilationSummary(functionID.value());
@@ -473,9 +481,7 @@ public class TypedApiImplementation implements TypedApiInterface {
                     // GET /v3/functions/{function_id}/ai-decompilation/tokenised — carries the predicted name
                     TokenisedData tokenised = functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
                     predictedFunctionName = tokenised.getPredictedFunctionName();
-                } catch (ApiException | RuntimeException e) {
-                    // RuntimeException covers IllegalArgumentException thrown by the SDK's JSON validator
-                    // when the live response omits fields the generated model marks required (e.g. name_map).
+                } catch (ApiException e) {
                     Msg.info(this, "Could not fetch predicted function name for function " + functionID.value() + ": " + e.getMessage());
                 }
                 try {
@@ -506,6 +512,7 @@ public class TypedApiImplementation implements TypedApiInterface {
                     data.getDecompilation(),
                     summary,
                     predictedFunctionName,
+                    summaryStatus,
                     inlineCommentsStatus,
                     inlineComments);
         } catch (ApiException e) {
@@ -519,7 +526,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             // POST /v3/functions/{function_id}/ai-decompilation/inline-comments
             functionsAiDecompilationApi.regenerateAiDecompilationInlineComments(functionID.value());
         } catch (ApiException e) {
-            throw new RuntimeException("Failed to trigger AI decompilation inline comments", e);
+            throw new RuntimeException("Failed to trigger AI decompilation inline comments: " + describeApiException(e), e);
         }
     }
 
@@ -529,8 +536,14 @@ public class TypedApiImplementation implements TypedApiInterface {
             // POST /v3/functions/{function_id}/ai-decompilation/summary
             functionsAiDecompilationApi.regenerateAiDecompilationSummary(functionID.value());
         } catch (ApiException e) {
-            throw new RuntimeException("Failed to trigger AI decompilation summary", e);
+            throw new RuntimeException("Failed to trigger AI decompilation summary: " + describeApiException(e), e);
         }
+    }
+
+    private static String describeApiException(ApiException e) {
+        // The SDK's ApiException carries the HTTP status and response body separately from the message;
+        // surface both so callers logging only getMessage() can still diagnose server-side failures.
+        return "HTTP " + e.getCode() + " — " + (e.getResponseBody() != null ? e.getResponseBody() : e.getMessage());
     }
 
     /**
@@ -672,7 +685,7 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public List<BinarySearchResult> searchBinaries(String partialBinaryName, String modelName) throws ApiException {
-        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null).getData().getResults();
+        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null).getData().getResults();
     }
 
     @Override
