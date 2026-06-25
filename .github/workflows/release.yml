@@ -1,68 +1,94 @@
-name: release
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - main
 
-# Required for updating published release contents
 permissions:
   contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - ghidra: "12.1.2"
-            java: "21"
-          - ghidra: "12.1"
-            java: "21"
-          - ghidra: "12.0.4"
-            java: "21"
-          - ghidra: "12.0.3"
-            java: "21"
-          - ghidra: "12.0.2"
-            java: "21"
-          - ghidra: "12.0.1"
-            java: "21"
-          - ghidra: "12.0"
-            java: "21"
-          - ghidra: "11.4.3"
-            java: "21"
-          - ghidra: "11.4.2"
-            java: "21"
-          - ghidra: "11.4.1"
-            java: "21"
-          - ghidra: "11.4"
-            java: "21"
-
     steps:
+      - name: Generate a token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.REVENG_APP_ID }}
+          private-key: ${{ secrets.REVENG_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            plugin-ghidra
+
       - uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v3
         with:
-          java-version: ${{ matrix.java }}
-          distribution: temurin
+          fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
 
-      - name: Install Ghidra ${{ matrix.ghidra }}
-        uses: antoniovazquezblanco/setup-ghidra@v2.0.4
-        with:
-          auth_token: ${{ secrets.GITHUB_TOKEN }}
-          version: ${{ matrix.ghidra }}
+      - name: Calculate next version
+        id: version
+        run: |
+          set -euo pipefail
 
-      - name: Inject GH release info into plugin
-        run: echo ${{github.event.release.tag_name}} > src/main/resources/reai_ghidra_plugin_version.txt
+          LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            CURRENT_VERSION="0.0.0"
+            RANGE="HEAD"
+          else
+            CURRENT_VERSION="${LATEST_TAG#v}"
+            RANGE="${LATEST_TAG}..HEAD"
+          fi
 
-      - name: Build plugin via gradle
-        run: ./gradlew buildExtension
+          COMMITS=$(git log --pretty=format:"%s" "$RANGE")
+          if [ -z "$COMMITS" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Rename ZIP for upload
-        run: mv dist/*_${{matrix.ghidra}}_*.zip dist/ghidra_${{matrix.ghidra}}_plugin-ghidra.zip
+          MAJOR=0; MINOR=0; PATCH=0
+          CHANGELOG=""
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            CHANGELOG="${CHANGELOG}- ${msg}\n"
+            if echo "$msg" | grep -qE '!:|BREAKING CHANGE'; then
+              MAJOR=1
+            elif echo "$msg" | grep -qE '^feat(\(.*\))?:'; then
+              MINOR=1
+            elif echo "$msg" | grep -qE '^fix(\(.*\))?:'; then
+              PATCH=1
+            fi
+          done <<< "$COMMITS"
 
-      - name: Upload release ZIP
+          if [ $MAJOR -eq 0 ] && [ $MINOR -eq 0 ] && [ $PATCH -eq 0 ]; then
+            PATCH=1
+          fi
+
+          IFS='.' read -r CUR_MAJOR CUR_MINOR CUR_PATCH <<< "$CURRENT_VERSION"
+          if [ $MAJOR -eq 1 ]; then
+            NEXT_VERSION="$((CUR_MAJOR + 1)).0.0"
+          elif [ $MINOR -eq 1 ]; then
+            NEXT_VERSION="${CUR_MAJOR}.$((CUR_MINOR + 1)).0"
+          else
+            NEXT_VERSION="${CUR_MAJOR}.${CUR_MINOR}.$((CUR_PATCH + 1))"
+          fi
+
+          echo "version=${NEXT_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEXT_VERSION}" >> "$GITHUB_OUTPUT"
+          echo -e "$CHANGELOG" > /tmp/changelog.md
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and release
+        if: steps.version.outputs.skip != 'true'
         env:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-        run: gh release upload ${{github.event.release.tag_name}} dist/ghidra_${{matrix.ghidra}}_plugin-ghidra.zip
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file /tmp/changelog.md

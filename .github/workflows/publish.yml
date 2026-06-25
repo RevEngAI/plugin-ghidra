@@ -1,11 +1,15 @@
-name: build
+name: Publish
 
 on:
-  pull_request:
-    branches: [ "main" ]
+  release:
+    types: [published]
+
+# Required for updating published release contents
+permissions:
+  contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -33,15 +37,15 @@ jobs:
             java: "21"
           - ghidra: "11.4"
             java: "21"
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v3
         with:
           java-version: ${{ matrix.java }}
           distribution: temurin
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
 
       - name: Install Ghidra ${{ matrix.ghidra }}
         uses: antoniovazquezblanco/setup-ghidra@v2.0.4
@@ -49,29 +53,16 @@ jobs:
           auth_token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ matrix.ghidra }}
 
-      - name: Build
+      - name: Inject GH release info into plugin
+        run: echo ${{github.event.release.tag_name}} > src/main/resources/reai_ghidra_plugin_version.txt
+
+      - name: Build plugin via gradle
         run: ./gradlew buildExtension
 
-      - name: Check SLA timestamps
-        run: ls -l $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/*
+      - name: Rename ZIP for upload
+        run: mv dist/*_${{matrix.ghidra}}_*.zip dist/ghidra_${{matrix.ghidra}}_plugin-ghidra.zip
 
-      - name: Precompile slaspec
-        run: $GHIDRA_INSTALL_DIR/support/sleigh $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/x86-64.slaspec
-
-      - name: Run tests
-        run: xvfb-run ./gradlew test
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-ghidra-${{ matrix.ghidra }}
-          path: build/reports/tests/test/
-
-      - name: Publish test report
-        if: always()
-        uses: dorny/test-reporter@v1
-        with:
-          name: Tests (Ghidra ${{ matrix.ghidra }})
-          path: build/test-results/test/*.xml
-          reporter: java-junit
+      - name: Upload release ZIP
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        run: gh release upload ${{github.event.release.tag_name}} dist/ghidra_${{matrix.ghidra}}_plugin-ghidra.zip
