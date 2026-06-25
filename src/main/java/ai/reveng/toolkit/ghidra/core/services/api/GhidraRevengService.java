@@ -1080,7 +1080,7 @@ public class GhidraRevengService {
                 values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).toList()
         );
         // Create a map from FunctionID to FunctionInfo for easy lookup, only for completed signatures
-        Map<TypedApiInterface.FunctionID, @NotNull ai.reveng.model.FunctionInfo> signatureMap = dataTypesList.getItems().stream()
+        Map<TypedApiInterface.FunctionID, ai.reveng.model.@NotNull FunctionInfo> signatureMap = dataTypesList.getItems().stream()
                 // Only keep completed signatures
                 .filter(FunctionDataTypesListItem::getCompleted)
                 // Double check that there is a data type available
@@ -1090,7 +1090,7 @@ public class GhidraRevengService {
                         FunctionDataTypesListItem::getDataTypes
                 ));
 
-        Map<GhidraFunctionMatch, @NotNull ai.reveng.model.FunctionInfo> matchMap =  values.stream()
+        Map<GhidraFunctionMatch, ai.reveng.model.@NotNull FunctionInfo> matchMap =  values.stream()
                 .filter(match -> signatureMap.containsKey(match.functionMatch().nearest_neighbor_id()))
                 .collect(Collectors.toMap(
                 match -> match,
