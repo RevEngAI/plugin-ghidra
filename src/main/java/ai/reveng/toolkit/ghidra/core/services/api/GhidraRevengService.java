@@ -6,6 +6,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
@@ -714,7 +715,7 @@ public class GhidraRevengService {
     }
 
     /**
-     * Create a {@link FunctionDefinitionDataType} from a @{@link FunctionInfoOutput} in isolation
+     * Create a {@link FunctionDefinitionDataType} from a @{@link ai.reveng.model.FunctionInfo} in isolation
      *
      * All the required dependency types will be stored in the DataTypeManager that is associated with this
      * FunctionDefinitionDataType
@@ -722,7 +723,7 @@ public class GhidraRevengService {
      * @param functionDataTypeMessage The message containing the function signature, received from the API
      * @return Self-contained signature for the function
      */
-    public static Optional<FunctionDefinitionDataType> getFunctionSignature(FunctionInfoOutput functionDataTypeMessage) throws DataTypeDependencyException {
+    public static Optional<FunctionDefinitionDataType> getFunctionSignature(ai.reveng.model.FunctionInfo functionDataTypeMessage) throws DataTypeDependencyException {
 
         // Create Data Type Manager with all dependencies
         var d = FunctionDependencies.fromOpenAPI(functionDataTypeMessage.getFuncDeps());
@@ -1078,8 +1079,8 @@ public class GhidraRevengService {
         var dataTypesList = this.api.listFunctionDataTypesForFunctions(
                 values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).toList()
         );
-        // Create a map from FunctionID to FunctionInfoOutput for easy lookup, only for completed signatures
-        Map<TypedApiInterface.FunctionID, @NotNull FunctionInfoOutput> signatureMap = dataTypesList.getItems().stream()
+        // Create a map from FunctionID to FunctionInfo for easy lookup, only for completed signatures
+        Map<TypedApiInterface.FunctionID, @NotNull ai.reveng.model.FunctionInfo> signatureMap = dataTypesList.getItems().stream()
                 // Only keep completed signatures
                 .filter(FunctionDataTypesListItem::getCompleted)
                 // Double check that there is a data type available
@@ -1089,7 +1090,7 @@ public class GhidraRevengService {
                         FunctionDataTypesListItem::getDataTypes
                 ));
 
-        Map<GhidraFunctionMatch, @NotNull FunctionInfoOutput> matchMap =  values.stream()
+        Map<GhidraFunctionMatch, @NotNull ai.reveng.model.FunctionInfo> matchMap =  values.stream()
                 .filter(match -> signatureMap.containsKey(match.functionMatch().nearest_neighbor_id()))
                 .collect(Collectors.toMap(
                 match -> match,

@@ -3,7 +3,6 @@ package ai.reveng;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.model.FunctionDataTypesListItem;
-import ai.reveng.model.FunctionInfoOutput;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;

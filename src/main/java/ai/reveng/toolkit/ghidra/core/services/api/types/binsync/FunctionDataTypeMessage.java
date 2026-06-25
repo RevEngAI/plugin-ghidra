@@ -1,6 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
 
-import ai.reveng.model.FunctionInfoOutput;
+import ai.reveng.model.FunctionInfo;
 import org.json.JSONObject;
 
 /**
@@ -229,7 +229,7 @@ import org.json.JSONObject;
  *  This object isn't part of the BinSync types
  *  The func_deps members are either typedefs or structures
  *
- * @deprecated see {@link FunctionInfoOutput}
+ * @deprecated see {@link FunctionInfo}
  */
 @Deprecated
 public record FunctionDataTypeMessage(

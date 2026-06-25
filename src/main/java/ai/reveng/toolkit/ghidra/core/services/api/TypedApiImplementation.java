@@ -5,6 +5,7 @@ import ai.reveng.model.*;
 import ai.reveng.model.ConfigResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyCollection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
