@@ -1,0 +1,63 @@
+{
+  "features": {
+    "ai_decompilation_summary": {
+      "status": "yes"
+    },
+    "analyse_binary": {
+      "status": "yes"
+    },
+    "apply_existing_analysis": {
+      "status": "yes"
+    },
+    "binary_auto_analysis": {
+      "status": "yes"
+    },
+    "binary_upload": {
+      "status": "yes"
+    },
+    "check_analysis_status": {
+      "status": "yes"
+    },
+    "comment_sync": {
+      "status": "partial"
+    },
+    "data_types_sync": {
+      "status": "yes"
+    },
+    "fs_binary_filter": {
+      "status": "yes"
+    },
+    "fs_collection_filter": {
+      "status": "yes"
+    },
+    "fs_debug_filter": {
+      "status": "yes"
+    },
+    "fs_nns_filter": {
+      "status": "partial"
+    },
+    "fs_similarity_filter": {
+      "status": "yes"
+    },
+    "function_asm_diffing": {
+      "status": "yes"
+    },
+    "function_decompilation": {
+      "status": "yes"
+    },
+    "rename_from_similar_function": {
+      "status": "yes"
+    },
+    "search": {
+      "status": "yes"
+    },
+    "upload_function_names": {
+      "status": "yes"
+    },
+    "view_analysis_logs": {
+      "status": "yes"
+    }
+  },
+  "plugin": "ghidra",
+  "schema_version": 1
+}
