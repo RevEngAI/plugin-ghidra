@@ -236,4 +236,8 @@ public interface TypedApiInterface {
     default ConfigResponse getConfig() throws ApiException {
         throw new UnsupportedOperationException("getConfig not implemented yet");
     }
+
+    default User getMe() throws ApiException {
+        throw new UnsupportedOperationException("getMe not implemented yet");
+    }
 }

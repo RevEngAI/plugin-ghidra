@@ -28,6 +28,10 @@ EXTRA = {
     "comment_sync": {"status": "partial"},
     "search": {"status": "yes"},
     "ai_decompilation_summary": {"status": "yes"},
+    "disable_private_analyses": {
+        "status": "yes",
+        "note": "Disables private analyses creations for the Enthusiast Tier",
+    },
 }
 
 MANIFEST_PATH = Path(__file__).resolve().parent.parent / ".revengai" / "features.json"

@@ -24,6 +24,10 @@
     "data_types_sync": {
       "status": "yes"
     },
+    "disable_private_analyses": {
+      "note": "Disables private analyses creations for the Enthusiast Tier",
+      "status": "yes"
+    },
     "fs_binary_filter": {
       "status": "yes"
     },
