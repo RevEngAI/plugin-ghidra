@@ -63,6 +63,13 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
+    public AnalysisScope getScope() {
+        if (!options.has("binary_scope")) {
+            return null;
+        }
+        return AnalysisScope.valueOf(options.getString("binary_scope"));
+    }
+
     public static AnalysisOptionsBuilder forProgram(Program program) {
         return new AnalysisOptionsBuilder()
                 .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))

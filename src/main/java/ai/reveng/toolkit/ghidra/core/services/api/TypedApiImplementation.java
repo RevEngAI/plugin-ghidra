@@ -60,6 +60,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
     private final FunctionsDataTypesApi functionsDataTypesApi;
+    private final IamUsersApi iamUsersApi;
 
     // Cache for binary ID to analysis ID mappings
     @Deprecated
@@ -105,6 +106,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
         this.functionsDataTypesApi = new FunctionsDataTypesApi(apiClient);
         this.configApi = new ConfigApi(apiClient);
+        this.iamUsersApi = new IamUsersApi(apiClient);
 
         this.baseUrl = baseUrl + "/";
         this.httpClient = HttpClient.newBuilder()
@@ -746,6 +748,15 @@ public class TypedApiImplementation implements TypedApiInterface {
     public ConfigResponse getConfig() {
         try {
             return this.configApi.getConfig().getData();
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public User getMe() {
+        try {
+            return this.iamUsersApi.getMe();
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }

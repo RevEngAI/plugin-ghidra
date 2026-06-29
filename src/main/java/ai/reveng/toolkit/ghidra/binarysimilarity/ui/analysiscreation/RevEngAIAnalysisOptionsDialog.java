@@ -1,6 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation;
 
 import ai.reveng.model.ConfigResponse;
+import ai.reveng.model.User;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
@@ -27,6 +28,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private final GhidraRevengService service;
     private JRadioButton privateScope;
     private JRadioButton publicScope;
+    private JPanel privateScopePanel;
     private JTextField tagsTextBox;
     private JCheckBox scrapeExternalTagsBox;
     private JCheckBox identifyCapabilitiesCheckBox;
@@ -51,6 +53,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         setPreferredSize(320, 420);
 
         fetchConfigAsync();
+        fetchUserTierAsync();
     }
 
     private void buildInterface() {
@@ -96,7 +99,12 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         var group = new ButtonGroup();
         group.add(privateScope);
         group.add(publicScope);
-        scopePanel.add(privateScope);
+
+        privateScopePanel = new JPanel();
+        privateScopePanel.setLayout(new BoxLayout(privateScopePanel, BoxLayout.X_AXIS));
+        privateScopePanel.add(privateScope);
+
+        scopePanel.add(privateScopePanel);
         scopePanel.add(publicScope);
 
         workPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
@@ -198,10 +206,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         options.advancedAnalysis(advancedAnalysisCheckBox.isSelected());
         options.dynamicExecution(dynamicExecutionCheckBox.isSelected());
 
-        if (publicScope.isEnabled()) {
-            options.scope(AnalysisScope.PUBLIC);
-        } else {
+        if (privateScope.isSelected()) {
             options.scope(AnalysisScope.PRIVATE);
+        } else {
+            options.scope(AnalysisScope.PUBLIC);
         }
 
         options.addTags(List.of(tagsTextBox.getText().split(",")));
@@ -232,6 +240,34 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         }).thenAccept(config -> {
             Swing.runNow(() -> handleConfigResponse(config));
         });
+    }
+
+    private void fetchUserTierAsync() {
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return service.getApi().getMe();
+            } catch (Exception e) {
+                Msg.warn(this, "Failed to fetch user tier: " + e.getMessage());
+                return null;
+            }
+        }).thenAccept(user -> {
+            Swing.runNow(() -> handleUserResponse(user));
+        });
+    }
+
+    private void handleUserResponse(@Nullable User user) {
+        if (user == null || user.getTier() != User.TierEnum.ENTHUSIAST) {
+            return;
+        }
+
+        String message = "<html>Private analyses are not available on the Enthusiast tier.<br>"
+                + "Upgrade your plan to create private analyses.</html>";
+
+        privateScope.setSelected(false);
+        publicScope.setSelected(true);
+        privateScope.setEnabled(false);
+        privateScope.setToolTipText(message);
+        privateScopePanel.setToolTipText(message);
     }
 
     private void handleConfigResponse(@Nullable ConfigResponse config) {
