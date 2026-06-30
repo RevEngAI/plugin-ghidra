@@ -17,7 +17,6 @@ import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
 import javax.swing.*;
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -213,13 +212,27 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         }
 
         @Override
-        public FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
+        public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) throws ApiException {
             functionMatchingCallCount++;
+            var response = new StartMatchingOutputBody();
+            response.setStatus(StartMatchingOutputBody.StatusEnum.COMPLETED);
+            return response;
+        }
 
-            var response = new FunctionMatchingResponse();
+        @Override
+        public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) throws ApiException {
+            var response = new GetMatchesStatusOutputBody();
+            response.setStatus(GetMatchesStatusOutputBody.StatusEnum.COMPLETED);
+            return response;
+        }
+
+        @Override
+        public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
+            var response = new GetMatchesOutputBody();
+            response.setStatus(GetMatchesOutputBody.StatusEnum.COMPLETED);
 
             // Get the function ID from the request
-            Long originFunctionId = request.getFunctionIds().get(0);
+            Long originFunctionId = functionIds.get(0);
 
             var functionMatch = new ai.reveng.model.FunctionMatch();
             functionMatch.setFunctionId(originFunctionId);
@@ -232,8 +245,8 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
             match1.setBinaryName("library.so");
             match1.setSha256Hash("def456");
             match1.setDebug(true);
-            match1.setSimilarity(BigDecimal.valueOf(0.95));
-            match1.setConfidence(BigDecimal.valueOf(0.90));
+            match1.setSimilarity(0.95);
+            match1.setConfidence(0.90);
 
             var match2 = new MatchedFunction();
             match2.setFunctionId(101L);
@@ -242,8 +255,8 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
             match2.setBinaryName("other_lib.so");
             match2.setSha256Hash("ghi789");
             match2.setDebug(false);
-            match2.setSimilarity(BigDecimal.valueOf(0.85));
-            match2.setConfidence(BigDecimal.valueOf(0.80));
+            match2.setSimilarity(0.85);
+            match2.setConfidence(0.80);
 
             functionMatch.setMatchedFunctions(List.of(match1, match2));
             response.setMatches(List.of(functionMatch));

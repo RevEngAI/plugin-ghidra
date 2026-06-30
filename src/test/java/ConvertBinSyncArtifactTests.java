@@ -1,5 +1,5 @@
 import ai.reveng.model.FunctionDataTypes;
-import ai.reveng.model.FunctionInfo;
+import ai.reveng.model.V2FunctionInfo;
 import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ComputeTypeInfoTask;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -75,7 +75,7 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
     public void testComplexGhidraSignatureGeneration() throws DataTypeDependencyException, IOException {
         var mockResponse = getMockResponseFromFile("confirmmatch_fdupes_77846700.json");
 
-        var funcInfo = FunctionInfo.fromJson(mockResponse.getJsonData().toString());
+        var funcInfo = V2FunctionInfo.fromJson(mockResponse.getJsonData().toString());
         var signature = GhidraRevengService.getFunctionSignature(funcInfo).orElseThrow();
 
         assert signature.getName().equals("confirmmatch");
@@ -88,7 +88,7 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
         var mockResponse = getMockResponseFromFile("summarizematches_fdupes.json");
 
         FunctionDataTypeStatus functionDataTypeStatus = FunctionDataTypeStatus.fromJson(mockResponse.getJsonData());
-        var funcInfo = FunctionInfo.fromJson(mockResponse.getJsonData().toString());
+        var funcInfo = V2FunctionInfo.fromJson(mockResponse.getJsonData().toString());
         var signature = GhidraRevengService.getFunctionSignature(funcInfo).orElseThrow();
 
         assert signature.getName().equals("summarizematches");
@@ -100,7 +100,7 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
         var mockResponse = getMockResponseFromFile("md5_process_fdupes.json");
 
         FunctionDataTypeStatus functionDataTypeStatus = FunctionDataTypeStatus.fromJson(mockResponse.getJsonData());
-        var funcInfo = FunctionInfo.fromJson(mockResponse.getJsonData().toString());
+        var funcInfo = V2FunctionInfo.fromJson(mockResponse.getJsonData().toString());
         var signature = GhidraRevengService.getFunctionSignature(funcInfo).orElseThrow();
 
         var dtm = signature.getDataTypeManager();
@@ -121,7 +121,7 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
     public void testNoLoopForBrokenDeps() throws DataTypeDependencyException, IOException {
         var mockResponse = getMockResponseFromFile("errormsg.json");
 
-        var funcInfo = FunctionInfo.fromJson(mockResponse.getJsonData().toString());
+        var funcInfo = V2FunctionInfo.fromJson(mockResponse.getJsonData().toString());
         var signature = GhidraRevengService.getFunctionSignature(funcInfo).orElseThrow();
 
         assert signature.getName().equals("md5_process");
@@ -137,7 +137,7 @@ public class ConvertBinSyncArtifactTests extends AbstractRevEngIntegrationTest {
     public void testFunctionPointerArgument() throws DataTypeDependencyException, IOException {
         var mockResponse = getMockResponseFromFile("complex_pointer.json");
         var signature = GhidraRevengService.getFunctionSignature(
-                FunctionInfo.fromJson(mockResponse.getJsonData().toString())
+                V2FunctionInfo.fromJson(mockResponse.getJsonData().toString())
         );
     }
 

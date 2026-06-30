@@ -35,8 +35,8 @@ public record FunctionMatch(
                 matchedFunction.getBinaryName(),
                 new TypedApiInterface.BinaryHash(matchedFunction.getSha256Hash()),
                 matchedFunction.getDebug(),
-                matchedFunction.getSimilarity(),
-                matchedFunction.getConfidence()
+                matchedFunction.getSimilarity() == null ? null : BigDecimal.valueOf(matchedFunction.getSimilarity()),
+                matchedFunction.getConfidence() == null ? null : BigDecimal.valueOf(matchedFunction.getConfidence())
         );
     }
 

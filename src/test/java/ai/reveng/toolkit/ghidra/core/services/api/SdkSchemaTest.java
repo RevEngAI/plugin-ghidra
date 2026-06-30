@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 
 public class SdkSchemaTest {
 
-    private static final int[] PINNED = {3, 96, 2};
+    private static final int[] PINNED = {3, 100, 0};
 
     @Test
     public void installedSdkIsAtLeastPinned() {
@@ -34,13 +34,14 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries", "searchCollections"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
-                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo"});
+                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo",
+                "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
         apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
-                "analysisFunctionMatching", "batchFunctionMatching", "autoUnstrip", "aiUnstrip",
-                "getFunctionBlocks", "getFunctionDetails"});
+                "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
+                "autoUnstrip", "aiUnstrip", "getFunctionBlocks", "getFunctionDetails"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
-                "renameFunctionId", "batchRenameFunction"});
+                "renameFunctionId", "batchRenameFunctions"});
         apis.put("ai.reveng.api.FunctionsDataTypesApi", new String[]{
                 "listFunctionDataTypesForAnalysis", "listFunctionDataTypesForFunctions"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
@@ -72,10 +73,18 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.AnalysisCreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
         requireMethods(missing, "ai.reveng.model.Tag", "getName");
-        requireMethods(missing, "ai.reveng.model.AnalysisFunctionMatchingRequest",
-                "getResultsPerFunction", "getFilters");
-        requireMethods(missing, "ai.reveng.model.FunctionMatchingFilters",
-                "getCollectionIds", "getBinaryIds");
+        requireMethods(missing, "ai.reveng.model.StartMatchingForAnalysisInputBody",
+                "getMinSimilarity", "getResultsPerFunction", "getFilters");
+        requireMethods(missing, "ai.reveng.model.StartMatchingForFunctionsInputBody",
+                "getFunctionIds", "getResultsPerFunction", "getFilters", "getMinSimilarity");
+        requireMethods(missing, "ai.reveng.model.MatchFilters",
+                "getCollectionIds", "getBinaryIds", "getDebugTypes");
+        requireMethods(missing, "ai.reveng.model.GetMatchesOutputBody", "getMatches", "getStatus");
+        requireMethods(missing, "ai.reveng.model.MatchedFunction",
+                "getFunctionId", "getFunctionName", "getSimilarity", "getConfidence");
+        requireMethods(missing, "ai.reveng.model.BatchRenameInputBody", "setFunctions");
+        requireMethods(missing, "ai.reveng.model.BatchRenameItem",
+                "setFunctionId", "setNewName", "setNewMangledName");
         requireMethods(missing, "ai.reveng.model.FunctionRename", "getNewName", "getNewMangledName");
 
         assertTrue("SDK model surface drifted: " + missing, missing.isEmpty());

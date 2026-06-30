@@ -217,15 +217,31 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getAnalysisBasicInfo not implemented yet");
     }
 
-    default FunctionMatchingResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
-        throw new UnsupportedOperationException("analysisFunctionMatching not implemented yet");
+    default StartMatchingOutputBody startAnalysisFunctionMatching(AnalysisID analysisID, StartMatchingForAnalysisInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("startAnalysisFunctionMatching not implemented yet");
     }
 
-    default FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
-        throw new UnsupportedOperationException("functionFunctionMatching not implemented yet");
+    default GetMatchesStatusOutputBody getAnalysisFunctionMatchingStatus(AnalysisID analysisID) throws ApiException {
+        throw new UnsupportedOperationException("getAnalysisFunctionMatchingStatus not implemented yet");
     }
 
-    default void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
+    default GetMatchesOutputBody getAnalysisFunctionMatches(AnalysisID analysisID) throws ApiException {
+        throw new UnsupportedOperationException("getAnalysisFunctionMatches not implemented yet");
+    }
+
+    default StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("startFunctionsMatching not implemented yet");
+    }
+
+    default GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) throws ApiException {
+        throw new UnsupportedOperationException("getFunctionsMatchingStatus not implemented yet");
+    }
+
+    default GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
+        throw new UnsupportedOperationException("getFunctionsMatches not implemented yet");
+    }
+
+    default void batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
         throw new UnsupportedOperationException("batchRenameFunctions not implemented yet");
     }
 

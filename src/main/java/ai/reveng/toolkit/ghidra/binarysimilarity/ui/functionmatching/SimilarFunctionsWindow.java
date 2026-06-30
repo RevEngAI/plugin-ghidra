@@ -1,7 +1,8 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
-import ai.reveng.model.FunctionMatchingRequest;
-import ai.reveng.model.FunctionMatchingResponse;
+import ai.reveng.model.GetMatchesOutputBody;
+import ai.reveng.model.GetMatchesStatusOutputBody;
+import ai.reveng.model.StartMatchingForFunctionsInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -442,36 +443,42 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
             try {
                 var service = tool.getService(GhidraRevengService.class);
 
-                // Get basic analysis info for model ID
-                var analysisBasicInfo = service.getBasicDetailsForAnalysis(program.analysisID());
+                var functionIds = List.of(functionWithID.functionID().value());
 
-                var request = new FunctionMatchingRequest();
-                request.setMinSimilarity(BigDecimal.valueOf(70)); // Default threshold
-                request.setResultsPerFunction(25);
-                request.setModelId(analysisBasicInfo.getModelId());
-
-                var functionIds = new ArrayList<Long>();
-                functionIds.add(functionWithID.functionID().value());
+                var request = new StartMatchingForFunctionsInputBody();
                 request.setFunctionIds(functionIds);
+                request.setMinSimilarity(70.0); // Default threshold
+                request.setResultsPerFunction(25L);
 
                 monitor.setMessage("Fetching matches from RevEng.AI...");
-                FunctionMatchingResponse response;
+                service.startFunctionsMatching(request);
+
                 while (true) {
                     if (monitor.isCancelled()) {
                         return;
                     }
-                    response = service.getFunctionMatchingForFunction(request);
-                    if (!"IN_PROGRESS".equals(response.getStatus())) {
+                    GetMatchesStatusOutputBody statusResponse = service.getFunctionsMatchingStatus(functionIds);
+                    String status = statusResponse.getStatus() == null ? null : statusResponse.getStatus().getValue();
+                    if ("COMPLETED".equals(status)) {
                         break;
-                    } else {
-                        Thread.sleep(100);
                     }
+                    if ("FAILED".equals(status)) {
+                        String errorMsg = AbstractFunctionMatchingDialog.errorTextFrom(statusResponse.getMessages());
+                        throw new RuntimeException(errorMsg == null || errorMsg.isEmpty()
+                                ? "Function matching failed" : errorMsg);
+                    }
+                    Thread.sleep(100);
                 }
+
+                GetMatchesOutputBody response = service.getFunctionsMatches(functionIds);
 
                 // Process results
                 List<GhidraFunctionMatch> matches = new ArrayList<>();
                 if (response.getMatches() != null) {
                     for (var matchResult : response.getMatches()) {
+                        if (matchResult.getMatchedFunctions() == null) {
+                            continue;
+                        }
                         for (var matched : matchResult.getMatchedFunctions()) {
                             var funcId = new TypedApiInterface.FunctionID(matchResult.getFunctionId());
                             FunctionMatch fm = FunctionMatch.fromMatchedFunctionAPIType(matched, funcId);

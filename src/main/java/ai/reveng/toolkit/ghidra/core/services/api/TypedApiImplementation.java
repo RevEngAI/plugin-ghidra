@@ -418,12 +418,25 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 
+    /// GET /v2/functions/data_types carries the function ids as a query parameter. A whole-binary match
+    /// resolves type info for every matched function at once, so the id list overflows the request URI
+    /// (HTTP 414) unless it is chunked.
+    private static final int DATA_TYPES_BATCH_SIZE = 50;
+
     @Override
     public FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
         try {
-            var r = functionsDataTypesApi.listFunctionDataTypesForFunctions(functionIDs.stream().map(FunctionID::value).map(Long::intValue).toList());
-            var data = r.getData();
-            return data;
+            List<Integer> ids = functionIDs.stream().map(FunctionID::value).map(Long::intValue).toList();
+            var merged = new FunctionDataTypesList();
+            merged.setItems(new ArrayList<>());
+            for (int i = 0; i < ids.size(); i += DATA_TYPES_BATCH_SIZE) {
+                var batch = ids.subList(i, Math.min(i + DATA_TYPES_BATCH_SIZE, ids.size()));
+                var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(batch).getData();
+                if (data != null && data.getItems() != null) {
+                    merged.getItems().addAll(data.getItems());
+                }
+            }
+            return merged;
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
@@ -711,18 +724,38 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public FunctionMatchingResponse analysisFunctionMatching(AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
-        return this.functionsCoreApi.analysisFunctionMatching(analysisID.id(), request);
+    public StartMatchingOutputBody startAnalysisFunctionMatching(AnalysisID analysisID, StartMatchingForAnalysisInputBody request) throws ApiException {
+        return this.analysisCoreApi.startAnalysisFunctionMatching((long) analysisID.id(), request);
     }
 
     @Override
-    public FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) throws ApiException {
-        return this.functionsCoreApi.batchFunctionMatching(request);
+    public GetMatchesStatusOutputBody getAnalysisFunctionMatchingStatus(AnalysisID analysisID) throws ApiException {
+        return this.analysisCoreApi.getAnalysisFunctionMatchingStatus((long) analysisID.id());
     }
 
     @Override
-    public void batchRenameFunctions(FunctionsListRename functionsList) throws ApiException {
-        this.functionsRenamingHistoryApi.batchRenameFunction(functionsList);
+    public GetMatchesOutputBody getAnalysisFunctionMatches(AnalysisID analysisID) throws ApiException {
+        return this.analysisCoreApi.getAnalysisFunctionMatches((long) analysisID.id());
+    }
+
+    @Override
+    public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) throws ApiException {
+        return this.functionsCoreApi.startFunctionsMatching(request);
+    }
+
+    @Override
+    public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) throws ApiException {
+        return this.functionsCoreApi.getFunctionsMatchingStatus(functionIds);
+    }
+
+    @Override
+    public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
+        return this.functionsCoreApi.getFunctionsMatches(functionIds);
+    }
+
+    @Override
+    public void batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
+        this.functionsRenamingHistoryApi.batchRenameFunctions(request);
     }
 
     @Override
