@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
@@ -285,7 +286,7 @@ public class AssemblyDiffPanel extends JPanel {
             try {
                 localAssembly = revengService.getApi().getAssembly(localFunctionId);
             } catch (Exception e) {
-                localError = "Failed to fetch assembly: " + e.getMessage();
+                localError = assemblyErrorMessage(e);
                 Msg.error(this, "Failed to fetch local function assembly", e);
             }
 
@@ -293,7 +294,7 @@ public class AssemblyDiffPanel extends JPanel {
             try {
                 matchedAssembly = revengService.getApi().getAssembly(matchedFunctionId);
             } catch (Exception e) {
-                matchedError = "Failed to fetch assembly: " + e.getMessage();
+                matchedError = assemblyErrorMessage(e);
                 Msg.error(this, "Failed to fetch matched function assembly", e);
             }
 
@@ -307,18 +308,27 @@ public class AssemblyDiffPanel extends JPanel {
 
         @Override
         protected void done() {
-            if (localError != null) {
-                localAssemblyTextArea.setText(localError);
-                return;
-            }
-            if (matchedError != null) {
-                matchedAssemblyTextArea.setText(matchedError);
-                return;
-            }
-
+            // When both sides loaded, show the diff. Otherwise render each side independently so a
+            // failure (e.g. a symbol-only match with no stored disassembly) on one side doesn't blank
+            // out the other.
             if (localAssembly != null && matchedAssembly != null) {
                 displayAssemblyWithDiff(localAssembly, matchedAssembly, patch);
+                return;
             }
+            localAssemblyTextArea.setText(localError != null ? localError
+                    : localAssembly != null ? String.join("\n", localAssembly) : "");
+            matchedAssemblyTextArea.setText(matchedError != null ? matchedError
+                    : matchedAssembly != null ? String.join("\n", matchedAssembly) : "");
         }
+    }
+
+    /// A 404 here just means the function has no stored disassembly (common for symbol-only matches),
+    /// so surface a short note rather than the raw API error; the full error is still logged.
+    private static String assemblyErrorMessage(Exception e) {
+        Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+        if (cause instanceof ApiException ae && ae.getCode() == 404) {
+            return "Disassembly is not available for this function.";
+        }
+        return "Failed to fetch disassembly: " + cause.getMessage();
     }
 }

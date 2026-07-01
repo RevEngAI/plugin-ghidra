@@ -723,7 +723,7 @@ public class GhidraRevengService {
      * @param functionDataTypeMessage The message containing the function signature, received from the API
      * @return Self-contained signature for the function
      */
-    public static Optional<FunctionDefinitionDataType> getFunctionSignature(ai.reveng.model.FunctionInfo functionDataTypeMessage) throws DataTypeDependencyException {
+    public static Optional<FunctionDefinitionDataType> getFunctionSignature(ai.reveng.model.V2FunctionInfo functionDataTypeMessage) throws DataTypeDependencyException {
 
         // Create Data Type Manager with all dependencies
         var d = FunctionDependencies.fromOpenAPI(functionDataTypeMessage.getFuncDeps());
@@ -1075,26 +1075,30 @@ public class GhidraRevengService {
     public Map<GhidraFunctionMatch, FunctionDefinitionDataType> getSignatures(java.util.Collection<GhidraFunctionMatch> values) {
 
 
-        // Get all data type info for the neighbour functions
+        // Get all data type info for the neighbour functions. Several local functions can match the same
+        // neighbour, so dedupe the ids before fetching to avoid requesting (and getting back) duplicates.
         var dataTypesList = this.api.listFunctionDataTypesForFunctions(
-                values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).toList()
+                values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).distinct().toList()
         );
-        // Create a map from FunctionID to FunctionInfo for easy lookup, only for completed signatures
-        Map<TypedApiInterface.FunctionID, ai.reveng.model.@NotNull FunctionInfo> signatureMap = dataTypesList.getItems().stream()
+        // Create a map from FunctionID to FunctionInfo for easy lookup, only for completed signatures.
+        // The same neighbour can still appear more than once in the response, so keep the first.
+        Map<TypedApiInterface.FunctionID, ai.reveng.model.@NotNull V2FunctionInfo> signatureMap = dataTypesList.getItems().stream()
                 // Only keep completed signatures
                 .filter(FunctionDataTypesListItem::getCompleted)
                 // Double check that there is a data type available
                 .filter(functionDataTypesListItem -> functionDataTypesListItem.getDataTypes() != null)
                 .collect(Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
-                        FunctionDataTypesListItem::getDataTypes
+                        FunctionDataTypesListItem::getDataTypes,
+                        (existing, replacement) -> existing
                 ));
 
-        Map<GhidraFunctionMatch, ai.reveng.model.@NotNull FunctionInfo> matchMap =  values.stream()
+        Map<GhidraFunctionMatch, ai.reveng.model.@NotNull V2FunctionInfo> matchMap =  values.stream()
                 .filter(match -> signatureMap.containsKey(match.functionMatch().nearest_neighbor_id()))
                 .collect(Collectors.toMap(
                 match -> match,
-                match -> signatureMap.get(match.functionMatch().nearest_neighbor_id())
+                match -> signatureMap.get(match.functionMatch().nearest_neighbor_id()),
+                (existing, replacement) -> existing
         ));
 
         // Now parse all signatures
@@ -1165,12 +1169,32 @@ public class GhidraRevengService {
         return api.getAnalysisBasicInfo(analysisID);
     }
 
-    public FunctionMatchingResponse getFunctionMatchingForAnalysis(TypedApiInterface.AnalysisID analysisID, AnalysisFunctionMatchingRequest request) throws ApiException {
-        return api.analysisFunctionMatching(analysisID, request);
+    /// Whole-binary matching goes through the analysis-level endpoint, which takes the analysis id in the
+    /// path and ships no function ids. That keeps the request body tiny and the GET query strings empty, so
+    /// it sidesteps the WAF body-size (~8 KB) and query-string (~2 KB) limits that the /v3/functions/matches
+    /// endpoints hit once a binary has enough functions to enumerate (HTTP 403 / 414).
+    public StartMatchingOutputBody startAnalysisFunctionMatching(TypedApiInterface.AnalysisID analysisID, StartMatchingForAnalysisInputBody request) throws ApiException {
+        return api.startAnalysisFunctionMatching(analysisID, request);
     }
 
-    public FunctionMatchingResponse getFunctionMatchingForFunction(FunctionMatchingRequest request) throws ApiException {
-        return api.functionFunctionMatching(request);
+    public GetMatchesStatusOutputBody getAnalysisFunctionMatchingStatus(TypedApiInterface.AnalysisID analysisID) throws ApiException {
+        return api.getAnalysisFunctionMatchingStatus(analysisID);
+    }
+
+    public GetMatchesOutputBody getAnalysisFunctionMatches(TypedApiInterface.AnalysisID analysisID) throws ApiException {
+        return api.getAnalysisFunctionMatches(analysisID);
+    }
+
+    public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) throws ApiException {
+        return api.startFunctionsMatching(request);
+    }
+
+    public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) throws ApiException {
+        return api.getFunctionsMatchingStatus(functionIds);
+    }
+
+    public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
+        return api.getFunctionsMatches(functionIds);
     }
 
     public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
@@ -1189,20 +1213,19 @@ public class GhidraRevengService {
     }
 
     public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
-        var matches = functionsList.stream()
+        var items = functionsList.stream()
                 .map(result -> {
-                    var func = new FunctionRenameMap();
-                    func.setFunctionId(result.origin_function_id().value());
-                    func.setNewName(result.nearest_neighbor_function_name());
-                    func.setNewMangledName(result.nearest_neighbor_mangled_function_name());
-                    return func;
+                    var item = new BatchRenameItem();
+                    item.setFunctionId(result.origin_function_id().value());
+                    item.setNewName(result.nearest_neighbor_function_name());
+                    item.setNewMangledName(result.nearest_neighbor_mangled_function_name());
+                    return item;
                 })
                 .toList();
 
-        var functionsListRename = new FunctionsListRename();
-        functionsListRename.setFunctions(matches);
-
-        api.batchRenameFunctions(functionsListRename);
+        var request = new BatchRenameInputBody();
+        request.setFunctions(items);
+        api.batchRenameFunctions(request);
     }
 
 

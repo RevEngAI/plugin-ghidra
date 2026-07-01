@@ -22,6 +22,7 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -44,7 +45,8 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected JTextArea errorArea;
     protected JScrollPane errorScrollPane;
     protected final TaskMonitorComponent taskMonitorComponent;
-    protected Timer pollTimer;
+    protected volatile boolean matchingCancelled;
+    protected Thread matchingThread;
     protected JPanel renameButtonsPanel;
 
     // Assembly comparison panel
@@ -52,7 +54,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     // Data
     protected Basic analysisBasicInfo;
-    protected FunctionMatchingResponse functionMatchingResponse;
     protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
     protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 
@@ -92,77 +93,171 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected void startFunctionMatching() {
-        // Show initial status
+        // Show initial status. All network work runs on a background thread so the UI stays responsive;
+        // the bar is indeterminate (animated) until/unless the server reports step counters.
         statusLabel.setText("Starting function matching...");
         taskMonitorComponent.initialize(100);
+        taskMonitorComponent.setIndeterminate(true);
 
-        // Start polling timer
-        pollTimer = new Timer(POLL_INTERVAL_MS, e -> pollFunctionMatchingStatus());
-        pollTimer.start();
-
-        // Make initial call
-        pollFunctionMatchingStatus();
+        matchingCancelled = false;
+        matchingThread = new Thread(this::runMatchingLoop, "RevEngAI function matching");
+        matchingThread.setDaemon(true);
+        matchingThread.start();
     }
 
-    protected abstract void pollFunctionMatchingStatus();
+    /// Normalised view of the v3 matching progress, shared by the start and status responses
+    protected record MatchingProgress(String status, String step, Long stepIndex, Long stepsTotal, String errorMessage) {}
 
-    protected void processFunctionMatchingResults(FunctionMatchingResponse response) {
-        functionMatchResults.clear();
+    /// Kick off matching (POST) and return its initial progress
+    protected abstract MatchingProgress startMatching() throws ai.reveng.invoker.ApiException;
+
+    /// Poll the matching status (GET) and return the current progress
+    protected abstract MatchingProgress pollMatchingStatus() throws ai.reveng.invoker.ApiException;
+
+    /// Fetch the completed matches (GET)
+    protected abstract List<MatchedFunctionResult> fetchMatches() throws ai.reveng.invoker.ApiException;
+
+    private void runMatchingLoop() {
+        try {
+            MatchingProgress progress = startMatching();
+            while (!matchingCancelled) {
+                final MatchingProgress current = progress;
+                SwingUtilities.invokeLater(() -> updateProgressUI(current));
+
+                if ("FAILED".equals(progress.status())) {
+                    String errorMsg = progress.errorMessage() != null && !progress.errorMessage().isEmpty()
+                            ? progress.errorMessage()
+                            : "Function matching returned an error status";
+                    SwingUtilities.invokeLater(() -> {
+                        taskMonitorComponent.setVisible(false);
+                        handleError(errorMsg);
+                    });
+                    return;
+                }
+                if ("COMPLETED".equals(progress.status())) {
+                    break;
+                }
+                Thread.sleep(POLL_INTERVAL_MS);
+                if (matchingCancelled) return;
+                progress = pollMatchingStatus();
+            }
+            if (matchingCancelled) return;
+
+            // Resolving type signatures fires many requests, so keep it off the EDT too
+            SwingUtilities.invokeLater(() -> {
+                taskMonitorComponent.setIndeterminate(true);
+                taskMonitorComponent.setMessage("Loading type information...");
+                statusLabel.setText("Loading type information...");
+            });
+            var matches = fetchMatches();
+            if (matchingCancelled) return;
+            processFunctionMatchingResults(matches);
+            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
+        } catch (InterruptedException e) {
+            // matching was cancelled, nothing to report
+        } catch (Exception e) {
+            SwingUtilities.invokeLater(() -> {
+                Msg.error(this, "Failed to poll function matching status: " + e.getMessage(), e);
+                handleError("Failed to poll function matching status: " + e.getMessage());
+                taskMonitorComponent.setVisible(false);
+            });
+        }
+    }
+
+    /// Joins the error-level {@link ProgressMessage}s of a v3 matching response into a single string
+    protected static String errorTextFrom(List<ProgressMessage> messages) {
+        if (messages == null) {
+            return null;
+        }
+        return messages.stream()
+                .filter(m -> m.getLevel() == ProgressMessage.LevelEnum.ERROR)
+                .map(ProgressMessage::getText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n"));
+    }
+
+    /// A matched function result that still needs to be associated with a local Ghidra function
+    protected record MatchedFunctionResult(TypedApiInterface.FunctionID originFunctionID, MatchedFunction matchedFunction) {}
+
+    /// Flattens a v3 {@link GetMatchesOutputBody} matches list into individual matched function results
+    protected static List<MatchedFunctionResult> flattenMatches(List<ai.reveng.model.FunctionMatch> matches) {
+        List<MatchedFunctionResult> results = new ArrayList<>();
+        if (matches == null) {
+            return results;
+        }
+        for (var matchResult : matches) {
+            var funcId = new TypedApiInterface.FunctionID(matchResult.getFunctionId());
+            if (matchResult.getMatchedFunctions() == null) {
+                continue;
+            }
+            for (var matched : matchResult.getMatchedFunctions()) {
+                results.add(new MatchedFunctionResult(funcId, matched));
+            }
+        }
+        return results;
+    }
+
+    /// Builds the result rows (this resolves type signatures, which is the expensive part) and is expected
+    /// to run off the EDT. Only the final swap into {@link #functionMatchResults} and the table refresh
+    /// touch Swing, and those are marshalled back onto the EDT.
+    protected void processFunctionMatchingResults(List<MatchedFunctionResult> response) {
         List<GhidraFunctionMatch> matches = new ArrayList<>();
         final BiMap<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
 
-        response.getMatches().forEach(matchResult -> {
+        response.forEach(matchResult -> {
             // Retrieve the local function name
-            var funcId = new TypedApiInterface.FunctionID(matchResult.getFunctionId());
+            var funcId = matchResult.originFunctionID();
             Function localFunction = functionMap.get(funcId);
             if (localFunction == null) {
                 // If we can't find the local function, skip this match (boundaries do not match the remote ones)
                 return;
             }
-            // Process each matched function in this result
-            matchResult.getMatchedFunctions().forEach(match -> {
-                // Create function match result using the abstract method
-                FunctionMatch result = FunctionMatch.fromMatchedFunctionAPIType(match, funcId);
-                GhidraFunctionMatch ghidraResult = new GhidraFunctionMatch(localFunction, result);
-//                FunctionMatch result = createFunctionMatchResult(localFunction, match, funcId);
-                matches.add(ghidraResult);
-            });
+            FunctionMatch result = FunctionMatch.fromMatchedFunctionAPIType(matchResult.matchedFunction(), funcId);
+            matches.add(new GhidraFunctionMatch(localFunction, result));
         });
 
-        // Get the type info for all matches
+        // Get the type info for all matches (fires the data-type requests; expensive)
         var ghidraResultsWithSignatures = revengService.getSignatures(matches);
 
         // For all matches we got, create a GhidraFunctionMatchWithSignature object (signature can be null!)
+        List<GhidraFunctionMatchWithSignature> built = new ArrayList<>();
         for (GhidraFunctionMatch match : matches) {
             var sig = ghidraResultsWithSignatures.get(match);
-            functionMatchResults.add(new GhidraFunctionMatchWithSignature(match.function(), match.functionMatch(), sig));
+            built.add(new GhidraFunctionMatchWithSignature(match.function(), match.functionMatch(), sig));
         }
 
-        // Apply any existing function filter after getting results
-        onFunctionFilterChanged();
-
-        // Update results table after processing is complete
-        SwingUtilities.invokeLater(this::updateResultsTable);
+        SwingUtilities.invokeLater(() -> {
+            functionMatchResults.clear();
+            functionMatchResults.addAll(built);
+            // Apply any existing function filter, which also refreshes the table
+            onFunctionFilterChanged();
+        });
     }
 
 
-    protected void updateUI() {
-        if (functionMatchingResponse == null) return;
+    protected void updateProgressUI(MatchingProgress progress) {
+        if (progress == null) return;
 
-        // Update progress bar
-        if (functionMatchingResponse.getProgress() != null) {
-            taskMonitorComponent.setProgress(functionMatchingResponse.getProgress());
-            taskMonitorComponent.setMessage(functionMatchingResponse.getProgress() + "%");
+        // Update progress bar from the v3 step counters when present; otherwise show an animated
+        // (indeterminate) bar so the user can see that matching is still running.
+        if (progress.stepsTotal() != null && progress.stepsTotal() > 0 && progress.stepIndex() != null) {
+            int percent = (int) Math.min(100, Math.max(0, progress.stepIndex() * 100 / progress.stepsTotal()));
+            taskMonitorComponent.setIndeterminate(false);
+            taskMonitorComponent.setProgress(percent);
+            taskMonitorComponent.setMessage(progress.step() != null ? progress.step() : percent + "%");
+        } else {
+            taskMonitorComponent.setIndeterminate(true);
+            taskMonitorComponent.setMessage(progress.step() != null ? progress.step() : "Matching functions...");
         }
 
         // Update status
-        if (functionMatchingResponse.getStatus() != null) {
-            statusLabel.setText("Status: " + getFriendlyStatusMessage(functionMatchingResponse.getStatus()));
+        if (progress.status() != null) {
+            statusLabel.setText("Status: " + getFriendlyStatusMessage(progress.status()));
         }
 
         // Handle error message - dynamically add/remove error panel
-        if (functionMatchingResponse.getErrorMessage() != null && !functionMatchingResponse.getErrorMessage().isEmpty()) {
-            showError(functionMatchingResponse.getErrorMessage());
+        if (progress.errorMessage() != null && !progress.errorMessage().isEmpty()) {
+            showError(progress.errorMessage());
         } else {
             hideError();
         }
@@ -334,16 +429,16 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         }
 
         return switch (apiStatus) {
-            case "STARTED" -> "started function matching...";
-            case "IN_PROGRESS" -> "running function matching...";
+            case "UNINITIALISED", "PENDING" -> "starting function matching...";
+            case "RUNNING" -> "running function matching...";
             case "COMPLETED" -> "completed function matching";
-            case "ERROR", "NOT_FOUND" -> "function matching failed";
-            case "CANCELLED" -> "function matching was cancelled";
+            case "FAILED" -> "function matching failed";
             default -> apiStatus; // Fallback to original if unknown
         };
     }
 
     protected void handleError(String message) {
+        Msg.error(this, message);
         statusLabel.setText("An error occurred, press 'Match Functions' again to retry");
         showError(message);
         taskMonitorComponent.setMessage("Error");
@@ -369,9 +464,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected void stopPolling() {
-        if (pollTimer != null) {
-            pollTimer.stop();
-            pollTimer = null;
+        matchingCancelled = true;
+        if (matchingThread != null) {
+            matchingThread.interrupt();
+            matchingThread = null;
         }
     }
 
@@ -828,6 +924,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         try {
             revengService.batchRenamingGhidraMatchesWithSignatures(functionMatches);
         } catch (Exception e) {
+            Msg.error(this, "Failed to rename functions: " + e.getMessage(), e);
             showError("Failed to rename functions: " + e.getMessage());
         }
     }

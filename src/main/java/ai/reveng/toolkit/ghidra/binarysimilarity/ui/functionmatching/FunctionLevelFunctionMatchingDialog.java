@@ -1,10 +1,8 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
-import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
@@ -12,9 +10,8 @@ import ghidra.program.model.listing.Function;
 
 import javax.swing.*;
 import java.awt.*;
-import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Objects;
+import java.util.List;
 
 public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
     private final Function function;
@@ -25,70 +22,59 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
         this.function = function;
     }
 
+    private List<Long> matchingFunctionIds;
+
     @Override
-    protected void pollFunctionMatchingStatus() {
-        SwingUtilities.invokeLater(() -> {
-            try {
-                var request = new FunctionMatchingRequest();
-                request.setMinSimilarity(BigDecimal.valueOf(getThreshold()));
-                request.setResultsPerFunction(25); // TODO: Make configurable?
-                request.setModelId(analysisBasicInfo.getModelId());
+    protected MatchingProgress startMatching() throws ApiException {
+        var functionIDOpt = analyzedProgram.getIDForFunction(function);
+        if (functionIDOpt.isEmpty()) {
+            throw new ApiException("Could not find function ID for the selected function");
+        }
+        matchingFunctionIds = List.of(functionIDOpt.get().functionID().value());
 
-                var functionIDOpt = analyzedProgram.getIDForFunction(function);
-                if (functionIDOpt.isEmpty()) {
-                    handleError("Could not find function ID for the selected function");
-                    stopPolling();
-                    return;
-                }
+        var request = new StartMatchingForFunctionsInputBody();
+        request.setFunctionIds(matchingFunctionIds);
+        request.setMinSimilarity((double) getThreshold());
+        request.setResultsPerFunction(25L);
+        request.setFilters(buildMatchFilters());
 
-                var functionIds = new ArrayList<Long>();
-                functionIds.add(functionIDOpt.get().functionID().value());
+        var response = revengService.startFunctionsMatching(request);
+        return new MatchingProgress(
+                response.getStatus() == null ? null : response.getStatus().getValue(),
+                response.getStep(), response.getStepIndex(), response.getStepsTotal(),
+                errorTextFrom(response.getMessages()));
+    }
 
-                request.setFunctionIds(functionIds);
+    @Override
+    protected MatchingProgress pollMatchingStatus() throws ApiException {
+        var response = revengService.getFunctionsMatchingStatus(matchingFunctionIds);
+        return new MatchingProgress(
+                response.getStatus() == null ? null : response.getStatus().getValue(),
+                response.getStep(), response.getStepIndex(), response.getStepsTotal(),
+                errorTextFrom(response.getMessages()));
+    }
 
-                var filters = new FunctionMatchingFilters();
-                filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream().toList());
-                filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream().toList());
+    @Override
+    protected List<MatchedFunctionResult> fetchMatches() throws ApiException {
+        return flattenMatches(revengService.getFunctionsMatches(matchingFunctionIds).getMatches());
+    }
 
-                if (isDebugSymbolsEnabled()) {
-                    var debugTypes = new ArrayList<FunctionMatchingFilters.DebugTypesEnum>();
-                    debugTypes.add(FunctionMatchingFilters.DebugTypesEnum.SYSTEM);
+    private MatchFilters buildMatchFilters() {
+        var filters = new MatchFilters();
+        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
+                .map(Integer::longValue).toList());
+        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
+                .map(Integer::longValue).toList());
 
-                    if (isUserSubmittedDebugSymbolsEnabled()) {
-                        debugTypes.add(FunctionMatchingFilters.DebugTypesEnum.USER);
-                    }
-
-                    filters.setDebugTypes(debugTypes);
-                }
-
-                request.setFilters(filters);
-
-                functionMatchingResponse = revengService.getFunctionMatchingForFunction(request);
-                updateUI();
-
-                // Check if we hit an error status
-                if (Objects.equals(functionMatchingResponse.getStatus(), "ERROR")) {
-                    stopPolling();
-                    taskMonitorComponent.setVisible(false);
-                    String errorMsg = functionMatchingResponse.getErrorMessage() != null && !functionMatchingResponse.getErrorMessage().isEmpty()
-                        ? functionMatchingResponse.getErrorMessage()
-                        : "Function matching returned an error status";
-                    handleError(errorMsg);
-                    return;
-                }
-
-                // Check if we're done
-                if (functionMatchingResponse.getProgress() != null &&
-                    (functionMatchingResponse.getProgress() >= 100 || Objects.equals(functionMatchingResponse.getStatus(), "COMPLETED"))) {
-                    stopPolling();
-                    taskMonitorComponent.setVisible(false);
-                    processFunctionMatchingResults(functionMatchingResponse);
-                }
-            } catch (Exception e) {
-                handleError("Failed to poll function matching status: " + e.getMessage());
-                stopPolling();
+        if (isDebugSymbolsEnabled()) {
+            var debugTypes = new ArrayList<String>();
+            debugTypes.add("SYSTEM");
+            if (isUserSubmittedDebugSymbolsEnabled()) {
+                debugTypes.add("USER");
             }
-        });
+            filters.setDebugTypes(debugTypes);
+        }
+        return filters;
     }
 
     @Override

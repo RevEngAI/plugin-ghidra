@@ -15,7 +15,6 @@ import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
 import javax.swing.*;
-import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.Assert.*;
@@ -285,13 +284,24 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public FunctionMatchingResponse functionFunctionMatching(FunctionMatchingRequest request) {
+        public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
             functionMatchingCalled = true;
+            var response = new StartMatchingOutputBody();
+            response.setStatus(StartMatchingOutputBody.StatusEnum.COMPLETED);
+            return response;
+        }
 
-            // Create a response with completed status and mock matches
-            var response = new FunctionMatchingResponse();
-            response.setStatus("COMPLETED");
-            response.setProgress(100);
+        @Override
+        public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) {
+            var response = new GetMatchesStatusOutputBody();
+            response.setStatus(GetMatchesStatusOutputBody.StatusEnum.COMPLETED);
+            return response;
+        }
+
+        @Override
+        public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) {
+            var response = new GetMatchesOutputBody();
+            response.setStatus(GetMatchesOutputBody.StatusEnum.COMPLETED);
 
             // Create a match result using the SDK model types
             var functionMatch = new ai.reveng.model.FunctionMatch();
@@ -304,12 +314,12 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
             matchedFunc.setMangledName("similar_function");
             matchedFunc.setSha256Hash("1".repeat(64));
             matchedFunc.setBinaryName("libc.so");
-            matchedFunc.setBinaryId(1);
+            matchedFunc.setBinaryId(1L);
             matchedFunc.setFunctionVaddr(0x2000L);
-            matchedFunc.setAnalysisId(12345);
+            matchedFunc.setAnalysisId(12345L);
             matchedFunc.setDebug(false);
-            matchedFunc.setSimilarity(BigDecimal.valueOf(0.95));
-            matchedFunc.setConfidence(BigDecimal.valueOf(0.87));
+            matchedFunc.setSimilarity(0.95);
+            matchedFunc.setConfidence(0.87);
 
             functionMatch.setMatchedFunctions(List.of(matchedFunc));
             response.setMatches(List.of(functionMatch));
