@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import org.json.JSONArray;
@@ -11,6 +12,7 @@ import ai.reveng.model.Tag;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 public class AnalysisOptionsBuilder {
     private JSONObject options;
@@ -71,13 +73,16 @@ public class AnalysisOptionsBuilder {
     }
 
     public static AnalysisOptionsBuilder forProgram(Program program) {
+        return forProgram(program, function -> true);
+    }
+
+    public static AnalysisOptionsBuilder forProgram(Program program, Predicate<Function> includePredicate) {
         return new AnalysisOptionsBuilder()
                 .hash(new TypedApiInterface.BinaryHash(program.getExecutableSHA256()))
                 .fileName(program.getName())
                 .functionBoundaries(
                         program.getImageBase().getOffset(),
-                        GhidraRevengService.exportFunctionBoundaries(program
-                        )
+                        GhidraRevengService.exportFunctionBoundaries(program, includePredicate)
                 );
     }
 
@@ -179,7 +184,8 @@ public class AnalysisOptionsBuilder {
                     var functionBoundary = new ai.reveng.model.FunctionBoundary()
                             .mangledName(functionJSON.getString("mangled_name"))
                             .startAddress(functionJSON.getLong("start_addr"))
-                            .endAddress(functionJSON.getLong("end_addr"));
+                            .endAddress(functionJSON.getLong("end_addr"))
+                            .includeInAnalysis(functionJSON.optBoolean("include_in_analysis", true));
 
                     boundaries.add(functionBoundary);
                 }
