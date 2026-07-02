@@ -21,8 +21,9 @@ import static org.junit.Assert.assertTrue;
 
 public class SyncMarkingTest extends RevEngMockableHeadedIntegrationTest {
 
-    private static final String REVENG_TAG = "REVENGAI_MATCH";
+    private static final String REVENG_TAG = "REVENGAI_SYNCED";
     private static final String REVENG_BOOKMARK_TYPE = "RevEng.AI";
+    private static final String REVENG_BOOKMARK_CATEGORY = "Analysed Function";
 
     @Test
     public void testSyncMarksMatchedFunctions() throws Exception {
@@ -60,8 +61,10 @@ public class SyncMarkingTest extends RevEngMockableHeadedIntegrationTest {
         service.registerFinishedAnalysisForProgram(programWithID, ghidra.util.task.TaskMonitor.DUMMY);
 
         assertTrue("matched function should have the RevEng tag", hasRevEngTag(matchedFunc));
-        assertTrue("matched function should have a RevEng bookmark",
-                program.getBookmarkManager().getBookmarks(matchedFunc.getEntryPoint(), REVENG_BOOKMARK_TYPE).length > 0);
+        var matchedBookmarks = program.getBookmarkManager().getBookmarks(matchedFunc.getEntryPoint(), REVENG_BOOKMARK_TYPE);
+        assertTrue("matched function should have a RevEng bookmark", matchedBookmarks.length > 0);
+        assertEquals("bookmark category", REVENG_BOOKMARK_CATEGORY, matchedBookmarks[0].getCategory());
+        assertEquals("bookmark description", "Function #1", matchedBookmarks[0].getComment());
 
         assertFalse("unmatched function should not have the RevEng tag", hasRevEngTag(unmatchedFunc));
         assertEquals("unmatched function should not have a RevEng bookmark",

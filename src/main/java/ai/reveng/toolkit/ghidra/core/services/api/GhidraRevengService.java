@@ -75,8 +75,9 @@ import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.OPTION_KEY_ANAL
 public class GhidraRevengService {
     private static final String REAI_FUNCTION_PROP_MAP = "RevEngAI_FunctionID_Map";
     private static final String REAI_FUNCTION_MANGLED_MAP = "RevEngAI_FunctionMangledNames_Map";
-    private static final String REVENGAI_FUNCTION_TAG = "REVENGAI_MATCH";
+    private static final String REVENGAI_FUNCTION_TAG = "REVENGAI_SYNCED";
     private static final String REVENG_BOOKMARK_TYPE = "RevEng.AI";
+    private static final String REVENG_BOOKMARK_CATEGORY = "Analysed Function";
     private final Map<TypedApiInterface.AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
     private TypedApiInterface api;
@@ -287,7 +288,6 @@ public class GhidraRevengService {
         LongPropertyMap finalFunctionIDMap = functionIDMap;
 
         BookmarkManager bookmarkManager = program.getBookmarkManager();
-        defineRevEngBookmarkType(bookmarkManager);
 
         int ghidraBoundariesMatchedFunction = 0;
         for (FunctionInfo info : functionInfo) {
@@ -346,21 +346,8 @@ public class GhidraRevengService {
 
     private void markFunctionAsRevEng(BookmarkManager bookmarkManager, Function function, FunctionInfo info) {
         function.addTag(REVENGAI_FUNCTION_TAG);
-        bookmarkManager.setBookmark(function.getEntryPoint(), REVENG_BOOKMARK_TYPE, "Match", info.functionName());
-    }
-
-    private static void defineRevEngBookmarkType(BookmarkManager bookmarkManager) {
-        bookmarkManager.defineType(REVENG_BOOKMARK_TYPE, ReaiPluginPackage.REVENG_16, new Color(0x00, 0xB4, 0xD8), 0);
-    }
-
-    public static void registerRevEngBookmarkTypeIfPresent(Program program) {
-        var bookmarkManager = program.getBookmarkManager();
-        for (var type : bookmarkManager.getBookmarkTypes()) {
-            if (REVENG_BOOKMARK_TYPE.equals(type.getTypeString())) {
-                defineRevEngBookmarkType(bookmarkManager);
-                return;
-            }
-        }
+        bookmarkManager.setBookmark(function.getEntryPoint(), REVENG_BOOKMARK_TYPE, REVENG_BOOKMARK_CATEGORY,
+                "Function #" + info.functionID().value());
     }
 
 

@@ -319,7 +319,6 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 		super.programActivated(program);
         // Any ComponentProviders that need to refresh based on the current program should be notified here
         analysisLogComponent.programActivated(program);
-        GhidraRevengService.registerRevEngBookmarkTypeIfPresent(program);
 	}
 
     @Override
