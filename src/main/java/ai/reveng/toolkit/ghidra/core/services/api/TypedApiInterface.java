@@ -189,13 +189,6 @@ public interface TypedApiInterface {
     ) {
     }
 
-    /// {@link MatchedFunctionSuggestion}
-    record TypedAutoUnstripMatch(MatchedFunctionSuggestion suggestedFunction) { }
-
-
-    default TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
-        throw new UnsupportedOperationException("autoUnstrip not implemented yet");
-    }
 
     default TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
         throw new UnsupportedOperationException("aiUnstrip not implemented yet");

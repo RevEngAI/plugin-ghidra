@@ -21,7 +21,6 @@ and use it for Binary Code Similarity to help you Reverse Engineer stripped bina
 - [Usage](#usage)
   - [Configuration](#configuration)
   - [Analysis](#analysis)
-  - [Auto Unstrip](#auto-unstrip)
   - [Function Matching](#function-matching)
     - [Individual function matching and renaming](#individual-function-matching-and-renaming)
     - [Batch function matching and renaming](#batch-function-matching-and-renaming)
@@ -104,13 +103,6 @@ Usually it's enough to use the default options, but you can also select specific
 You can check the status of your request by selecting `RevEng.AI -> Analysis -> Check status` from the same menu.
 Starting an analysis also triggers a background Ghidra thread that will periodically check the status
 and pop a notification when the analysis is complete.
-
-### Auto Unstrip
-
-The `Auto Unstrip` tool allows you to automatically recover function names based on our debug symbol database. It is 
-an automated process that will recover all function names from the currently attached binary.
-
-You can access it by selecting `RevEng.AI -> Auto Unstrip` from the menu.
 
 ### Function Matching
 

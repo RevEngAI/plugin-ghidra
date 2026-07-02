@@ -2,11 +2,11 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.help;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
-import docking.DialogComponentProvider;
 import docking.widgets.label.GLabel;
 import ghidra.framework.plugintool.PluginTool;
 
 import javax.swing.*;
+
 import java.awt.*;
 import java.net.URI;
 
@@ -80,16 +80,6 @@ public class HelpDialog extends RevEngDialogComponentProvider {
         panel.add(Box.createVerticalStrut(10));
 
         // Other menu items
-        panel.add(
-                createMenuItem(
-                        "Auto Unstrip",
-                        """
-                                This option will run an automatic unstrip process on the current binary using the RevEng.AI API.
-                                The process uses a high confidence threshold to rename functions and variables.
-                                This option is only available when an analysis is attached and has completed processing.""",
-                        null
-                )
-        );
         panel.add(
                 createMenuItem(
                         "Function Matching",

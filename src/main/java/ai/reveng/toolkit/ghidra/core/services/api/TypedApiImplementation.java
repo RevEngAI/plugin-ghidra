@@ -666,15 +666,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public TypedAutoUnstripResponse autoUnstrip(AnalysisID analysisID) {
-        try {
-            return new TypedAutoUnstripResponse(functionsCoreApi.autoUnstrip(analysisID.id(), new AutoUnstripRequest()));
-        } catch (ApiException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Override
     public TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
         try {
             return new TypedAutoUnstripResponse(functionsCoreApi.aiUnstrip(analysisID.id(), new AiUnstripRequest()));

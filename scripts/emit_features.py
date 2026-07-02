@@ -10,7 +10,6 @@ ACTIONS = {
     "AnalysisManagementPlugin: Attach to existing": ("apply_existing_analysis", "yes"),
     "AnalysisManagementPlugin: Check status": ("check_analysis_status", "yes"),
     "AnalysisLogComponent": ("view_analysis_logs", "yes"),
-    "BinarySimilarityPlugin: Auto Unstrip": ("binary_auto_analysis", "yes"),
     "BinarySimilarityPlugin: Match function": ("rename_from_similar_function", "yes"),
     "BinarySimilarityPlugin: AI Decompilation": ("function_decompilation", "yes"),
     "AssemblyDiffPanel": ("function_asm_diffing", "yes"),
