@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.model.AnalysisCreateRequest;
 import ai.reveng.model.Tag;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -10,6 +11,34 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class AnalysisOptionsBuilderTest {
+
+    @Test
+    public void testToAnalysisCreateRequest_IncludeInAnalysisFlag() {
+        AnalysisOptionsBuilder builder = new AnalysisOptionsBuilder()
+                .hash(new TypedApiInterface.BinaryHash("a".repeat(64)))
+                .fileName("test.bin")
+                .functionBoundaries(0x1000, List.of(
+                        new FunctionBoundary("included_fn", 0x1000, 0x1010, true),
+                        new FunctionBoundary("excluded_fn", 0x1020, 0x1030, false),
+                        new FunctionBoundary("default_fn", 0x1040, 0x1050)));
+
+        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        List<ai.reveng.model.FunctionBoundary> boundaries = request.getSymbols().getFunctionBoundaries();
+
+        assertEquals("All boundaries are sent regardless of the include flag", 3, boundaries.size());
+        assertEquals(Boolean.TRUE, includeFlagFor(boundaries, "included_fn"));
+        assertEquals(Boolean.FALSE, includeFlagFor(boundaries, "excluded_fn"));
+        assertEquals("Boundaries built without an explicit flag default to included",
+                Boolean.TRUE, includeFlagFor(boundaries, "default_fn"));
+    }
+
+    private static Boolean includeFlagFor(List<ai.reveng.model.FunctionBoundary> boundaries, String mangledName) {
+        return boundaries.stream()
+                .filter(b -> mangledName.equals(b.getMangledName()))
+                .findFirst()
+                .orElseThrow()
+                .getIncludeInAnalysis();
+    }
 
     @Test
     public void testToAnalysisCreateRequest_WithNoTags() {

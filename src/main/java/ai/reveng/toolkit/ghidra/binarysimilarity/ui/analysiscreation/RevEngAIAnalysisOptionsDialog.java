@@ -7,19 +7,31 @@ import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
+import docking.widgets.table.GTable;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.Swing;
 
 import javax.annotation.Nullable;
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.table.AbstractTableModel;
+import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 
 public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider {
     private JCheckBox advancedAnalysisCheckBox;
@@ -37,6 +49,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JComboBox<String> architectureComboBox;
     private boolean okPressed = false;
 
+    private FunctionSelectionTableModel functionSelectionModel;
+    private JTable functionSelectionTable;
+    private JLabel includeCountLabel;
+
     private JLabel fileSizeWarningLabel;
     private JLabel loadingLabel;
 
@@ -50,7 +66,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         this.service = service;
 
         buildInterface();
-        setPreferredSize(320, 420);
+        setPreferredSize(820, 600);
 
         fetchConfigAsync();
         fetchUserTierAsync();
@@ -59,8 +75,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private void buildInterface() {
         var workPanel = new JPanel();
         workPanel.setLayout(new BoxLayout(workPanel, BoxLayout.Y_AXIS));
-
-        addWorkPanel(workPanel);
 
         // Create title panel
         JPanel titlePanel = createTitlePanel("Create new analysis for this binary");
@@ -184,6 +198,11 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         loadingLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         workPanel.add(loadingLabel);
 
+        var contentPanel = new JPanel(new BorderLayout(12, 0));
+        contentPanel.add(workPanel, BorderLayout.WEST);
+        contentPanel.add(buildFunctionSelectionPanel(), BorderLayout.CENTER);
+        addWorkPanel(contentPanel);
+
         addCancelButton();
         addOKButton();
 
@@ -195,7 +214,9 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         if (!okPressed) {
             return null;
         }
-        var options = AnalysisOptionsBuilder.forProgram(program);
+        Set<Address> includedEntryPoints = functionSelectionModel.includedEntryPoints();
+        var options = AnalysisOptionsBuilder.forProgram(program,
+                function -> includedEntryPoints.contains(function.getEntryPoint()));
 
         options.skipScraping(!scrapeExternalTagsBox.isSelected());
         options.skipCapabilities(!identifyCapabilitiesCheckBox.isSelected());
@@ -219,6 +240,13 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
     @Override
     protected void okCallback() {
+        if (functionSelectionModel != null
+                && functionSelectionModel.getRowCount() > 0
+                && functionSelectionModel.getIncludedCount() == 0) {
+            Msg.showWarn(this, getComponent(), ReaiPluginPackage.WINDOW_PREFIX + "No functions selected",
+                    "Select at least one function to include in the analysis.");
+            return;
+        }
         // Close dialog
         okPressed = true;
         close();
@@ -227,6 +255,190 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     @Override
     public JComponent getComponent() {
         return super.getComponent();
+    }
+
+    private JPanel buildFunctionSelectionPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.setBorder(BorderFactory.createTitledBorder("Functions to include in analysis"));
+
+        List<Function> functions = new ArrayList<>();
+        program.getFunctionManager().getFunctions(true).forEach(function -> {
+            if (!function.isThunk() && !function.isExternal()) {
+                functions.add(function);
+            }
+        });
+
+        functionSelectionModel = new FunctionSelectionTableModel(functions);
+        functionSelectionTable = new GTable(functionSelectionModel);
+        functionSelectionTable.setRowHeight(22);
+        functionSelectionTable.setFillsViewportHeight(true);
+        functionSelectionTable.setShowGrid(false);
+        functionSelectionTable.getTableHeader().setReorderingAllowed(false);
+        functionSelectionTable.getTableHeader().setFont(
+                functionSelectionTable.getTableHeader().getFont().deriveFont(Font.BOLD));
+        TableRowSorter<FunctionSelectionTableModel> sorter = new TableRowSorter<>(functionSelectionModel);
+        functionSelectionTable.setRowSorter(sorter);
+        var columnModel = functionSelectionTable.getColumnModel();
+        columnModel.getColumn(0).setMaxWidth(70);
+        columnModel.getColumn(0).setPreferredWidth(70);
+        columnModel.getColumn(1).setPreferredWidth(220);
+        columnModel.getColumn(2).setPreferredWidth(110);
+        columnModel.getColumn(3).setPreferredWidth(70);
+        functionSelectionModel.addTableModelListener(e -> updateIncludeCount());
+
+        JTextField filterField = new JTextField();
+        filterField.setToolTipText("Filter functions by name or address");
+        filterField.getDocument().addDocumentListener(new DocumentListener() {
+            private void update() {
+                String text = filterField.getText().trim();
+                if (text.isEmpty()) {
+                    sorter.setRowFilter(null);
+                } else {
+                    sorter.setRowFilter(RowFilter.regexFilter("(?i)" + Pattern.quote(text), 1, 2));
+                }
+            }
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                update();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                update();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                update();
+            }
+        });
+
+        JPanel filterPanel = new JPanel(new BorderLayout(6, 0));
+        filterPanel.add(new JLabel("Filter:"), BorderLayout.WEST);
+        filterPanel.add(filterField, BorderLayout.CENTER);
+
+        JScrollPane scrollPane = new JScrollPane(functionSelectionTable);
+        scrollPane.setPreferredSize(new Dimension(430, 460));
+
+        JButton selectAllButton = new JButton("Select all");
+        selectAllButton.setToolTipText("Include all functions matching the current filter");
+        selectAllButton.addActionListener(e -> functionSelectionModel.setVisibleIncluded(functionSelectionTable, true));
+
+        JButton deselectAllButton = new JButton("Deselect all");
+        deselectAllButton.setToolTipText("Exclude all functions matching the current filter");
+        deselectAllButton.addActionListener(e -> functionSelectionModel.setVisibleIncluded(functionSelectionTable, false));
+
+        includeCountLabel = new JLabel();
+
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        controlPanel.add(selectAllButton);
+        controlPanel.add(deselectAllButton);
+        controlPanel.add(includeCountLabel);
+
+        panel.add(filterPanel, BorderLayout.NORTH);
+        panel.add(scrollPane, BorderLayout.CENTER);
+        panel.add(controlPanel, BorderLayout.SOUTH);
+
+        updateIncludeCount();
+        return panel;
+    }
+
+    private void updateIncludeCount() {
+        if (includeCountLabel == null || functionSelectionModel == null) {
+            return;
+        }
+        includeCountLabel.setText("%d / %d included".formatted(
+                functionSelectionModel.getIncludedCount(),
+                functionSelectionModel.getRowCount()));
+    }
+
+    private static class FunctionSelectionTableModel extends AbstractTableModel {
+        private final String[] columnNames = {"Include", "Function", "Entry", "Size"};
+        private final List<Function> functions;
+        private final boolean[] included;
+
+        FunctionSelectionTableModel(List<Function> functions) {
+            this.functions = functions;
+            this.included = new boolean[functions.size()];
+            Arrays.fill(included, true);
+        }
+
+        @Override
+        public int getRowCount() {
+            return functions.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return columnNames.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return columnNames[column];
+        }
+
+        @Override
+        public Class<?> getColumnClass(int column) {
+            return switch (column) {
+                case 0 -> Boolean.class;
+                case 3 -> Long.class;
+                default -> String.class;
+            };
+        }
+
+        @Override
+        public boolean isCellEditable(int row, int column) {
+            return column == 0;
+        }
+
+        @Override
+        public Object getValueAt(int row, int column) {
+            Function function = functions.get(row);
+            return switch (column) {
+                case 0 -> included[row];
+                case 1 -> function.getName();
+                case 2 -> function.getEntryPoint().toString();
+                case 3 -> function.getBody().getNumAddresses();
+                default -> null;
+            };
+        }
+
+        @Override
+        public void setValueAt(Object value, int row, int column) {
+            if (column == 0) {
+                included[row] = (Boolean) value;
+                fireTableCellUpdated(row, column);
+            }
+        }
+
+        void setVisibleIncluded(JTable table, boolean value) {
+            for (int viewRow = 0; viewRow < table.getRowCount(); viewRow++) {
+                included[table.convertRowIndexToModel(viewRow)] = value;
+            }
+            fireTableDataChanged();
+        }
+
+        int getIncludedCount() {
+            int count = 0;
+            for (boolean b : included) {
+                if (b) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        Set<Address> includedEntryPoints() {
+            Set<Address> result = new HashSet<>();
+            for (int i = 0; i < functions.size(); i++) {
+                if (included[i]) {
+                    result.add(functions.get(i).getEntryPoint());
+                }
+            }
+            return result;
+        }
     }
 
     private void fetchConfigAsync() {

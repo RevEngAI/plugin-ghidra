@@ -23,6 +23,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Structure;
+import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.CircularDependencyException;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionSignature;
@@ -51,6 +52,7 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin.REVENG_AI_NAMESPACE;
@@ -73,6 +75,9 @@ import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.OPTION_KEY_ANAL
 public class GhidraRevengService {
     private static final String REAI_FUNCTION_PROP_MAP = "RevEngAI_FunctionID_Map";
     private static final String REAI_FUNCTION_MANGLED_MAP = "RevEngAI_FunctionMangledNames_Map";
+    private static final String REVENGAI_FUNCTION_TAG = "REVENGAI_SYNCED";
+    private static final String REVENG_BOOKMARK_TYPE = "RevEng.AI";
+    private static final String REVENG_BOOKMARK_CATEGORY = "Analysed Function";
     private final Map<TypedApiInterface.AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
     private TypedApiInterface api;
@@ -282,6 +287,8 @@ public class GhidraRevengService {
 
         LongPropertyMap finalFunctionIDMap = functionIDMap;
 
+        BookmarkManager bookmarkManager = program.getBookmarkManager();
+
         int ghidraBoundariesMatchedFunction = 0;
         for (FunctionInfo info : functionInfo) {
             var oFunc = getFunctionFor(info, program);
@@ -302,6 +309,7 @@ public class GhidraRevengService {
             }
 
             finalFunctionIDMap.add(func.getEntryPoint(), info.functionID().value());
+            markFunctionAsRevEng(bookmarkManager, func, info);
 
             ghidraBoundariesMatchedFunction++;
         }
@@ -334,6 +342,12 @@ public class GhidraRevengService {
 
         return analysedProgram;
 
+    }
+
+    private void markFunctionAsRevEng(BookmarkManager bookmarkManager, Function function, FunctionInfo info) {
+        function.addTag(REVENGAI_FUNCTION_TAG);
+        bookmarkManager.setBookmark(function.getEntryPoint(), REVENG_BOOKMARK_TYPE, REVENG_BOOKMARK_CATEGORY,
+                "Function #" + info.functionID().value());
     }
 
 
@@ -541,6 +555,12 @@ public class GhidraRevengService {
         // Clear all function ID data
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
+
+        program.getBookmarkManager().removeBookmarks(REVENG_BOOKMARK_TYPE);
+        var revengTag = program.getFunctionManager().getFunctionTagManager().getFunctionTag(REVENGAI_FUNCTION_TAG);
+        if (revengTag != null) {
+            revengTag.delete();
+        }
         var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
         //noinspection deprecation
         reaiOptions.setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
@@ -561,13 +581,20 @@ public class GhidraRevengService {
     }
 
     public static List<FunctionBoundary> exportFunctionBoundaries(Program program){
+        return exportFunctionBoundaries(program, function -> true);
+    }
+
+    public static List<FunctionBoundary> exportFunctionBoundaries(Program program, Predicate<Function> includePredicate){
         List<FunctionBoundary> result = new ArrayList<>();
-        Address imageBase = program.getImageBase();
         program.getFunctionManager().getFunctions(true).forEach(
                 function -> {
                     var start = function.getEntryPoint();
                     var end = function.getBody().getMaxAddress();
-                    result.add(new FunctionBoundary(function.getSymbol().getName(false), start.getOffset(), end.getOffset()));
+                    result.add(new FunctionBoundary(
+                            function.getSymbol().getName(false),
+                            start.getOffset(),
+                            end.getOffset(),
+                            includePredicate.test(function)));
                 }
         );
         return result;
