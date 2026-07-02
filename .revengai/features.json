@@ -9,9 +9,6 @@
     "apply_existing_analysis": {
       "status": "yes"
     },
-    "binary_auto_analysis": {
-      "status": "yes"
-    },
     "binary_upload": {
       "status": "yes"
     },

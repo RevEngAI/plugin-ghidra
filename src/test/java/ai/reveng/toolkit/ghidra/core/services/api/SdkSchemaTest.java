@@ -39,7 +39,7 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
-                "autoUnstrip", "aiUnstrip", "getFunctionBlocks", "getFunctionDetails"});
+                "aiUnstrip", "getFunctionBlocks", "getFunctionDetails"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
                 "renameFunctionId", "batchRenameFunctions"});
         apis.put("ai.reveng.api.FunctionsDataTypesApi", new String[]{

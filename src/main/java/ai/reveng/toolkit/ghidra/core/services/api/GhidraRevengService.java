@@ -1229,11 +1229,6 @@ public class GhidraRevengService {
     }
 
 
-    public TypedApiInterface.TypedAutoUnstripResponse autoUnstrip(AnalysedProgram program) throws ApiException {
-        return api.autoUnstrip(program.analysisID);
-    }
-
-
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished
     /// The id of this should also be stored in the program options, but this is currently not enforced yet to allow easier testing

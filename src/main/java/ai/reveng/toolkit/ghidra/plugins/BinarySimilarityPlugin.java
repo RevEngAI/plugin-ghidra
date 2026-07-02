@@ -16,7 +16,6 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.autounstrip.AutoUnstripDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.collectiondialog.DataSetControlPanelComponent;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.BinaryLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
@@ -117,40 +116,6 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 	}
 
 	private void setupActions() {
-        new ActionBuilder("Auto Unstrip", this.getName())
-                .menuGroup(ReaiPluginPackage.NAME)
-                .menuPath(ReaiPluginPackage.MENU_GROUP_NAME, "Auto Unstrip")
-                .enabledWhen(context -> {
-                            var apiService = getApiService();
-                            if (apiService == null) return false;
-                            var program = tool.getService(ProgramManager.class).getCurrentProgram();
-                            if (program != null) {
-                                return apiService.getKnownProgram(program).isPresent();
-                            } else {
-                                return false;
-                            }
-                        }
-                )
-                .onAction(context -> {
-                    var apiService = getApiService();
-                    var program = tool.getService(ProgramManager.class).getCurrentProgram();
-                    if (apiService.getAnalysedProgram(program).isEmpty()) {
-                        Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Auto Unstrip",
-                                "Analysis must have completed before running auto unstrip");
-                        return;
-                    }
-                    var analysedProgram = apiService.getAnalysedProgram(program);
-                    if (analysedProgram.isEmpty()){
-                        Msg.info(this, "Program has no saved binary ID");
-                        return;
-                    }
-
-                    var autoUnstrip = new AutoUnstripDialog(tool, analysedProgram.get());
-
-                    tool.showDialog(autoUnstrip);
-                })
-                .buildAndInstall(tool);
-
         // Top menu function matching
         new ActionBuilder("Function Matching", this.getName())
                 .menuGroup(ReaiPluginPackage.NAME)
