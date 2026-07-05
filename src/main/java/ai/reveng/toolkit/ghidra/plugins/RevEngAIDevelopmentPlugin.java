@@ -47,10 +47,25 @@ public class RevEngAIDevelopmentPlugin extends ProgramPlugin {
 
 		var generateSignaturesAction = new ActionBuilder("Generate Signatures", ReaiPluginPackage.NAME)
 				.menuPath(DEV_TOOLING_MENU_GROUP_NAME, "Generate Signatures for current program")
+				.enabledWhen(context -> {
+					if (currentProgram == null) {
+						return false;
+					}
+					return tool.getService(GhidraRevengService.class)
+							.getAnalysedProgram(currentProgram)
+							.isPresent();
+				})
 				.onAction(e -> {
 					GhidraRevengService reAIService = tool.getService(GhidraRevengService.class);
 					var api = reAIService.getApi();
-                    var analysedProgram = reAIService.getAnalysedProgram(currentProgram).orElseThrow();
+                    var analysedProgramOpt = reAIService.getAnalysedProgram(currentProgram);
+                    if (analysedProgramOpt.isEmpty()) {
+                        Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Generate Signatures",
+                                "The current program has not been analysed with RevEng.AI yet. " +
+                                        "Please create and complete an analysis before generating signatures.");
+                        return;
+                    }
+                    var analysedProgram = analysedProgramOpt.get();
 					var functionMap = analysedProgram.getFunctionMap();
 					var task = new Task("Generate Signatures", true, true, true) {
 						@Override
