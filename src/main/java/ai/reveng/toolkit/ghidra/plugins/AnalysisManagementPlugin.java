@@ -151,9 +151,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         var builder = TaskBuilder.withTask(task);
                         analysisLogComponent.setVisible(true);
                         builder.launchInBackground(analysisLogComponent.getTaskMonitor());
-                        // The task will fire the RevEngAIAnalysisStatusChangedEvent event when done
-                        // which is then picked up by the AnalysisManagementPlugin and forwarded to the AnalysisLogComponent
-                        tool.getService(ReaiLoggingService.class).info("Started analysis: ");
+                        // The task runs in the background and logs the actual outcome (success or failure)
+                        // itself. On success it fires the RevEngAIAnalysisStatusChangedEvent, which is picked
+                        // up by the AnalysisManagementPlugin and forwarded to the AnalysisLogComponent.
+                        tool.getService(ReaiLoggingService.class).info("Launching analysis task in background");
                     } else {
                         // User clicked Cancel
                         tool.getService(ReaiLoggingService.class).info("Create new analysis dialog cancelled by user");
