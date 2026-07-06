@@ -6,8 +6,11 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
@@ -42,18 +45,33 @@ public class StartAnalysisTask extends Task {
 
     @Override
     public void run(TaskMonitor monitor) throws CancelledException {
+        ReaiLoggingService loggingService = tool.getService(ReaiLoggingService.class);
+
         monitor.setMessage("Uploading Binary");
-        reService.upload(program);
-        monitor.setMessage("Exporting Function Boundaries");
+        try {
+            reService.upload(program);
+        } catch (RuntimeException e) {
+            reportFailure(monitor, loggingService, "Failed to upload binary", e);
+            return;
+        }
 
         monitor.setMessage("Sending Analysis Request");
-
         GhidraRevengService.ProgramWithID programWithID;
         try {
-        programWithID = reService.startAnalysis(program, options);
+            programWithID = reService.startAnalysis(program, options);
         } catch (ApiException e) {
-            monitor.setMessage("Analysis Request Failed");
+            reportFailure(monitor, loggingService, "Analysis request was rejected by the server", e);
             return;
+        } catch (RuntimeException e) {
+            reportFailure(monitor, loggingService, "Failed to start analysis", e);
+            return;
+        }
+
+        String successMessage = "Analysis started successfully (analysis ID %s)"
+                .formatted(programWithID.analysisID().id());
+        monitor.setMessage(successMessage);
+        if (loggingService != null) {
+            loggingService.info(successMessage);
         }
 
         tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(
@@ -61,6 +79,34 @@ public class StartAnalysisTask extends Task {
                 programWithID,
                 AnalysisStatus.Queued)
         );
+    }
+
+    private void reportFailure(TaskMonitor monitor,
+                               ReaiLoggingService loggingService,
+                               String context,
+                               Throwable error) {
+        String message = context + ": " + describe(error);
+        monitor.setMessage("Analysis Request Failed");
+        if (loggingService != null) {
+            loggingService.error(message);
+        }
+        Msg.error(this, message, error);
+        Msg.showError(this, null,
+                ReaiPluginPackage.WINDOW_PREFIX + "Failed to start analysis",
+                message, error);
+    }
+
+    private static String describe(Throwable error) {
+        Throwable cause = error;
+        if (!(cause instanceof ApiException) && cause.getCause() instanceof ApiException) {
+            cause = cause.getCause();
+        }
+        if (cause instanceof ApiException apiException) {
+            String body = apiException.getResponseBody();
+            String detail = (body != null && !body.isBlank()) ? body : apiException.getMessage();
+            return "HTTP " + apiException.getCode() + " — " + detail;
+        }
+        return cause.getMessage() != null ? cause.getMessage() : cause.toString();
     }
 
     @Override
