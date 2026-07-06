@@ -17,6 +17,9 @@ package ai.reveng;
 
 import static org.junit.Assert.*;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import javax.swing.*;
 
 import ai.reveng.model.User;
@@ -136,5 +139,127 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var options = dialog.getOptionsFromUI();
         assertNotNull(options);
         assertEquals(AnalysisScope.PRIVATE, options.getScope());
+    }
+
+    @Test
+    public void testPrivateScopeDisabledWhenTierFetchFails() throws Exception {
+        var reService = new GhidraRevengService(new MockApi() {
+            @Override
+            public User getMe() {
+                throw new RuntimeException("tier lookup failed");
+            }
+        });
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var program = builder.getProgram();
+        var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
+        SwingUtilities.invokeLater(() -> {
+            DockingWindowManager.showDialog(null, dialog);
+        });
+        waitForSwing();
+
+        JRadioButton privateScope = (JRadioButton) getInstanceField("privateScope", dialog);
+        JRadioButton publicScope = (JRadioButton) getInstanceField("publicScope", dialog);
+
+        waitFor(() -> {
+            JButton okButton = (JButton) getInstanceField("okButton", dialog);
+            return okButton.isEnabled();
+        });
+
+        assertFalse("Private scope must fail safe to disabled when the tier can't be verified",
+                privateScope.isEnabled());
+        assertFalse(privateScope.isSelected());
+        assertTrue("Public scope must be selected when the tier can't be verified",
+                publicScope.isSelected());
+        assertNotNull("A disabled private scope must explain why on hover", privateScope.getToolTipText());
+
+        runSwing(() -> {
+            JButton okButton = (JButton) getInstanceField("okButton", dialog);
+            okButton.doClick();
+        });
+        var options = dialog.getOptionsFromUI();
+        assertNotNull(options);
+        assertEquals(AnalysisScope.PUBLIC, options.getScope());
+    }
+
+    @Test
+    public void testStartAnalysisBlockedUntilTierResolves() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        var reService = new GhidraRevengService(new MockApi() {
+            @Override
+            public User getMe() {
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return new User().tier(User.TierEnum.REVERSER);
+            }
+        });
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var program = builder.getProgram();
+        var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
+        SwingUtilities.invokeLater(() -> {
+            DockingWindowManager.showDialog(null, dialog);
+        });
+        waitForSwing();
+
+        JButton okButton = (JButton) getInstanceField("okButton", dialog);
+        JRadioButton privateScope = (JRadioButton) getInstanceField("privateScope", dialog);
+        JLabel loadingLabel = (JLabel) getInstanceField("loadingLabel", dialog);
+
+        // The file-size/config check resolves independently; wait for it so the only thing
+        // still holding the OK button disabled is the (blocked) tier fetch.
+        waitFor(() -> !loadingLabel.isVisible());
+
+        assertFalse("Start Analysis must stay disabled until the tier fetch resolves",
+                okButton.isEnabled());
+        assertFalse("Private must stay disabled until the tier fetch resolves",
+                privateScope.isEnabled());
+
+        release.countDown();
+
+        waitFor(okButton::isEnabled);
+        assertTrue(okButton.isEnabled());
+        assertTrue("Private becomes available once a non-enthusiast tier is confirmed",
+                privateScope.isEnabled());
+    }
+
+    @Test
+    public void testGetOptionsIgnoresDisabledPrivateSelection() throws Exception {
+        var reService = new GhidraRevengService(new MockApi() {
+            @Override
+            public User getMe() {
+                return new User().tier(User.TierEnum.ENTHUSIAST);
+            }
+        });
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var program = builder.getProgram();
+        var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
+        SwingUtilities.invokeLater(() -> {
+            DockingWindowManager.showDialog(null, dialog);
+        });
+        waitForSwing();
+
+        JRadioButton privateScope = (JRadioButton) getInstanceField("privateScope", dialog);
+        waitFor(() -> !privateScope.isEnabled());
+
+        // Force a stale private selection onto the disabled control and confirm the submit-time
+        // guard still reports the analysis as public.
+        runSwing(() -> privateScope.setSelected(true));
+        assertTrue(privateScope.isSelected());
+        assertFalse(privateScope.isEnabled());
+
+        waitFor(() -> {
+            JButton okButton = (JButton) getInstanceField("okButton", dialog);
+            return okButton.isEnabled();
+        });
+        runSwing(() -> {
+            JButton okButton = (JButton) getInstanceField("okButton", dialog);
+            okButton.doClick();
+        });
+
+        var options = dialog.getOptionsFromUI();
+        assertNotNull(options);
+        assertEquals(AnalysisScope.PUBLIC, options.getScope());
     }
 }
