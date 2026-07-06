@@ -556,7 +556,10 @@ public class GhidraRevengService {
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
 
-        program.getBookmarkManager().removeBookmarks(REVENG_BOOKMARK_TYPE);
+        var bookmarkManager = program.getBookmarkManager();
+        if (bookmarkManager.getBookmarkType(REVENG_BOOKMARK_TYPE) != null) {
+            bookmarkManager.removeBookmarks(REVENG_BOOKMARK_TYPE);
+        }
         var revengTag = program.getFunctionManager().getFunctionTagManager().getFunctionTag(REVENGAI_FUNCTION_TAG);
         if (revengTag != null) {
             revengTag.delete();
