@@ -49,6 +49,9 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JComboBox<String> architectureComboBox;
     private boolean okPressed = false;
 
+    private boolean fileSizeOk = false;
+    private boolean tierResolved = false;
+
     private FunctionSelectionTableModel functionSelectionModel;
     private JTable functionSelectionTable;
     private JLabel includeCountLabel;
@@ -108,7 +111,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         scopePanel.setLayout(new BoxLayout(scopePanel, BoxLayout.X_AXIS));
         privateScope = new JRadioButton("Private to you");
         publicScope = new JRadioButton("Public access");
-        privateScope.setSelected(true);
+        publicScope.setSelected(true);
+        privateScope.setEnabled(false);
 
         var group = new ButtonGroup();
         group.add(privateScope);
@@ -227,7 +231,7 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         options.advancedAnalysis(advancedAnalysisCheckBox.isSelected());
         options.dynamicExecution(dynamicExecutionCheckBox.isSelected());
 
-        if (privateScope.isSelected()) {
+        if (privateScope.isSelected() && privateScope.isEnabled()) {
             options.scope(AnalysisScope.PRIVATE);
         } else {
             options.scope(AnalysisScope.PUBLIC);
@@ -468,18 +472,29 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     }
 
     private void handleUserResponse(@Nullable User user) {
-        if (user == null || user.getTier() != User.TierEnum.ENTHUSIAST) {
+        tierResolved = true;
+
+        if (user != null && user.getTier() != User.TierEnum.ENTHUSIAST) {
+            privateScope.setEnabled(true);
+            privateScope.setToolTipText(null);
+            privateScopePanel.setToolTipText(null);
+            privateScope.setSelected(true);
+            updateOkButtonState();
             return;
         }
 
-        String message = "<html>Private analyses are not available on the Enthusiast tier.<br>"
-                + "Upgrade your plan to create private analyses.</html>";
+        String message = user == null
+                ? "<html>Could not verify your subscription tier.<br>"
+                        + "Private analyses are unavailable until this can be confirmed.</html>"
+                : "<html>Private analyses are not available on the Enthusiast tier.<br>"
+                        + "Upgrade your plan to create private analyses.</html>";
 
         privateScope.setSelected(false);
         publicScope.setSelected(true);
         privateScope.setEnabled(false);
         privateScope.setToolTipText(message);
         privateScopePanel.setToolTipText(message);
+        updateOkButtonState();
     }
 
     private void handleConfigResponse(@Nullable ConfigResponse config) {
@@ -487,7 +502,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         if (config == null) {
             // Config fetch failed, allow upload attempt (server will reject if too large)
-            okButton.setEnabled(true);
+            fileSizeOk = true;
+            updateOkButtonState();
             return;
         }
 
@@ -499,7 +515,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         long fileSize = getProgramFileSize();
         if (fileSize < 0) {
             // Could not determine file size, allow upload attempt
-            okButton.setEnabled(true);
+            fileSizeOk = true;
+            updateOkButtonState();
             return;
         }
 
@@ -510,11 +527,16 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
                     "<html><center>File size (%s) exceeds<br>server limit (%s)</center></html>"
                             .formatted(fileSizeStr, maxSizeStr));
             fileSizeWarningLabel.setVisible(true);
-            okButton.setEnabled(false);
+            fileSizeOk = false;
         } else {
             fileSizeWarningLabel.setVisible(false);
-            okButton.setEnabled(true);
+            fileSizeOk = true;
         }
+        updateOkButtonState();
+    }
+
+    private void updateOkButtonState() {
+        okButton.setEnabled(fileSizeOk && tierResolved);
     }
 
     private long getProgramFileSize() {
