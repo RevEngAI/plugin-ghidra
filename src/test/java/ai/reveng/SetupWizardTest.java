@@ -61,6 +61,7 @@ public class SetupWizardTest extends RevEngMockableHeadedIntegrationTest {
         JButton validateButton = findButtonByText(dialog.getComponent(), "Validate Credentials");
         assertNotNull("Validate button should exist", validateButton);
         pressButton(validateButton);
+        waitForTasks();
         waitForSwing();
 
         // Finish button should now be enabled
@@ -112,6 +113,7 @@ public class SetupWizardTest extends RevEngMockableHeadedIntegrationTest {
         // Click Validate — should fail
         JButton validateButton = findButtonByText(dialog.getComponent(), "Validate Credentials");
         pressButton(validateButton);
+        waitForTasks();
         waitForSwing();
 
         // Finish button should remain disabled
@@ -151,6 +153,7 @@ public class SetupWizardTest extends RevEngMockableHeadedIntegrationTest {
         // Validate successfully
         JButton validateButton = findButtonByText(dialog.getComponent(), "Validate Credentials");
         pressButton(validateButton);
+        waitForTasks();
         waitForSwing();
 
         JButton finishButton = findButtonByText(dialog.getComponent(), "Finish");
@@ -164,6 +167,7 @@ public class SetupWizardTest extends RevEngMockableHeadedIntegrationTest {
 
         // Re-validate and finish
         pressButton(validateButton);
+        waitForTasks();
         waitForSwing();
         assertTrue("Finish should be re-enabled after re-validation", finishButton.isEnabled());
 

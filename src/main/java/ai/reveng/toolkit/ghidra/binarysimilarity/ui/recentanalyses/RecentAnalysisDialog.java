@@ -8,7 +8,10 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Msg;
 import ghidra.util.table.GhidraFilterTable;
+import ghidra.util.task.Task;
+import ghidra.util.task.TaskMonitor;
 
 import javax.swing.*;
 import java.awt.*;
@@ -64,8 +67,18 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
                         if ("Analysis ID".equals(columnName)) {
                             LegacyAnalysisResult result = recentAnalysesTable.getModel().getRowObject(row);
                             if (result != null) {
-                                var analysisID = ghidraRevengService.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-                                ghidraRevengService.openPortalFor(analysisID);
+                                var binaryID = result.binary_id();
+                                tool.execute(new Task("Open analysis in portal", false, false, false) {
+                                    @Override
+                                    public void run(TaskMonitor monitor) {
+                                        try {
+                                            var analysisID = ghidraRevengService.getApi().getAnalysisIDfromBinaryID(binaryID);
+                                            ghidraRevengService.openPortalFor(analysisID);
+                                        } catch (Exception ex) {
+                                            Msg.error(RecentAnalysisDialog.this, "Failed to open analysis in portal: " + ex.getMessage(), ex);
+                                        }
+                                    }
+                                }, 0);
                             }
                         }
                     }
@@ -97,15 +110,26 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
 
     private void pickAnalysis(LegacyAnalysisResult result) {
         var service = tool.getService(GhidraRevengService.class);
-        var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
-        var programWithID = service.registerAnalysisForProgram(program, analysisID);
-        tool.firePluginEvent(
-                new RevEngAIAnalysisStatusChangedEvent(
-                        "Recent Analysis Dialog",
-                        programWithID,
-                        result.status()
-                )
-        );
-        close();
+        tool.execute(new Task("Attach to analysis", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
+                    var programWithID = service.registerAnalysisForProgram(program, analysisID);
+                    SwingUtilities.invokeLater(() -> {
+                        tool.firePluginEvent(
+                                new RevEngAIAnalysisStatusChangedEvent(
+                                        "Recent Analysis Dialog",
+                                        programWithID,
+                                        result.status()
+                                )
+                        );
+                        close();
+                    });
+                } catch (Exception ex) {
+                    Msg.error(RecentAnalysisDialog.this, "Failed to attach to analysis: " + ex.getMessage(), ex);
+                }
+            }
+        }, 0);
     }
 }

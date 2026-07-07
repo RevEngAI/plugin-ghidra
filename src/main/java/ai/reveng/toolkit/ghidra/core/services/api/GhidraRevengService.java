@@ -206,23 +206,7 @@ public class GhidraRevengService {
         if (bid == ReaiPluginPackage.INVALID_ANALYSIS_ID) {
             return Optional.empty();
         }
-        var analysisID = new TypedApiInterface.AnalysisID((int) bid);
-        if (!statusCache.containsKey(analysisID)) {
-            // Check that it's really valid in the context of the currently configured API
-            try {
-                var status = api.status(analysisID);
-                statusCache.put(analysisID, status);
-            } catch (APIAuthenticationException | ApiException e) {
-                Msg.showError(this, null, "Invalid Analysis ID",
-                        ("The Analysis ID %s stored in the program options is invalid for the currently configured RevEng.AI server %s. "
-                                + "This could be an intermittent error, or you switched the servers")
-                                .formatted(analysisID, this.apiInfo.hostURI()), e);
-                return Optional.empty();
-            }
-            // Now it's certain that it is a valid binary ID
-        }
-
-        return Optional.of(analysisID);
+        return Optional.of(new TypedApiInterface.AnalysisID((int) bid));
     }
 
     @Deprecated
@@ -241,7 +225,7 @@ public class GhidraRevengService {
         try {
             status = api.status(binID);
         } catch (APIAuthenticationException | ApiException e) {
-            Msg.showError(this, null, "Invalid Binary ID",
+            Msg.error(this,
                     ("The Binary ID %s stored in the program options is invalid for the currently configured RevEng.AI server %s. "
                             + "This could be an intermittent error, or you switched servers")
                             .formatted(binID, this.apiInfo.hostURI()), e);

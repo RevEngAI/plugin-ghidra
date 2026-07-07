@@ -108,8 +108,12 @@ public class ApplyMatchCmd implements Command<Program> {
     public void applyWithTransaction() {
         var program = this.analyzedProgram.program();
         var tID = program.startTransaction("RevEng.AI: Apply Match");
-        var status = applyTo(program);
-        program.endTransaction(tID, status);
+        boolean status = false;
+        try {
+            status = applyTo(program);
+        } finally {
+            program.endTransaction(tID, status);
+        }
     }
 
     private Namespace getRevEngAINameSpace() {

@@ -13,6 +13,9 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import com.google.common.collect.BiMap;
 import ghidra.program.model.listing.Function;
+import ghidra.util.task.Task;
+import ghidra.util.task.TaskBuilder;
+import ghidra.util.task.TaskMonitor;
 import ghidra.util.task.TaskMonitorComponent;
 import ghidra.util.Msg;
 import resources.ResourceManager;
@@ -893,8 +896,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
 
     protected void onRenameAllButtonClicked() {
-        batchRenameFunctions(functionMatchResults);
-        importFunctionNames(functionMatchResults);
+        renameInBackground(functionMatchResults);
     }
 
     protected void onRenameSelectedButtonClicked() {
@@ -916,8 +918,18 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             }
         }
 
-        batchRenameFunctions(selectedMatches);
-        importFunctionNames(selectedMatches);
+        renameInBackground(selectedMatches);
+    }
+
+    private void renameInBackground(List<GhidraFunctionMatchWithSignature> matches) {
+        var task = new Task("Applying Renames", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                batchRenameFunctions(matches);
+                importFunctionNames(matches);
+            }
+        };
+        TaskBuilder.withTask(task).launchInBackground(taskMonitorComponent);
     }
 
     protected void batchRenameFunctions(List<GhidraFunctionMatchWithSignature> functionMatches) {
@@ -925,7 +937,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             revengService.batchRenamingGhidraMatchesWithSignatures(functionMatches);
         } catch (Exception e) {
             Msg.error(this, "Failed to rename functions: " + e.getMessage(), e);
-            showError("Failed to rename functions: " + e.getMessage());
+            SwingUtilities.invokeLater(() -> showError("Failed to rename functions: " + e.getMessage()));
         }
     }
 

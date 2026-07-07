@@ -186,9 +186,93 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         dialog.setValue(reason);
         dialog.close();
         waitForSwing();
+        waitForTasks();
         assertEquals("NEGATIVE", ratingsAPI.lastFeedback);
         assertEquals(reason, ratingsAPI.lastReason);
 
+    }
+
+    @Test
+    public void testFeedbackDoesNotBlockSwingThread() throws Exception {
+        var tool = env.getTool();
+
+        var ratingsAPI = new BlockingRatingsAPI();
+        var service = addMockedService(tool, ratingsAPI);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
+
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+        waitForSwing();
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+        setInstanceField("function", aiDecompComponent, func1);
+
+        var positiveFeedbackAction = getLocalAction(aiDecompComponent, "Positive Feedback Action");
+        performAction(positiveFeedbackAction);
+
+        assertTrue("Feedback send should run off the Swing thread",
+                ratingsAPI.ratingStarted.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        assertNull("Rating must not be recorded while the network call is blocked", ratingsAPI.lastFeedback);
+
+        ratingsAPI.blockRating.countDown();
+        waitForTasks();
+        assertEquals("POSITIVE", ratingsAPI.lastFeedback);
+    }
+
+    @Test
+    public void testDecompilationFailureIsShownInWindow() throws Exception {
+        var tool = env.getTool();
+
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 10));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                throw new RuntimeException("decompilation backend unavailable");
+            }
+        });
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+
+        var action = getAction(tool, "AI Decompilation");
+        var context = new ProgramLocationActionContext(
+                null,
+                programWithID.program(),
+                new ProgramLocation(programWithID.program(), func1.getEntryPoint()),
+                null, null);
+        performAction(action, context, true);
+        waitForTasks();
+        waitForSwing();
+
+        javax.swing.JEditorPane descriptionArea =
+                (javax.swing.JEditorPane) getInstanceField("descriptionArea", aiDecompComponent);
+        assertTrue("decompilation failure should be surfaced in the window, was: " + descriptionArea.getText(),
+                descriptionArea.getText().contains("AI Decompilation failed"));
     }
 
     static class RatingsAPI extends UnimplementedAPI {
@@ -247,6 +331,22 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         public void aiDecompRating(FunctionID functionID, String rating, String reason) {
             lastFeedback = rating;
             lastReason = reason;
+        }
+    }
+
+    static class BlockingRatingsAPI extends RatingsAPI {
+        final java.util.concurrent.CountDownLatch ratingStarted = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch blockRating = new java.util.concurrent.CountDownLatch(1);
+
+        @Override
+        public void aiDecompRating(FunctionID functionID, String rating, String reason) {
+            ratingStarted.countDown();
+            try {
+                blockRating.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            super.aiDecompRating(functionID, rating, reason);
         }
     }
 }
