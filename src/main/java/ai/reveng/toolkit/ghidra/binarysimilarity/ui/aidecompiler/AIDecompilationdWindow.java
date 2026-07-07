@@ -57,23 +57,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
             @Override
             public void actionPerformed(ActionContext context) {
-                if (function != null) {
-                    var service = tool.getService(GhidraRevengService.class);
-                    var analyzedProgram = service.getAnalysedProgram(function.getProgram());
-                    if (analyzedProgram.isEmpty()) {
-                        Msg.error(this, "Failed to send positive feedback: Program is not known to RevEng.AI");
-                        return;
-                    }
-                    var fID = analyzedProgram.get().getIDForFunction(function);
-                    fID.ifPresent(id -> {
-                        try {
-                            service.getApi().aiDecompRating(id.functionID(), "POSITIVE", "");
-                        } catch (ApiException e) {
-                            // Fail silently because this is not a critical feature
-                            Msg.error(this, "Failed to send positive feedback for function %s: %s".formatted(function.getName(), e.getMessage()));
-                        }
-                    });
-                }
+                sendFeedbackInBackground(function, "POSITIVE", "");
             }
 
             @Override
@@ -93,28 +77,14 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             }
             @Override
             public void actionPerformed(ActionContext context) {
-                // Spawn textbox to enter reason for negative feedback
-
+                final Function target = function;
+                if (target == null) {
+                    return;
+                }
                 var dialog = new InputDialog("Negative Feedback", "Please provide details about what was wrong with the decompilation:", "");
                 tool.showDialog(dialog);
                 if (!dialog.isCanceled()) {
-                    if (function != null) {
-                        var service = tool.getService(GhidraRevengService.class);
-                        var programWithID = service.getAnalysedProgram(function.getProgram());
-                        if (programWithID.isEmpty()) {
-                            Msg.error(this, "Failed to send negative feedback: Program is not known to RevEng.AI");
-                            return;
-                        }
-                        var fID = programWithID.get().getIDForFunction(function);
-                        fID.ifPresent(id -> {
-                            try {
-                                service.getApi().aiDecompRating(id.functionID(), "NEGATIVE", dialog.getValue());
-                            } catch (ApiException e) {
-                                // Fail silently because this is not a critical feature
-                                Msg.error(this, "Failed to send negative feedback for function %s: %s".formatted(function.getName(), e.getMessage()));
-                            }
-                        });
-                    }
+                    sendFeedbackInBackground(target, "NEGATIVE", dialog.getValue());
                 }
             }
 
@@ -124,6 +94,37 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 return super.isEnabled();
             }
         });
+    }
+
+    private void sendFeedbackInBackground(Function target, String rating, String reason) {
+        if (target == null) {
+            return;
+        }
+        final String detail = reason == null ? "" : reason;
+        tool.execute(new Task("Send AI Decompilation Feedback", false, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                var service = tool.getService(GhidraRevengService.class);
+                var analyzedProgram = service.getAnalysedProgram(target.getProgram());
+                if (analyzedProgram.isEmpty()) {
+                    Msg.error(AIDecompilationdWindow.this,
+                            "Failed to send %s feedback: Program is not known to RevEng.AI".formatted(rating));
+                    return;
+                }
+                var fID = analyzedProgram.get().getIDForFunction(target);
+                if (fID.isEmpty()) {
+                    Msg.error(AIDecompilationdWindow.this,
+                            "Failed to send %s feedback: function %s not known to RevEng.AI".formatted(rating, target.getName()));
+                    return;
+                }
+                try {
+                    service.getApi().aiDecompRating(fID.get().functionID(), rating, detail);
+                } catch (ApiException e) {
+                    Msg.error(AIDecompilationdWindow.this,
+                            "Failed to send %s feedback for function %s: %s".formatted(rating, target.getName(), e.getMessage()));
+                }
+            }
+        }, 0);
     }
 
 
@@ -317,7 +318,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         var newFuncLocation = functionMgr.getFunctionContaining(loc.getAddress());
 
         // If we changed to a different function, we want to clear the output of the old function
-        if (function != null && newFuncLocation != function) {
+        if (function != null && !isSameFunction(newFuncLocation, function)) {
             clear();
         }
 
@@ -329,7 +330,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
     void newStatusForFunction(Function function, AIDecompilationStatus status) {
         cache.put(function, status);
-        if (function == this.function) {
+        if (isCurrentFunction(function)) {
             SwingUtilities.invokeLater(() ->
                     setDisplayedValuesBasedOnStatus(function, status)
             );
@@ -352,6 +353,28 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 s.status() == DecompilationData.StatusEnum.PENDING
                         || s.status() == DecompilationData.StatusEnum.RUNNING);
     }
+
+    private static boolean isSameFunction(Function a, Function b) {
+        return a != null && b != null && a.getEntryPoint().equals(b.getEntryPoint());
+    }
+
+    private boolean isCurrentFunction(Function candidate) {
+        return isSameFunction(candidate, this.function);
+    }
+
+    private void reportDecompFailure(Function failedFunction, Exception e) {
+        var logger = tool.getService(ReaiLoggingService.class);
+        logger.error("AI Decompilation failed for function %s: %s".formatted(failedFunction.getName(), e.getMessage()));
+        Msg.error(this, "AI Decompilation failed for function %s".formatted(failedFunction.getName()), e);
+        SwingUtilities.invokeLater(() -> {
+            if (isCurrentFunction(failedFunction)) {
+                descriptionArea.setText("AI Decompilation failed: " + e.getMessage());
+                if (!hasPendingDecompilations()) {
+                    taskMonitorComponent.setVisible(false);
+                }
+            }
+        });
+    }
     class AIDecompTask extends Task {
 
         private final GhidraRevengService service;
@@ -365,14 +388,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
         @Override
         public void run(TaskMonitor monitor) throws CancelledException {
-            var fID = functionWithID.functionID();
-            // Check if there is an existing process already, because the trigger API will fail with 400 if there is
-            if (service.getApi().pollAIDecompileStatus(fID).status() == DecompilationData.StatusEnum.UNINITIALISED) {
-                // Trigger the decompilation
-                service.getApi().triggerAIDecompilationForFunctionID(fID);
+            try {
+                var fID = functionWithID.functionID();
+                // Check if there is an existing process already, because the trigger API will fail with 400 if there is
+                if (service.getApi().pollAIDecompileStatus(fID).status() == DecompilationData.StatusEnum.UNINITIALISED) {
+                    // Trigger the decompilation
+                    service.getApi().triggerAIDecompilationForFunctionID(fID);
+                }
+                waitForDecomp(fID, monitor);
+                // TODO: Inform the component that something is finished
+            } catch (CancelledException e) {
+                throw e;
+            } catch (Exception e) {
+                reportDecompFailure(functionWithID.function(), e);
             }
-            waitForDecomp(fID, monitor);
-            // TODO: Inform the component that something is finished
         }
 
 

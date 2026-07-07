@@ -134,7 +134,17 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
                 var match = getSelectedMatch();
                 if (match != null) {
                     var service = tool.getService(GhidraRevengService.class);
-                    service.openFunctionInPortal(match.functionMatch().nearest_neighbor_id());
+                    var neighborId = match.functionMatch().nearest_neighbor_id();
+                    tool.execute(new Task("View Match in Portal", false, false, false) {
+                        @Override
+                        public void run(TaskMonitor monitor) {
+                            try {
+                                service.openFunctionInPortal(neighborId);
+                            } catch (Exception e) {
+                                Msg.error(SimilarFunctionsWindow.this, "Failed to open match in portal: " + e.getMessage(), e);
+                            }
+                        }
+                    }, 0);
                 }
             }
 
@@ -158,8 +168,14 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
                 var match = getSelectedMatch();
                 if (match != null && analyzedProgram != null) {
                     var service = tool.getService(GhidraRevengService.class);
-                    var cmd = new ApplyMatchCmd(service, analyzedProgram, match, true);
-                    cmd.applyWithTransaction();
+                    var program = analyzedProgram;
+                    tool.execute(new Task("Apply Match", true, false, false) {
+                        @Override
+                        public void run(TaskMonitor monitor) {
+                            var cmd = new ApplyMatchCmd(service, program, match, true);
+                            cmd.applyWithTransaction();
+                        }
+                    }, 0);
                 }
             }
 

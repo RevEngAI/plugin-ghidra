@@ -95,6 +95,10 @@ public class TypedApiImplementation implements TypedApiInterface {
         // Set withResponseBody to true if debugging issues with the API to see the full response body
         apiClient.setHttpClient(apiClient.getHttpClient().newBuilder().addInterceptor(ghidraLogger(false)).build());
 
+        apiClient.setConnectTimeout(5000);
+        apiClient.setReadTimeout(15000);
+        apiClient.setWriteTimeout(15000);
+
         ApiKeyAuth APIKey = (ApiKeyAuth) apiClient.getAuthentication("APIKey");
         APIKey.setApiKey(apiKey);
 
@@ -532,6 +536,11 @@ public class TypedApiImplementation implements TypedApiInterface {
                     inlineCommentsStatus,
                     inlineComments);
         } catch (ApiException e) {
+            if (e.getCode() == 404) {
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.UNINITIALISED,
+                        null, null, null, null, null, List.of());
+            }
             throw new RuntimeException("Failed to poll AI decompilation status", e);
         }
     }

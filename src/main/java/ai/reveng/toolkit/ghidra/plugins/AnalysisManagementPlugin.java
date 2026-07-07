@@ -39,8 +39,10 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.util.Msg;
+import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
 import ghidra.util.task.TaskMonitor;
+import javax.swing.SwingUtilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -237,12 +239,23 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.onAction(context -> {
 					var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
 					var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
-					var logs = revengService.getAnalysisLog(knownProgram.analysisID());
-					analysisLogComponent.setLogs(logs);
-					AnalysisStatus status = revengService.status(knownProgram);
-                    tool.getService(ReaiLoggingService.class).info("Check Status: " + status);
-					Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Check status",
-							"Status of analysis " + knownProgram + ": " + status);
+					tool.execute(new Task("Check status", true, false, false) {
+						@Override
+						public void run(TaskMonitor monitor) {
+							try {
+								var logs = revengService.getAnalysisLog(knownProgram.analysisID());
+								AnalysisStatus status = revengService.status(knownProgram);
+								tool.getService(ReaiLoggingService.class).info("Check Status: " + status);
+								SwingUtilities.invokeLater(() -> {
+									analysisLogComponent.setLogs(logs);
+									Msg.showInfo(AnalysisManagementPlugin.this, null, ReaiPluginPackage.WINDOW_PREFIX + "Check status",
+											"Status of analysis " + knownProgram + ": " + status);
+								});
+							} catch (Exception e) {
+								Msg.error(AnalysisManagementPlugin.this, "Failed to check analysis status: " + e.getMessage(), e);
+							}
+						}
+					}, 0);
 				})
 				.menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "Check status" })
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")

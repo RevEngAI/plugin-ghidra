@@ -12,6 +12,8 @@ import docking.wizard.IllegalPanelStateException;
 import docking.wizard.WizardPanelDisplayability;
 import docking.wizard.WizardState;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.util.task.Task;
+import ghidra.util.task.TaskMonitor;
 import java.awt.BorderLayout;
 import java.awt.GridBagLayout;
 import java.awt.GridBagConstraints;
@@ -30,10 +32,12 @@ public class UserCredentialsPanel extends AbstractMageJPanel<SetupWizardStateKey
 	private CredentialValidator credentialValidator = CredentialValidator.defaultValidator();
 
     private ReaiLoggingService loggingService;
+    private final PluginTool tool;
 
 	public UserCredentialsPanel(PluginTool tool) {
 		setLayout(new BorderLayout(0, 0));
 
+		this.tool = tool;
         loggingService = tool.getService(ReaiLoggingService.class);
 
 		JPanel userDetailsPanel = new JPanel(new GridBagLayout());
@@ -162,14 +166,26 @@ public class UserCredentialsPanel extends AbstractMageJPanel<SetupWizardStateKey
 		JButton runTestsButton = new JButton("Validate Credentials");
 		runTestsButton.addActionListener(e -> {
 			var apiInfo = new ApiInfo(tfApiHostname.getText(), tfPortalHostname.getText(), tfApiKey.getText());
-			try {
-				credentialValidator.validate(apiInfo);
-				credentialsValidated = true;
-				notifyListenersOfValidityChanged();
-			} catch (InvalidAPIInfoException ex) {
-				credentialsValidated = false;
-				notifyListenersOfStatusMessage("Problem with user info:\n" + ex.getMessage());
-			}
+			runTestsButton.setEnabled(false);
+			tool.execute(new Task("Validate Credentials", false, false, false) {
+				@Override
+				public void run(TaskMonitor monitor) {
+					try {
+						credentialValidator.validate(apiInfo);
+						SwingUtilities.invokeLater(() -> {
+							credentialsValidated = true;
+							notifyListenersOfValidityChanged();
+							runTestsButton.setEnabled(true);
+						});
+					} catch (InvalidAPIInfoException ex) {
+						SwingUtilities.invokeLater(() -> {
+							credentialsValidated = false;
+							notifyListenersOfStatusMessage("Problem with user info:\n" + ex.getMessage());
+							runTestsButton.setEnabled(true);
+						});
+					}
+				}
+			}, 0);
 		});
 		userDetailsPanel.add(runTestsButton, gbc);
 	}

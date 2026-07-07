@@ -38,6 +38,8 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.Msg;
+import ghidra.util.task.Task;
+import ghidra.util.task.TaskMonitor;
 
 import java.util.Arrays;
 
@@ -231,7 +233,17 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         return;
                     }
 
-                    apiService.openFunctionInPortal(functionWithID.get().functionID());
+                    var functionID = functionWithID.get().functionID();
+                    tool.execute(new Task("View function in portal", false, false, false) {
+                        @Override
+                        public void run(TaskMonitor monitor) {
+                            try {
+                                apiService.openFunctionInPortal(functionID);
+                            } catch (Exception e) {
+                                Msg.error(BinarySimilarityPlugin.this, "Failed to open function in portal: " + e.getMessage(), e);
+                            }
+                        }
+                    }, 0);
                 })
                 .popupMenuPath(new String[] { "View function in portal" })
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)
