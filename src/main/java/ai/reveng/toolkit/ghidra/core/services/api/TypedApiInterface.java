@@ -165,6 +165,37 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("triggerAIDecompilationSummary not implemented yet");
     }
 
+    /**
+     * Tokenised view of an AI decompilation. The tokenised text mirrors the human-readable
+     * decompilation but with renameable identifiers replaced by stable tokens, and carries the
+     * mapping used to resolve a displayed name back to the token to override.
+     */
+    default TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAIDecompilationTokenised not implemented yet");
+    }
+
+    /**
+     * Override the display names of variables/types keyed by their tokens. The server re-renders
+     * the decompilation with the overrides applied.
+     */
+    default UpsertOverridesData applyAIDecompilationOverrides(FunctionID functionID, java.util.Map<String, String> overrides) throws ApiException {
+        throw new UnsupportedOperationException("applyAIDecompilationOverrides not implemented yet");
+    }
+
+    /**
+     * Add or update the inline comment on a 1-indexed source line of the AI decompilation.
+     */
+    default void setAIDecompilationInlineComment(FunctionID functionID, long line, String comment) throws ApiException {
+        throw new UnsupportedOperationException("setAIDecompilationInlineComment not implemented yet");
+    }
+
+    /**
+     * Remove the inline comment on a 1-indexed source line of the AI decompilation.
+     */
+    default void deleteAIDecompilationInlineComment(FunctionID functionID, long line) throws ApiException {
+        throw new UnsupportedOperationException("deleteAIDecompilationInlineComment not implemented yet");
+    }
+
     void renameFunction(FunctionID id, String newName, String newNameMangled);
 
     default FunctionNameScore getNameScore(FunctionMatch match) {

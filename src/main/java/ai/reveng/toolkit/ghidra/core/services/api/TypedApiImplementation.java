@@ -576,6 +576,32 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 
+    @Override
+    public TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
+        // GET /v3/functions/{function_id}/ai-decompilation/tokenised
+        return functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
+    }
+
+    @Override
+    public UpsertOverridesData applyAIDecompilationOverrides(FunctionID functionID, java.util.Map<String, String> overrides) throws ApiException {
+        // PUT /v3/functions/{function_id}/ai-decompilation/overrides
+        var body = new UpsertOverridesInputBody().overrides(overrides);
+        return functionsAiDecompilationApi.upsertAiDecompilationOverrides(functionID.value(), body);
+    }
+
+    @Override
+    public void setAIDecompilationInlineComment(FunctionID functionID, long line, String comment) throws ApiException {
+        // PATCH /v3/functions/{function_id}/ai-decompilation/inline-comments
+        var body = new PatchCommentBody().comment(comment).line(line);
+        functionsAiDecompilationApi.patchAiDecompilationInlineComment(functionID.value(), body);
+    }
+
+    @Override
+    public void deleteAIDecompilationInlineComment(FunctionID functionID, long line) throws ApiException {
+        // DELETE /v3/functions/{function_id}/ai-decompilation/inline-comments/{line}
+        functionsAiDecompilationApi.deleteAiDecompilationInlineComment(functionID.value(), line);
+    }
+
     private static String describeApiException(ApiException e) {
         // The SDK's ApiException carries the HTTP status and response body separately from the message;
         // surface both so callers logging only getMessage() can still diagnose server-side failures.

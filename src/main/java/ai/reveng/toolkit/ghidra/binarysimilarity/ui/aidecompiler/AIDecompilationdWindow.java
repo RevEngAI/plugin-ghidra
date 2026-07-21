@@ -1,11 +1,15 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.model.AIDecompFunctionMapping;
 import ai.reveng.model.DecompilationData;
 import ai.reveng.model.ProgressMessage;
+import ai.reveng.model.ReplacementValue;
+import ai.reveng.model.TokenisedData;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
@@ -26,13 +30,19 @@ import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.Utilities;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
@@ -47,6 +57,18 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     private Function function;
     private TaskMonitorComponent taskMonitorComponent;
     private final Map<Function, AIDecompilationStatus> cache = new java.util.HashMap<>();
+
+    /// Function IDs with a decompilation task currently running. Several functions can decompile
+    /// concurrently in the background; this guards against launching a second task for a function
+    /// that is already in flight (which would double-POST the trigger).
+    private final java.util.Set<Long> inFlightDecompilations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /// Line map for the currently displayed decompilation, used to translate a click position in the
+    /// text area back to a source line/identifier for rename and comment editing. Null while no
+    /// completed decompilation is shown.
+    private RenderModel currentRenderModel;
+
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w*");
 
 
     public AIDecompilationdWindow(PluginTool tool, String owner) {
@@ -97,6 +119,18 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             public boolean isEnabled() {
                 // TODO: Only enable it if there is a decompilation to give feedback on
                 return super.isEnabled();
+            }
+        });
+
+        addLocalAction(new DockingAction("Refresh AI Decompilation", getName()) {
+            {
+                setToolBarData(new ToolBarData(new GIcon("icon.refresh"), null));
+                setDescription("Re-pull the AI decompilation for the current function from RevEng.AI");
+            }
+
+            @Override
+            public void actionPerformed(ActionContext context) {
+                refreshCurrentFunction();
             }
         });
     }
@@ -169,6 +203,33 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         textArea = new RSyntaxTextArea(20, 60);
         textArea.setSyntaxEditingStyle(SyntaxConstants.SYNTAX_STYLE_C);
         textArea.setEditable(false);
+        // The view stays read-only; edits are driven through double-click (rename) and the
+        // right-click context menu (comments) so they can be synced back to RevEng.AI.
+        textArea.setPopupMenu(null);
+        textArea.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                    handleDoubleClick(e.getPoint());
+                }
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShowPopup(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShowPopup(e);
+            }
+
+            private void maybeShowPopup(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    showContextMenu(e.getPoint());
+                }
+            }
+        });
         sp = new RTextScrollPane(textArea);
 
         component.add(sp, BorderLayout.CENTER);
@@ -215,7 +276,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         this.function = function;
         switch (status.status()) {
             case COMPLETED -> {
-                setCode(withInlineComments(status.decompilation(), status.inlineComments()));
+                setCode(renderWithMap(status.decompilation(), status.inlineComments()));
                 descriptionArea.setText("<html>%s</html>".formatted(status.summary() == null ? "" : status.summary()));
 
                 String predictedName = status.predictedFunctionName();
@@ -227,11 +288,14 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 }
             }
             case FAILED -> {
-                setCode("");
-                descriptionArea.setText("Decompilation failed");
+                currentRenderModel = null;
+                String detail = status.decompilation();
+                setCode(detail != null && !detail.isBlank() ? detail : "");
+                descriptionArea.setText("AI Decompilation failed");
                 predictedNamePanel.setVisible(false);
             }
             case UNINITIALISED, PENDING, RUNNING -> {
+                currentRenderModel = null;
                 WorkflowProgress progress = status.decompilationProgress();
                 setCode(progress != null ? renderProgress(progress) : "");
                 descriptionArea.setText("Decompiling %s ...".formatted(function.getName()));
@@ -296,36 +360,53 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     /**
-     * Splice inline comments into the decompilation as `// comment` lines above each
-     * targeted line (1-indexed). Preserves the leading indentation of the target line.
+     * Render the decompilation into displayable text while recording the mapping from each display
+     * line back to its 1-indexed source line. Inline comments are spliced in as `// comment` lines
+     * above the line they annotate, preserving that line's indentation. Mirrors the IDA plugin's
+     * {@code render_view_with_map}.
      */
-    private static String withInlineComments(String decompilation, java.util.List<AIDecompilationStatus.InlineCommentEntry> comments) {
-        if (decompilation == null || decompilation.isEmpty() || comments == null || comments.isEmpty()) {
-            return decompilation == null ? "" : decompilation;
-        }
-        var byLine = new java.util.HashMap<Long, String>();
-        for (var entry : comments) {
-            byLine.put(entry.line(), entry.comment());
-        }
-        String[] lines = decompilation.split("\n", -1);
-        var out = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            long lineNumber = i + 1L;
-            String comment = byLine.get(lineNumber);
-            if (comment != null) {
-                int indentEnd = 0;
-                while (indentEnd < lines[i].length() && Character.isWhitespace(lines[i].charAt(indentEnd))) {
-                    indentEnd++;
+    private String renderWithMap(String decompilation, List<AIDecompilationStatus.InlineCommentEntry> comments) {
+        String[] codeLines = (decompilation == null ? "" : decompilation).split("\n", -1);
+        var commentBySource = new java.util.HashMap<Long, String>();
+        if (comments != null) {
+            for (var entry : comments) {
+                if (entry.line() >= 1 && entry.line() <= codeLines.length) {
+                    commentBySource.put(entry.line(), entry.comment());
                 }
-                String indent = lines[i].substring(0, indentEnd);
-                out.append(indent).append("// ").append(comment).append('\n');
-            }
-            out.append(lines[i]);
-            if (i < lines.length - 1) {
-                out.append('\n');
             }
         }
-        return out.toString();
+
+        var displayLines = new ArrayList<String>();
+        var displaySource = new ArrayList<Integer>();
+        var displayIsCode = new ArrayList<Boolean>();
+
+        for (int idx = 0; idx < codeLines.length; idx++) {
+            int sourceLine = idx + 1;
+            String code = codeLines[idx];
+            String comment = commentBySource.get((long) sourceLine);
+            if (comment != null) {
+                String indent = leadingWhitespace(code);
+                for (String part : comment.split("\n", -1)) {
+                    displayLines.add(indent + "// " + part);
+                    displaySource.add(sourceLine);
+                    displayIsCode.add(false);
+                }
+            }
+            displayLines.add(code);
+            displaySource.add(sourceLine);
+            displayIsCode.add(true);
+        }
+
+        currentRenderModel = new RenderModel(List.of(codeLines), commentBySource, displaySource, displayIsCode);
+        return String.join("\n", displayLines);
+    }
+
+    private static String leadingWhitespace(String line) {
+        int end = 0;
+        while (end < line.length() && Character.isWhitespace(line.charAt(end))) {
+            end++;
+        }
+        return line.substring(0, end);
     }
 
     private void setCode(String code) {
@@ -335,6 +416,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
     private void clear() {
         this.function = null;
+        this.currentRenderModel = null;
         setCode("");
         descriptionArea.setText("");
         predictedNamePanel.setVisible(false);
@@ -350,16 +432,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
             // Only start decompilation if the window is visible and the status of the analysis is complete.
             if (this.isVisible()) {
-                taskMonitorComponent.setVisible(true);
                 // Replace the initial "no function selected" placeholder before the first poll lands.
                 this.function = function.function();
                 setCode("");
                 descriptionArea.setText("Decompiling %s ...".formatted(function.function().getName()));
                 predictedNamePanel.setVisible(false);
-                // Start a new background task to decompile the function
-                var task = new AIDecompTask(tool, function);
-                var builder = TaskBuilder.withTask(task);
-                builder.launchInBackground(taskMonitorComponent);
+                // Start a background task unless this function is already being decompiled. Multiple
+                // functions decompile in parallel in the background; a running task updates the view
+                // when it polls, so revisiting an in-flight function just shows this placeholder.
+                if (inFlightDecompilations.add(function.functionID().value())) {
+                    taskMonitorComponent.setVisible(true);
+                    var task = new AIDecompTask(tool, function);
+                    var builder = TaskBuilder.withTask(task);
+                    builder.launchInBackground(taskMonitorComponent);
+                }
             }
         }
     }
@@ -383,6 +469,327 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         function = newFuncLocation;
         var functionWithID = analyzedProgram.get().getIDForFunction(function);
         functionWithID.ifPresent(this::refresh);
+    }
+
+    /**
+     * Evict the current function from the local cache and re-pull its decompilation from the portal.
+     * The plugin never re-fetches automatically once a result is cached, so this is the only way to
+     * pick up changes made elsewhere.
+     */
+    private void refreshCurrentFunction() {
+        Function target = this.function;
+        if (target == null) {
+            return;
+        }
+        cache.remove(target);
+        currentRenderModel = null;
+        var service = tool.getService(GhidraRevengService.class);
+        var analysed = service.getAnalysedProgram(target.getProgram());
+        if (analysed.isEmpty()) {
+            return;
+        }
+        analysed.get().getIDForFunction(target).ifPresent(this::refresh);
+    }
+
+    // --- Rename / comment editing -------------------------------------------------------------
+
+    private void handleDoubleClick(Point point) {
+        try {
+            int offset = textArea.viewToModel2D(point);
+            if (offset < 0) {
+                return;
+            }
+            int displayLine = textArea.getLineOfOffset(offset);
+            String word = wordAtOffset(offset);
+            if (word != null && !word.isEmpty()) {
+                handleRename(displayLine, word);
+            }
+        } catch (BadLocationException e) {
+            // Click outside of any text — nothing to do.
+        }
+    }
+
+    private void showContextMenu(Point point) {
+        try {
+            int offset = textArea.viewToModel2D(point);
+            if (offset < 0) {
+                return;
+            }
+            int displayLine = textArea.getLineOfOffset(offset);
+            String word = wordAtOffset(offset);
+
+            JPopupMenu menu = new JPopupMenu();
+            if (word != null && !word.isEmpty()
+                    && currentRenderModel != null && currentRenderModel.isCodeLine(displayLine)) {
+                JMenuItem rename = new JMenuItem("Rename '%s'…".formatted(word));
+                rename.addActionListener(a -> handleRename(displayLine, word));
+                menu.add(rename);
+            }
+            JMenuItem editComment = new JMenuItem("Add / edit comment…");
+            editComment.addActionListener(a -> handleEditComment(displayLine));
+            menu.add(editComment);
+            JMenuItem removeComment = new JMenuItem("Remove comment");
+            removeComment.addActionListener(a -> handleRemoveComment(displayLine));
+            menu.add(removeComment);
+
+            if (menu.getComponentCount() > 0) {
+                menu.show(textArea, point.x, point.y);
+            }
+        } catch (BadLocationException e) {
+            // Click outside of any text — nothing to do.
+        }
+    }
+
+    private String wordAtOffset(int offset) throws BadLocationException {
+        int start = Utilities.getWordStart(textArea, offset);
+        int end = Utilities.getWordEnd(textArea, offset);
+        String word = textArea.getText(start, end - start);
+        return IDENTIFIER.matcher(word).matches() ? word : null;
+    }
+
+    private void handleRename(int displayLine, String word) {
+        RenderModel model = currentRenderModel;
+        Function target = this.function;
+        if (model == null || target == null || word == null || word.isBlank()) {
+            return;
+        }
+        if (!model.isCodeLine(displayLine)) {
+            return;
+        }
+        Integer sourceLine = model.sourceLine(displayLine);
+        if (sourceLine == null) {
+            return;
+        }
+        String codeLine = model.codeLines.get(sourceLine - 1);
+        int identIndex = indexOfIdentifier(codeLine, word);
+        if (identIndex < 0) {
+            return;
+        }
+        FunctionID functionID = resolveFunctionId(target);
+        if (functionID == null) {
+            return;
+        }
+
+        var dialog = new InputDialog("Rename", "Rename '%s' to:".formatted(word), word);
+        tool.showDialog(dialog);
+        if (dialog.isCanceled()) {
+            return;
+        }
+        String newName = dialog.getValue();
+        if (newName == null || newName.isBlank() || newName.equals(word)) {
+            return;
+        }
+
+        final int sourceIndex = sourceLine - 1;
+        var service = tool.getService(GhidraRevengService.class);
+        tool.execute(new Task("Rename AI decompilation identifier", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    TokenisedData tokenised = service.getApi().getAIDecompilationTokenised(functionID);
+                    String token = resolveToken(tokenised, sourceIndex, identIndex, word);
+                    if (token == null) {
+                        SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
+                                "Rename", "'%s' is not a renameable variable or type.".formatted(word)));
+                        return;
+                    }
+                    service.getApi().applyAIDecompilationOverrides(functionID, Map.of(token, newName));
+                    newStatusForFunction(target, service.getApi().pollAIDecompileStatus(functionID));
+                } catch (Exception e) {
+                    reportEditError("Rename", e);
+                }
+            }
+        }, 0);
+    }
+
+    private void handleEditComment(int displayLine) {
+        RenderModel model = currentRenderModel;
+        Function target = this.function;
+        if (model == null || target == null) {
+            return;
+        }
+        Integer sourceLine = model.sourceLine(displayLine);
+        if (sourceLine == null) {
+            return;
+        }
+        FunctionID functionID = resolveFunctionId(target);
+        if (functionID == null) {
+            return;
+        }
+        final long line = sourceLine;
+        boolean hadComment = model.commentBySource.containsKey(line);
+        String existing = model.commentBySource.getOrDefault(line, "");
+
+        var dialog = new InputDialog("Comment", "Comment for line %d:".formatted(line), existing);
+        tool.showDialog(dialog);
+        if (dialog.isCanceled()) {
+            return;
+        }
+        String value = dialog.getValue();
+        final String comment = value == null ? "" : value.strip();
+
+        var service = tool.getService(GhidraRevengService.class);
+        tool.execute(new Task("Update AI decompilation comment", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    if (comment.isEmpty()) {
+                        if (!hadComment) {
+                            return;
+                        }
+                        service.getApi().deleteAIDecompilationInlineComment(functionID, line);
+                    } else {
+                        service.getApi().setAIDecompilationInlineComment(functionID, line, comment);
+                    }
+                    newStatusForFunction(target, service.getApi().pollAIDecompileStatus(functionID));
+                } catch (Exception e) {
+                    reportEditError("Update comment", e);
+                }
+            }
+        }, 0);
+    }
+
+    private void handleRemoveComment(int displayLine) {
+        RenderModel model = currentRenderModel;
+        Function target = this.function;
+        if (model == null || target == null) {
+            return;
+        }
+        Integer sourceLine = model.sourceLine(displayLine);
+        if (sourceLine == null) {
+            return;
+        }
+        final long line = sourceLine;
+        if (!model.commentBySource.containsKey(line)) {
+            Msg.showInfo(this, component, "Remove comment", "No comment on this line.");
+            return;
+        }
+        FunctionID functionID = resolveFunctionId(target);
+        if (functionID == null) {
+            return;
+        }
+        var service = tool.getService(GhidraRevengService.class);
+        tool.execute(new Task("Remove AI decompilation comment", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    service.getApi().deleteAIDecompilationInlineComment(functionID, line);
+                    newStatusForFunction(target, service.getApi().pollAIDecompileStatus(functionID));
+                } catch (Exception e) {
+                    reportEditError("Remove comment", e);
+                }
+            }
+        }, 0);
+    }
+
+    private FunctionID resolveFunctionId(Function target) {
+        if (target == null) {
+            return null;
+        }
+        var service = tool.getService(GhidraRevengService.class);
+        var analysed = service.getAnalysedProgram(target.getProgram());
+        if (analysed.isEmpty()) {
+            return null;
+        }
+        return analysed.get().getIDForFunction(target)
+                .map(GhidraRevengService.FunctionWithID::functionID)
+                .orElse(null);
+    }
+
+    private void reportEditError(String action, Exception e) {
+        var logger = tool.getService(ReaiLoggingService.class);
+        logger.error("%s failed: %s".formatted(action, e.getMessage()));
+        SwingUtilities.invokeLater(() ->
+                Msg.showError(this, component, action + " failed", e.getMessage(), e));
+    }
+
+    /**
+     * Position of the first identifier equal to {@code word} within {@code line}. The tokenised
+     * decompilation carries a token at the same identifier position, which is how a displayed name
+     * is resolved back to the token to override.
+     */
+    static int indexOfIdentifier(String line, String word) {
+        var identifiers = identifiers(line);
+        return identifiers.indexOf(word);
+    }
+
+    private static List<String> identifiers(String line) {
+        var result = new ArrayList<String>();
+        Matcher matcher = IDENTIFIER.matcher(line == null ? "" : line);
+        while (matcher.find()) {
+            result.add(matcher.group());
+        }
+        return result;
+    }
+
+    /**
+     * Resolve a displayed identifier to the token to override, mirroring the IDA plugin's
+     * {@code resolve_token}: prefer the token at the same identifier position in the tokenised line,
+     * and fall back to a unique match across the renameable categories by effective value.
+     */
+    static String resolveToken(TokenisedData tokenised, int sourceIndex, int identIndex, String oldIdent) {
+        if (tokenised == null) {
+            return null;
+        }
+        AIDecompFunctionMapping mapping = tokenised.getFunctionMapping();
+        if (mapping == null) {
+            return null;
+        }
+
+        String tokenisedText = tokenised.getTokenisedDecompilation();
+        String[] tokenisedLines = (tokenisedText == null ? "" : tokenisedText).split("\n", -1);
+        if (sourceIndex >= 0 && sourceIndex < tokenisedLines.length) {
+            var tokenIdentifiers = identifiers(tokenisedLines[sourceIndex]);
+            if (identIndex >= 0 && identIndex < tokenIdentifiers.size()) {
+                String candidate = tokenIdentifiers.get(identIndex);
+                for (TokenEntry entry : renameableTokens(mapping)) {
+                    if (entry.token().equals(candidate)
+                            && oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
+                        return candidate;
+                    }
+                }
+            }
+        }
+
+        String uniqueMatch = null;
+        for (TokenEntry entry : renameableTokens(mapping)) {
+            if (oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
+                if (uniqueMatch != null) {
+                    return null;
+                }
+                uniqueMatch = entry.token();
+            }
+        }
+        return uniqueMatch;
+    }
+
+    private record TokenEntry(String token, ReplacementValue replacement) {}
+
+    private static List<TokenEntry> renameableTokens(AIDecompFunctionMapping mapping) {
+        var entries = new ArrayList<TokenEntry>();
+        addTokens(entries, mapping.getUnmatchedVars());
+        addTokens(entries, mapping.getUnmatchedGlobalVars());
+        addTokens(entries, mapping.getUnmatchedExternalVars());
+        addTokens(entries, mapping.getUnmatchedCustomTypes());
+        addTokens(entries, mapping.getUnmatchedEnums());
+        return entries;
+    }
+
+    private static void addTokens(List<TokenEntry> entries, Map<String, ReplacementValue> category) {
+        if (category == null) {
+            return;
+        }
+        for (var e : category.entrySet()) {
+            entries.add(new TokenEntry(e.getKey(), e.getValue()));
+        }
+    }
+
+    private static String effectiveValue(AIDecompFunctionMapping mapping, String token, ReplacementValue replacement) {
+        Map<String, String> overrides = mapping.getUserOverrideMappings();
+        if (overrides != null && overrides.containsKey(token)) {
+            return overrides.get(token);
+        }
+        return replacement == null ? null : replacement.getValue();
     }
 
 
@@ -437,6 +844,37 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             }
         });
     }
+
+    /**
+     * Maps each display line of the rendered decompilation back to its source line, so a click in
+     * the text area can be resolved to the line/identifier to rename or comment on.
+     */
+    private static final class RenderModel {
+        private final List<String> codeLines;
+        private final Map<Long, String> commentBySource;
+        private final List<Integer> displaySource;
+        private final List<Boolean> displayIsCode;
+
+        RenderModel(List<String> codeLines, Map<Long, String> commentBySource,
+                    List<Integer> displaySource, List<Boolean> displayIsCode) {
+            this.codeLines = codeLines;
+            this.commentBySource = commentBySource;
+            this.displaySource = displaySource;
+            this.displayIsCode = displayIsCode;
+        }
+
+        Integer sourceLine(int displayLine) {
+            if (displayLine < 0 || displayLine >= displaySource.size()) {
+                return null;
+            }
+            return displaySource.get(displayLine);
+        }
+
+        boolean isCodeLine(int displayLine) {
+            return displayLine >= 0 && displayLine < displayIsCode.size() && displayIsCode.get(displayLine);
+        }
+    }
+
     class AIDecompTask extends Task {
 
         private final GhidraRevengService service;
@@ -463,6 +901,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 throw e;
             } catch (Exception e) {
                 reportDecompFailure(functionWithID.function(), e);
+            } finally {
+                inFlightDecompilations.remove(functionWithID.functionID().value());
             }
         }
 

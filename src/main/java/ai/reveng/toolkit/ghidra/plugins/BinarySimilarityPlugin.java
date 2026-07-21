@@ -234,13 +234,16 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                     }
 
                     var functionID = functionWithID.get().functionID();
+                    var analysisID = analysedProgram.analysisID();
                     tool.execute(new Task("View function in portal", false, false, false) {
                         @Override
                         public void run(TaskMonitor monitor) {
                             try {
-                                apiService.openFunctionInPortal(functionID);
+                                apiService.openFunctionInPortal(analysisID, functionID);
                             } catch (Exception e) {
-                                Msg.error(BinarySimilarityPlugin.this, "Failed to open function in portal: " + e.getMessage(), e);
+                                Msg.showError(BinarySimilarityPlugin.this, null,
+                                        ReaiPluginPackage.WINDOW_PREFIX + "View function in portal",
+                                        "Failed to open function in portal: " + e.getMessage(), e);
                             }
                         }
                     }, 0);
