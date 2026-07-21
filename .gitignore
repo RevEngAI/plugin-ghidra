@@ -52,4 +52,5 @@ bin
 .antProperties.xml
 
 dist/
+.claude
 src/main/resources/reai_ghidra_plugin_version.txt
