@@ -261,6 +261,18 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("aiUnstrip not implemented yet");
     }
 
+    /// Progress of the server-side auto-unstrip pass, which runs after an analysis is marked complete.
+    enum AutoUnstripStatus { UNINITIALISED, PENDING, RUNNING, COMPLETED, FAILED, UNKNOWN }
+
+    /**
+     * Current status of the auto-unstrip pass for an analysis (PRO-2976). Auto-unstrip runs after the
+     * analysis is marked complete, so callers poll this to know when recovered names / data types are
+     * ready to be synced (PLU-300).
+     */
+    default AutoUnstripStatus getAutoUnstripStatus(AnalysisID analysisID) throws ApiException {
+        throw new UnsupportedOperationException("getAutoUnstripStatus not implemented yet");
+    }
+
     default void aiDecompRating(FunctionID functionID, String rating, @Nullable String reason) throws ApiException {
         throw new UnsupportedOperationException("aiDecompRating not implemented yet");
     }

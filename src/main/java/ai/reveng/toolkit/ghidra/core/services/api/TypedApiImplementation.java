@@ -721,6 +721,22 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
+    public AutoUnstripStatus getAutoUnstripStatus(AnalysisID analysisID) throws ApiException {
+        var body = analysisCoreApi.v3GetAnalysisAutoUnstripStatus((long) analysisID.id());
+        if (body == null || body.getStatus() == null) {
+            return AutoUnstripStatus.UNKNOWN;
+        }
+        return switch (body.getStatus()) {
+            case UNINITIALISED -> AutoUnstripStatus.UNINITIALISED;
+            case PENDING -> AutoUnstripStatus.PENDING;
+            case RUNNING -> AutoUnstripStatus.RUNNING;
+            case COMPLETED -> AutoUnstripStatus.COMPLETED;
+            case FAILED -> AutoUnstripStatus.FAILED;
+            default -> AutoUnstripStatus.UNKNOWN;
+        };
+    }
+
+    @Override
     public void aiDecompRating(FunctionID functionID, String rating, @Nullable String reason) throws ApiException {
         var request = new UpsertAiDecomplationRatingRequest();
         request.setRating(AiDecompilationRating.fromValue(rating));
