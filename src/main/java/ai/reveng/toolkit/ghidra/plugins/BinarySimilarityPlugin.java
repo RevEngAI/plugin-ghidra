@@ -148,6 +148,43 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 })
                 .buildAndInstall(tool);
 
+        // Top menu: push local edits back to the portal and reconcile names/types
+        new ActionBuilder("Sync With Portal", this.getName())
+                .menuGroup(ReaiPluginPackage.NAME)
+                .menuPath(ReaiPluginPackage.MENU_GROUP_NAME, "Sync With Portal")
+                .enabledWhen(context -> {
+                    var apiService = getApiService();
+                    if (apiService == null) return false;
+                    var program = tool.getService(ProgramManager.class).getCurrentProgram();
+                    return program != null && apiService.getAnalysedProgram(program).isPresent();
+                })
+                .onAction(context -> {
+                    var apiService = getApiService();
+                    var program = tool.getService(ProgramManager.class).getCurrentProgram();
+                    var analysedProgram = apiService.getAnalysedProgram(program);
+                    if (analysedProgram.isEmpty()) {
+                        Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Sync With Portal",
+                                "Analysis must have completed before syncing with the portal");
+                        return;
+                    }
+                    tool.execute(new Task("Sync With Portal", true, false, true) {
+                        @Override
+                        public void run(TaskMonitor monitor) {
+                            try {
+                                var summary = apiService.syncAnalysisUpdates(analysedProgram.get(), monitor,
+                                        tool.getService(ReaiLoggingService.class));
+                                Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Sync With Portal",
+                                        formatSyncSummary(summary));
+                            } catch (Exception e) {
+                                Msg.showError(BinarySimilarityPlugin.this, null,
+                                        ReaiPluginPackage.WINDOW_PREFIX + "Sync With Portal",
+                                        "Failed to sync with portal: " + e.getMessage(), e);
+                            }
+                        }
+                    }, 0);
+                })
+                .buildAndInstall(tool);
+
         // Popup menu function matching
         new ActionBuilder("Match function", this.getName())
                 .withContext(ProgramLocationActionContext.class)
@@ -252,6 +289,18 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)
                 .popupMenuGroup(ReaiPluginPackage.MENU_GROUP_NAME)
                 .buildAndInstall(tool);
+	}
+
+	private static String formatSyncSummary(GhidraRevengService.SyncSummary summary) {
+		return ("Synced %d matched function(s) with the portal.\n" +
+				"Applied %d remote name(s); canonicalized %d and de-duplicated %d.\n" +
+				"Pushed %d name(s) and %d type set(s) back to the portal.").formatted(
+				summary.matchedFunctions(),
+				summary.namesModifiedRemotely(),
+				summary.canonicalizedNames(),
+				summary.dedupedNames(),
+				summary.pushedNames(),
+				summary.pushedTypeSets());
 	}
 
 	@Override

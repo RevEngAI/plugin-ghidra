@@ -767,12 +767,12 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public GetMatchesStatusOutputBody getAnalysisFunctionMatchingStatus(AnalysisID analysisID) throws ApiException {
-        return this.analysisCoreApi.getAnalysisFunctionMatchingStatus((long) analysisID.id());
+        return this.analysisCoreApi.getAnalysisFunctionMatchingStatus((long) analysisID.id(), null);
     }
 
     @Override
     public GetMatchesOutputBody getAnalysisFunctionMatches(AnalysisID analysisID) throws ApiException {
-        return this.analysisCoreApi.getAnalysisFunctionMatches((long) analysisID.id());
+        return this.analysisCoreApi.getAnalysisFunctionMatches((long) analysisID.id(), null);
     }
 
     @Override
@@ -782,12 +782,12 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) throws ApiException {
-        return this.functionsCoreApi.getFunctionsMatchingStatus(functionIds);
+        return this.functionsCoreApi.getFunctionsMatchingStatus(null, functionIds);
     }
 
     @Override
     public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
-        return this.functionsCoreApi.getFunctionsMatches(functionIds);
+        return this.functionsCoreApi.getFunctionsMatches(null, functionIds);
     }
 
     @Override
@@ -812,6 +812,68 @@ public class TypedApiImplementation implements TypedApiInterface {
                 });
 
         return result;
+    }
+
+    @Override
+    public java.util.Map<String, String> canonicalizeFunctionNames(List<String> names) throws ApiException {
+        var body = new CanonicalizeNamesInputBody().names(names);
+        var response = functionsCoreApi.v3CanonicalizeFunctionNames(body);
+        var mapping = new java.util.HashMap<String, String>();
+        if (response.getResults() != null) {
+            for (var result : response.getResults()) {
+                if (result.getName() != null && result.getCanonicalName() != null) {
+                    mapping.put(result.getName(), result.getCanonicalName());
+                }
+            }
+        }
+        return mapping;
+    }
+
+    @Override
+    public Optional<VersionedFunctionTypes> getFunctionDataTypesWithVersion(FunctionID functionID) throws ApiException {
+        var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(List.of(functionID.asInteger())).getData();
+        if (data == null || data.getItems() == null) {
+            return Optional.empty();
+        }
+        return data.getItems().stream()
+                .filter(item -> item.getFunctionId() != null && item.getFunctionId() == functionID.value())
+                .findFirst()
+                .map(item -> new VersionedFunctionTypes(
+                        item.getDataTypes(),
+                        item.getDataTypesVersion() == null ? 0L : item.getDataTypesVersion().longValue()));
+    }
+
+    @Override
+    public List<DataTypePushResult> pushFunctionDataTypes(AnalysisID analysisID, List<FunctionDataTypeUpdate> updates) throws ApiException {
+        var items = updates.stream()
+                .map(update -> new BatchUpdateDataTypesItem()
+                        .functionId(update.functionID().value())
+                        .dataTypes(update.dataTypes())
+                        .dataTypesVersion(update.version()))
+                .toList();
+        var body = new BatchUpdateDataTypesInputBody().functions(items);
+        var response = functionsDataTypesApi.batchUpdateFunctionDataTypes((long) analysisID.id(), body);
+        if (response.getResults() == null) {
+            return List.of();
+        }
+        return response.getResults().stream()
+                .map(result -> new DataTypePushResult(
+                        new FunctionID(result.getFunctionId()),
+                        mapPushStatus(result.getStatus()),
+                        result.getError()))
+                .toList();
+    }
+
+    private static DataTypePushStatus mapPushStatus(BatchUpdateDataTypesResult.StatusEnum status) {
+        if (status == null) {
+            return DataTypePushStatus.UNKNOWN;
+        }
+        return switch (status) {
+            case UPDATED -> DataTypePushStatus.UPDATED;
+            case VERSION_CONFLICT -> DataTypePushStatus.VERSION_CONFLICT;
+            case ERROR -> DataTypePushStatus.ERROR;
+            default -> DataTypePushStatus.UNKNOWN;
+        };
     }
 
     @Override
