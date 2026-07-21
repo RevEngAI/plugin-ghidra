@@ -171,7 +171,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         @Override
                         public void run(TaskMonitor monitor) {
                             try {
-                                var summary = apiService.syncAnalysisUpdates(analysedProgram.get(), monitor);
+                                var summary = apiService.syncAnalysisUpdates(analysedProgram.get(), monitor,
+                                        tool.getService(ReaiLoggingService.class));
                                 Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Sync With Portal",
                                         formatSyncSummary(summary));
                             } catch (Exception e) {

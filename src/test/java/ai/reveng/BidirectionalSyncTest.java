@@ -291,7 +291,7 @@ public class BidirectionalSyncTest extends RevEngMockableHeadedIntegrationTest {
         var program = builder.getProgram();
         var analysed = register(service, program);
 
-        var summary = service.syncAnalysisUpdates(analysed, TaskMonitor.DUMMY);
+        var summary = service.syncAnalysisUpdates(analysed, TaskMonitor.DUMMY, NOOP_LOG);
 
         assertEquals("invalid remote name is canonicalized locally", "bad_name", invalidNamed.getName());
         assertEquals(1, summary.canonicalizedNames());

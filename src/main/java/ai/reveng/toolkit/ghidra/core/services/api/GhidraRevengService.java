@@ -12,6 +12,7 @@ import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
@@ -447,21 +448,21 @@ public class GhidraRevengService {
     /// this run; corrected names are pushed back to the portal. Types: pushes local types for matched
     /// functions whose remote types are absent or could not be applied. Mirrors the IDA plugin's
     /// {@code analysis_sync.py}.
-    public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor) throws ApiException {
+    public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         pushbackSuppressed.set(true);
         try {
-            return syncAnalysisUpdatesInternal(analysedProgram, monitor);
+            return syncAnalysisUpdatesInternal(analysedProgram, monitor, log);
         } finally {
             pushbackSuppressed.set(false);
         }
     }
 
-    private SyncSummary syncAnalysisUpdatesInternal(AnalysedProgram analysedProgram, TaskMonitor monitor) throws ApiException {
+    private SyncSummary syncAnalysisUpdatesInternal(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         var program = analysedProgram.program();
+        log.info("Starting bidirectional sync with the RevEng.AI portal");
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
                 .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
 
-        var revEngNamespace = getRevEngAINameSpace(program);
         Set<String> appliedNames = new HashSet<>();
         List<PendingNamePush> namePushbacks = new ArrayList<>();
         List<InvalidRemoteName> needsCanonical = new ArrayList<>();
@@ -473,6 +474,8 @@ public class GhidraRevengService {
         var transactionId = program.startTransaction("RevEng.AI: Sync Analysis Updates");
         boolean commit = false;
         try {
+            // Creating the RevEng.AI namespace is a DB write, so it must happen inside the transaction.
+            var revEngNamespace = getRevEngAINameSpace(program);
             for (Function function : program.getFunctionManager().getFunctions(true)) {
                 if (monitor.isCancelled()) {
                     break;
@@ -508,10 +511,13 @@ public class GhidraRevengService {
                         appliedNames.add(deduplicated);
                         deduped++;
                         namePushbacks.add(new PendingNamePush(functionID, deduplicated, function.getSymbol().getName(false)));
+                        log.info("De-duplicated remote name \"%s\" -> \"%s\" at %s"
+                                .formatted(remoteName, deduplicated, function.getEntryPoint()));
                     }
                 } else if (applyRemoteName(program, function, revEngNamespace, remoteName)) {
                     appliedNames.add(remoteName);
                     namesModifiedRemotely++;
+                    log.info("Applied remote name \"%s\" at %s".formatted(remoteName, function.getEntryPoint()));
                 }
             }
 
@@ -532,6 +538,8 @@ public class GhidraRevengService {
                         canonicalized++;
                         namePushbacks.add(new PendingNamePush(
                                 invalid.functionID(), finalName, invalid.function().getSymbol().getName(false)));
+                        log.info("Canonicalized invalid remote name \"%s\" -> \"%s\" at %s"
+                                .formatted(invalid.remoteName(), finalName, invalid.function().getEntryPoint()));
                     }
                 }
             }
@@ -544,8 +552,14 @@ public class GhidraRevengService {
         // Push back over the network only after the local transaction has closed, so we don't hold a
         // program lock across API calls.
         int pushedNames = pushNameBacks(namePushbacks);
-        int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor);
+        if (pushedNames > 0) {
+            log.info("Pushed %d corrected function name(s) back to the RevEng.AI portal".formatted(pushedNames));
+        }
+        int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor, log);
 
+        log.info(("Sync complete: %d matched, %d name(s) applied, %d canonicalized, %d de-duplicated, "
+                + "%d name(s) and %d type set(s) pushed back")
+                .formatted(matched, namesModifiedRemotely, canonicalizedNames, deduped, pushedNames, pushedTypeSets));
         return new SyncSummary(matched, namesModifiedRemotely, canonicalizedNames, deduped, pushedNames, pushedTypeSets);
     }
 
@@ -570,7 +584,8 @@ public class GhidraRevengService {
     /// back-propagating type information to the portal.
     private int pushLocalTypesWhereRemoteMissing(AnalysedProgram analysedProgram,
                                                  Set<TypedApiInterface.FunctionID> matchedIds,
-                                                 TaskMonitor monitor) {
+                                                 TaskMonitor monitor,
+                                                 ReaiLoggingService log) {
         var remoteItems = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID()).getItems();
         Set<TypedApiInterface.FunctionID> remotePresent = (remoteItems == null ? List.<FunctionDataTypesListItem>of() : remoteItems).stream()
                 .filter(item -> "completed".equals(item.getStatus()))
@@ -596,6 +611,8 @@ public class GhidraRevengService {
             try {
                 if (pushFunctionTypes(analysedProgram, function)) {
                     pushed++;
+                    log.info("Pushed local types for \"%s\" at %s (remote had none)"
+                            .formatted(function.getName(), function.getEntryPoint()));
                 }
             } catch (ApiException e) {
                 Msg.warn(this, "Failed to push types for %s during sync".formatted(function.getName()), e);
