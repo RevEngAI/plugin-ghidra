@@ -196,6 +196,42 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("deleteAIDecompilationInlineComment not implemented yet");
     }
 
+    /**
+     * Canonicalise the given function names via the portal (PRO-3021). Returns a map from each input
+     * name to its canonical form; names the server does not return are omitted.
+     */
+    default java.util.Map<String, String> canonicalizeFunctionNames(List<String> names) throws ApiException {
+        throw new UnsupportedOperationException("canonicalizeFunctionNames not implemented yet");
+    }
+
+    /// The server's data-type blob for a function together with its optimistic-concurrency version.
+    record VersionedFunctionTypes(ai.reveng.model.V2FunctionInfo dataTypes, long version) {}
+
+    /**
+     * Fetch the current server-side data types for a function and the version to send back on update.
+     * Empty if the server has no data types for the function yet.
+     */
+    default Optional<VersionedFunctionTypes> getFunctionDataTypesWithVersion(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getFunctionDataTypesWithVersion not implemented yet");
+    }
+
+    /// Outcome of a single data-type push, mirroring the server status values.
+    enum DataTypePushStatus { UPDATED, VERSION_CONFLICT, ERROR, UNKNOWN }
+
+    /// A local data-type blob to push for a function, carrying the version it was based on.
+    record FunctionDataTypeUpdate(FunctionID functionID, ai.reveng.model.FunctionInfo dataTypes, long version) {}
+
+    /// Per-function outcome of a data-type push.
+    record DataTypePushResult(FunctionID functionID, DataTypePushStatus status, @Nullable String error) {}
+
+    /**
+     * Push local data-type blobs back to the portal for the given analysis. Version conflicts are
+     * reported per function so the caller can re-fetch and retry.
+     */
+    default List<DataTypePushResult> pushFunctionDataTypes(AnalysisID analysisID, List<FunctionDataTypeUpdate> updates) throws ApiException {
+        throw new UnsupportedOperationException("pushFunctionDataTypes not implemented yet");
+    }
+
     void renameFunction(FunctionID id, String newName, String newNameMangled);
 
     default FunctionNameScore getNameScore(FunctionMatch match) {

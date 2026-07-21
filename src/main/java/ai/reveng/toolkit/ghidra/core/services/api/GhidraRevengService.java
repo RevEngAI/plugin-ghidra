@@ -53,6 +53,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -84,6 +85,14 @@ public class GhidraRevengService {
 
     private TypedApiInterface api;
     private ApiInfo apiInfo;
+
+    /// Set while the plugin is applying server-sourced changes locally (pull / analysis-sync), so the
+    /// reactive listener does not echo those changes straight back to the portal. Mirrors the IDA
+    /// plugin's {@code analysis_sync_service.is_worker_running()} guard.
+    private final AtomicBoolean pushbackSuppressed = new AtomicBoolean(false);
+
+    /// Number of times a data-type push is retried when the server reports a version conflict.
+    private static final int TYPE_PUSH_MAX_RETRIES = 3;
     private final List<Collection> collections = new ArrayList<>();
     private final List<AnalysisResult> analysisIDFilter = new ArrayList<>();
 
@@ -342,6 +351,272 @@ public class GhidraRevengService {
             return func.getEntryPoint().toString();
         }
     }
+
+    /// Push a local function rename back to the portal. No-op if the function is not known on the server.
+    public void pushFunctionRename(AnalysedProgram analysedProgram, Function function) throws ApiException {
+        var withId = analysedProgram.getIDForFunction(function);
+        if (withId.isEmpty()) {
+            return;
+        }
+        var item = new BatchRenameItem();
+        item.setFunctionId(withId.get().functionID().value());
+        item.setNewName(function.getName());
+        item.setNewMangledName(function.getSymbol().getName(false));
+        var request = new BatchRenameInputBody();
+        request.setFunctions(List.of(item));
+        api.batchRenameFunctions(request);
+    }
+
+    /// Push the local signature and variables of a function back to the portal. Uses optimistic
+    /// concurrency: the current server version is fetched and sent back, and version conflicts are
+    /// retried against the latest version. Returns true if the server accepted the update.
+    /// No-op (returns false) if the function is not known on the server.
+    public boolean pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
+        var withId = analysedProgram.getIDForFunction(function);
+        if (withId.isEmpty()) {
+            return false;
+        }
+        var functionID = withId.get().functionID();
+        long imageBase = analysedProgram.program().getImageBase().getOffset();
+        var localTypes = GhidraToServerTypeSerializer.buildFunctionInfo(function, imageBase);
+
+        for (int attempt = 0; attempt < TYPE_PUSH_MAX_RETRIES; attempt++) {
+            long version = api.getFunctionDataTypesWithVersion(functionID)
+                    .map(TypedApiInterface.VersionedFunctionTypes::version)
+                    .orElse(0L);
+            var results = api.pushFunctionDataTypes(analysedProgram.analysisID(),
+                    List.of(new TypedApiInterface.FunctionDataTypeUpdate(functionID, localTypes, version)));
+            if (results.isEmpty()) {
+                return false;
+            }
+            var result = results.get(0);
+            switch (result.status()) {
+                case UPDATED -> {
+                    return true;
+                }
+                case VERSION_CONFLICT -> {
+                    // Re-fetch the latest version and retry.
+                }
+                default -> {
+                    Msg.warn(this, "Failed to push types for function %s: %s"
+                            .formatted(function.getName(), result.error()));
+                    return false;
+                }
+            }
+        }
+        Msg.warn(this, "Gave up pushing types for function %s after %d version conflicts"
+                .formatted(function.getName(), TYPE_PUSH_MAX_RETRIES));
+        return false;
+    }
+
+    /// Breakdown of a bidirectional analysis sync, shown to the user afterwards.
+    public record SyncSummary(
+            int matchedFunctions,
+            int namesModifiedRemotely,
+            int canonicalizedNames,
+            int dedupedNames,
+            int pushedNames,
+            int pushedTypeSets
+    ) {}
+
+    private record PendingNamePush(TypedApiInterface.FunctionID functionID, String newName, String newMangledName) {}
+    private record InvalidRemoteName(Function function, TypedApiInterface.FunctionID functionID, String remoteName) {}
+
+    /// Reconcile local state with the remote analysis and push back local edits (PLU-322).
+    ///
+    /// Names: applies remote names locally where the local name is not user-defined, canonicalising
+    /// names Ghidra rejects (via the portal canonify endpoint) and de-duplicating names already used
+    /// this run; corrected names are pushed back to the portal. Types: pushes local types for matched
+    /// functions whose remote types are absent or could not be applied. Mirrors the IDA plugin's
+    /// {@code analysis_sync.py}.
+    public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor) throws ApiException {
+        pushbackSuppressed.set(true);
+        try {
+            return syncAnalysisUpdatesInternal(analysedProgram, monitor);
+        } finally {
+            pushbackSuppressed.set(false);
+        }
+    }
+
+    private SyncSummary syncAnalysisUpdatesInternal(AnalysedProgram analysedProgram, TaskMonitor monitor) throws ApiException {
+        var program = analysedProgram.program();
+        Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
+                .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
+
+        var revEngNamespace = getRevEngAINameSpace(program);
+        Set<String> appliedNames = new HashSet<>();
+        List<PendingNamePush> namePushbacks = new ArrayList<>();
+        List<InvalidRemoteName> needsCanonical = new ArrayList<>();
+        int matched = 0;
+        int namesModifiedRemotely = 0;
+        int deduped = 0;
+        int canonicalizedNames = 0;
+
+        var transactionId = program.startTransaction("RevEng.AI: Sync Analysis Updates");
+        boolean commit = false;
+        try {
+            for (Function function : program.getFunctionManager().getFunctions(true)) {
+                if (monitor.isCancelled()) {
+                    break;
+                }
+                if (function.isExternal() || function.isThunk()) {
+                    continue;
+                }
+                var withId = analysedProgram.getIDForFunction(function);
+                if (withId.isEmpty()) {
+                    continue;
+                }
+                matched++;
+                var functionID = withId.get().functionID();
+                var info = functionInfoMap.get(functionID);
+                if (info == null) {
+                    continue;
+                }
+                String remoteName = info.functionName();
+                if (remoteName == null || remoteName.isBlank() || remoteName.equals(function.getName())) {
+                    continue;
+                }
+                // Do not overwrite names the user has explicitly set locally.
+                if (function.getSymbol().getSource() == SourceType.USER_DEFINED) {
+                    continue;
+                }
+                if (isInvalidGhidraName(remoteName)) {
+                    needsCanonical.add(new InvalidRemoteName(function, functionID, remoteName));
+                    continue;
+                }
+                if (appliedNames.contains(remoteName)) {
+                    String deduplicated = deduplicateName(remoteName, appliedNames);
+                    if (applyRemoteName(program, function, revEngNamespace, deduplicated)) {
+                        appliedNames.add(deduplicated);
+                        deduped++;
+                        namePushbacks.add(new PendingNamePush(functionID, deduplicated, function.getSymbol().getName(false)));
+                    }
+                } else if (applyRemoteName(program, function, revEngNamespace, remoteName)) {
+                    appliedNames.add(remoteName);
+                    namesModifiedRemotely++;
+                }
+            }
+
+            int canonicalized = 0;
+            if (!needsCanonical.isEmpty() && !monitor.isCancelled()) {
+                var canonicalMapping = api.canonicalizeFunctionNames(
+                        needsCanonical.stream().map(InvalidRemoteName::remoteName).distinct().toList());
+                for (InvalidRemoteName invalid : needsCanonical) {
+                    String canonical = canonicalMapping.getOrDefault(invalid.remoteName(), invalid.remoteName());
+                    if (isInvalidGhidraName(canonical)) {
+                        continue;
+                    }
+                    String finalName = appliedNames.contains(canonical)
+                            ? deduplicateName(canonical, appliedNames)
+                            : canonical;
+                    if (applyRemoteName(program, invalid.function(), revEngNamespace, finalName)) {
+                        appliedNames.add(finalName);
+                        canonicalized++;
+                        namePushbacks.add(new PendingNamePush(
+                                invalid.functionID(), finalName, invalid.function().getSymbol().getName(false)));
+                    }
+                }
+            }
+            commit = !namePushbacks.isEmpty() || namesModifiedRemotely > 0;
+            canonicalizedNames = canonicalized;
+        } finally {
+            program.endTransaction(transactionId, commit && !monitor.isCancelled());
+        }
+
+        // Push back over the network only after the local transaction has closed, so we don't hold a
+        // program lock across API calls.
+        int pushedNames = pushNameBacks(namePushbacks);
+        int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor);
+
+        return new SyncSummary(matched, namesModifiedRemotely, canonicalizedNames, deduped, pushedNames, pushedTypeSets);
+    }
+
+    private int pushNameBacks(List<PendingNamePush> namePushbacks) throws ApiException {
+        if (namePushbacks.isEmpty()) {
+            return 0;
+        }
+        var items = namePushbacks.stream().map(push -> {
+            var item = new BatchRenameItem();
+            item.setFunctionId(push.functionID().value());
+            item.setNewName(push.newName());
+            item.setNewMangledName(push.newMangledName());
+            return item;
+        }).toList();
+        var request = new BatchRenameInputBody();
+        request.setFunctions(items);
+        api.batchRenameFunctions(request);
+        return namePushbacks.size();
+    }
+
+    /// Push local types for matched functions whose remote types are absent or could not be applied,
+    /// back-propagating type information to the portal.
+    private int pushLocalTypesWhereRemoteMissing(AnalysedProgram analysedProgram,
+                                                 Set<TypedApiInterface.FunctionID> matchedIds,
+                                                 TaskMonitor monitor) {
+        var remoteItems = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID()).getItems();
+        Set<TypedApiInterface.FunctionID> remotePresent = (remoteItems == null ? List.<FunctionDataTypesListItem>of() : remoteItems).stream()
+                .filter(item -> "completed".equals(item.getStatus()))
+                .filter(item -> item.getDataTypes() != null && item.getDataTypes().getFuncTypes() != null)
+                .map(item -> new TypedApiInterface.FunctionID(item.getFunctionId()))
+                .collect(Collectors.toSet());
+
+        var functionMap = analysedProgram.getFunctionMap();
+        int pushed = 0;
+        for (TypedApiInterface.FunctionID functionID : matchedIds) {
+            if (monitor.isCancelled()) {
+                break;
+            }
+            if (remotePresent.contains(functionID)) {
+                continue;
+            }
+            var function = functionMap.get(functionID);
+            // Only push functions that have real type information locally (analysis-inferred or user-set).
+            if (function == null || function.isExternal() || function.isThunk()
+                    || function.getSignatureSource() == SourceType.DEFAULT) {
+                continue;
+            }
+            try {
+                if (pushFunctionTypes(analysedProgram, function)) {
+                    pushed++;
+                }
+            } catch (ApiException e) {
+                Msg.warn(this, "Failed to push types for %s during sync".formatted(function.getName()), e);
+            }
+        }
+        return pushed;
+    }
+
+    private boolean applyRemoteName(Program program, Function function, Namespace revEngNamespace, String name) {
+        try {
+            function.setParentNamespace(revEngNamespace);
+        } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+            Msg.warn(this, "Could not move %s into RevEng.AI namespace".formatted(function.getName()), e);
+        }
+        return new SetFunctionNameCmd(function.getEntryPoint(), name, SourceType.ANALYSIS).applyTo(program);
+    }
+
+    static String deduplicateName(String name, Set<String> used) {
+        int suffix = 1;
+        String candidate = name + "_" + suffix;
+        while (used.contains(candidate)) {
+            suffix++;
+            candidate = name + "_" + suffix;
+        }
+        return candidate;
+    }
+
+    static boolean isInvalidGhidraName(String name) {
+        if (name == null || name.isBlank()) {
+            return true;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            if (SymbolUtilities.isInvalidChar(name.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Pull the server side information about the functions from a remote Analysis and update the local {@link Program}
     /// based on it
     /// This currently includes:
@@ -352,6 +627,21 @@ public class GhidraRevengService {
     /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
     ///
     public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
+        pushbackSuppressed.set(true);
+        try {
+            return pullFunctionInfoFromAnalysisInternal(analysedProgram, monitor);
+        } finally {
+            pushbackSuppressed.set(false);
+        }
+    }
+
+    /// True while the plugin is applying server-sourced changes locally; the reactive listener uses
+    /// this to avoid pushing those changes back to the portal.
+    public boolean isPushbackSuppressed() {
+        return pushbackSuppressed.get();
+    }
+
+    private List<RenameResult> pullFunctionInfoFromAnalysisInternal(AnalysedProgram analysedProgram, TaskMonitor monitor) {
         var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
 
         List<RenameResult> renameResults = new ArrayList<>();

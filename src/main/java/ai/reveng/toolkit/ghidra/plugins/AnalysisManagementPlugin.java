@@ -23,6 +23,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses.RecentAnalysi
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
+import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -89,6 +90,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     private GhidraRevengService revengService;
 	private ExportFunctionBoundariesService exportFunctionBoundariesService;
 	private AnalysisLogComponent analysisLogComponent;
+	private LocalEditSyncService localEditSyncService;
 
 	private PluginTool tool;
 
@@ -113,6 +115,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         tool.addComponentProvider(analysisLogComponent, false);
 
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
+        localEditSyncService = new LocalEditSyncService(revengService);
 
         setupActions();
 
@@ -291,6 +294,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
             if (analysedProgram.isPresent()) {
                 // Nothing to do, we already have loaded the function IDs and similar
                 log.info("Loaded analysed program: {}", analysedProgram);
+                localEditSyncService.attach(program);
             } else {
                 // There is an associated program that hasn't been fully loaded yet
                 // This can happen if the analysis was started in a previous session but hadn't finished when closing Ghidra
@@ -336,6 +340,22 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 	}
 
     @Override
+    protected void programClosed(Program program) {
+        super.programClosed(program);
+        if (localEditSyncService != null) {
+            localEditSyncService.detach(program);
+        }
+    }
+
+    @Override
+    protected void dispose() {
+        if (localEditSyncService != null) {
+            localEditSyncService.dispose();
+        }
+        super.dispose();
+    }
+
+    @Override
     public void processEvent(PluginEvent event) {
         super.processEvent(event);
         // Forward the event to the analysis log component
@@ -351,6 +371,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                     // TODO: Can we get a better taskmonitor here?
                     // Or should we never do something here that warrants a monitor in the first place?
                     var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
+                    localEditSyncService.attach(program.program());
                     tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
                 } catch (Exception e) {
                     Msg.error(this, "Error registering finished analysis for program " + program, e);
