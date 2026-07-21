@@ -482,6 +482,16 @@ public class TypedApiImplementation implements TypedApiInterface {
             WorkflowProgress.StatusEnum summaryStatus = null;
             WorkflowProgress.StatusEnum inlineCommentsStatus = null;
             List<AIDecompilationStatus.InlineCommentEntry> inlineComments = List.of();
+            WorkflowProgress decompilationProgress = null;
+            if (data.getStatus() != DecompilationData.StatusEnum.COMPLETED
+                    && data.getStatus() != DecompilationData.StatusEnum.FAILED) {
+                try {
+                    // GET /v3/functions/{function_id}/ai-decompilation/status — step/messages for the progress view
+                    decompilationProgress = functionsAiDecompilationApi.getAiDecompilationStatus(functionID.value());
+                } catch (ApiException | RuntimeException e) {
+                    Msg.info(this, "Could not fetch decompilation progress for function " + functionID.value() + ": " + e.getMessage());
+                }
+            }
             if (data.getStatus() == DecompilationData.StatusEnum.COMPLETED) {
                 try {
                     // GET /v3/functions/{function_id}/ai-decompilation/summary/status
@@ -534,12 +544,13 @@ public class TypedApiImplementation implements TypedApiInterface {
                     predictedFunctionName,
                     summaryStatus,
                     inlineCommentsStatus,
-                    inlineComments);
+                    inlineComments,
+                    decompilationProgress);
         } catch (ApiException e) {
             if (e.getCode() == 404) {
                 return new AIDecompilationStatus(
                         DecompilationData.StatusEnum.UNINITIALISED,
-                        null, null, null, null, null, List.of());
+                        null, null, null, null, null, List.of(), null);
             }
             throw new RuntimeException("Failed to poll AI decompilation status", e);
         }

@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.DecompilationData;
+import ai.reveng.model.ProgressMessage;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -26,6 +27,10 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
 import java.awt.*;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -227,13 +232,66 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 predictedNamePanel.setVisible(false);
             }
             case UNINITIALISED, PENDING, RUNNING -> {
-                setCode("");
+                WorkflowProgress progress = status.decompilationProgress();
+                setCode(progress != null ? renderProgress(progress) : "");
                 descriptionArea.setText("Decompiling %s ...".formatted(function.getName()));
                 predictedNamePanel.setVisible(false);
             }
             default -> {
                 // Unknown status — leave existing UI state untouched.
             }
+        }
+    }
+
+    private static final DateTimeFormatter PROGRESS_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
+
+    /**
+     * Render the decompilation pipeline progress as `//` comment lines so it can be shown
+     * in the code box while we wait. Mirrors the IDA plugin's progress view.
+     */
+    private static String renderProgress(WorkflowProgress progress) {
+        var lines = new ArrayList<String>();
+        lines.add("// RevEng.AI — AI decompilation in progress…");
+        lines.add("//");
+
+        long stepsTotal = progress.getStepsTotal() == null ? 0 : progress.getStepsTotal();
+        long stepIndex = progress.getStepIndex() == null ? 0 : progress.getStepIndex();
+        String step = progress.getStep() == null ? "" : progress.getStep();
+        String status = progress.getStatus() == null ? "" : progress.getStatus().getValue();
+
+        if (stepsTotal > 0) {
+            long current = Math.min(stepIndex + 1, stepsTotal);
+            lines.add("// Step %d/%d: %s [%s]".formatted(current, stepsTotal, step, status));
+        } else if (!step.isEmpty()) {
+            lines.add("// %s [%s]".formatted(step, status));
+        } else {
+            lines.add("// %s".formatted(status));
+        }
+
+        List<ProgressMessage> messages = progress.getMessages();
+        if (messages != null && !messages.isEmpty()) {
+            lines.add("//");
+            for (var message : messages) {
+                lines.add("// " + formatProgressMessage(message));
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String formatProgressMessage(ProgressMessage message) {
+        String stamp = formatProgressTime(message.getTimestamp());
+        String prefix = stamp.isEmpty() ? "" : stamp + " ";
+        return "%s[%s] %s".formatted(prefix, message.getLevel(), message.getText());
+    }
+
+    private static String formatProgressTime(OffsetDateTime timestamp) {
+        if (timestamp == null) {
+            return "";
+        }
+        try {
+            return timestamp.format(PROGRESS_TIME);
+        } catch (RuntimeException e) {
+            return "";
         }
     }
 
@@ -329,6 +387,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
 
     void newStatusForFunction(Function function, AIDecompilationStatus status) {
+        var previous = cache.get(function);
         cache.put(function, status);
         if (isCurrentFunction(function)) {
             SwingUtilities.invokeLater(() ->
@@ -336,8 +395,11 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             );
         }
         if (status.status() == DecompilationData.StatusEnum.COMPLETED) {
-            var logger = tool.getService(ReaiLoggingService.class);
-            logger.info("AI Decompilation finished for function %s: %s".formatted(function.getName(), status.decompilation()));
+            boolean justCompleted = previous == null || previous.status() != DecompilationData.StatusEnum.COMPLETED;
+            if (justCompleted) {
+                var logger = tool.getService(ReaiLoggingService.class);
+                logger.info("AI Decompilation finished for function %s".formatted(function.getName()));
+            }
             if (!hasPendingDecompilations()) {
                 taskMonitorComponent.setVisible(false);
             }
@@ -417,7 +479,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                         || !Objects.equals(newStatus.status(), lastDecompStatus.status())
                         || !Objects.equals(newStatus.summaryStatus(), lastDecompStatus.summaryStatus())
                         || !Objects.equals(newStatus.inlineCommentsStatus(), lastDecompStatus.inlineCommentsStatus())
-                        || newStatus.inlineComments().size() != lastDecompStatus.inlineComments().size()) {
+                        || newStatus.inlineComments().size() != lastDecompStatus.inlineComments().size()
+                        || !Objects.equals(newStatus.decompilationProgress(), lastDecompStatus.decompilationProgress())) {
                     lastDecompStatus = newStatus;
                     newStatusForFunction(functionWithID.function(), newStatus);
                 }

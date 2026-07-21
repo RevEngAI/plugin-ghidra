@@ -71,7 +71,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                             null,
                             WorkflowProgress.StatusEnum.COMPLETED,
                             WorkflowProgress.StatusEnum.COMPLETED,
-                            java.util.List.of());
+                            java.util.List.of(),
+                            null);
                 } else if (functionID.value() == 1) {
                     return new AIDecompilationStatus(
                             DecompilationData.StatusEnum.COMPLETED,
@@ -80,7 +81,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                             null,
                             WorkflowProgress.StatusEnum.COMPLETED,
                             WorkflowProgress.StatusEnum.COMPLETED,
-                            java.util.List.of());
+                            java.util.List.of(),
+                            null);
                 } else {
                     throw new RuntimeException("Unknown FunctionID");
                 }
@@ -319,7 +321,8 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                     null,
                     WorkflowProgress.StatusEnum.COMPLETED,
                     WorkflowProgress.StatusEnum.COMPLETED,
-                    java.util.List.of());
+                    java.util.List.of(),
+                    null);
         }
 
         @Override
