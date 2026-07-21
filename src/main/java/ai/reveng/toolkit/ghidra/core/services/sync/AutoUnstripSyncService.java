@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 
 /**
  * Polls the server-side auto-unstrip status after an analysis completes and, once it finishes,
@@ -32,12 +33,16 @@ public class AutoUnstripSyncService {
 
     private final GhidraRevengService revengService;
     private final ReaiLoggingService loggingService;
+    /// Surfaces a progress message to the user (text, isWarning); wired to the tool status bar in the plugin.
+    private final BiConsumer<String, Boolean> statusNotifier;
     private final ScheduledExecutorService scheduler;
     private final Map<AnalysisID, ScheduledFuture<?>> pollers = new ConcurrentHashMap<>();
 
-    public AutoUnstripSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService) {
+    public AutoUnstripSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService,
+                                  BiConsumer<String, Boolean> statusNotifier) {
         this.revengService = revengService;
         this.loggingService = loggingService;
+        this.statusNotifier = statusNotifier;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "RevEng.AI-AutoUnstripSync");
             thread.setDaemon(true);
@@ -100,21 +105,37 @@ public class AutoUnstripSyncService {
             }
             case FAILED -> {
                 pollers.remove(analysedProgram.analysisID());
-                loggingService.warn("RevEng.AI auto-unstrip failed; recovered names were not synced.");
+                announce("RevEng.AI auto-unstrip failed; recovered names were not synced.", true);
             }
-            default -> schedule(analysedProgram, resyncIfAlreadyComplete, false, POLL_INTERVAL_SECONDS);
+            default -> {
+                if (firstPoll) {
+                    announce("RevEng.AI: waiting for auto-unstrip to finish before syncing recovered "
+                            + "function names and data types…", false);
+                }
+                schedule(analysedProgram, resyncIfAlreadyComplete, false, POLL_INTERVAL_SECONDS);
+            }
         }
     }
 
     private void runSync(AnalysedProgram analysedProgram) {
-        loggingService.info("Auto-unstrip finished; syncing recovered function names and data types.");
+        announce("RevEng.AI: auto-unstrip finished; syncing recovered function names and data types…", false);
         try {
             var summary = revengService.syncAnalysisUpdates(analysedProgram, TaskMonitor.DUMMY, loggingService);
-            loggingService.info("Auto-unstrip sync applied %d remote names and pushed %d local type sets."
-                    .formatted(summary.namesModifiedRemotely(), summary.pushedTypeSets()));
+            announce("RevEng.AI: auto-unstrip sync applied %d recovered names and pushed %d local type sets."
+                    .formatted(summary.namesModifiedRemotely(), summary.pushedTypeSets()), false);
         } catch (Exception e) {
             Msg.warn(this, "Failed to sync analysis after auto-unstrip", e);
-            loggingService.warn("Failed to sync analysis after auto-unstrip: " + e.getMessage());
+            announce("RevEng.AI: failed to sync analysis after auto-unstrip: " + e.getMessage(), true);
         }
+    }
+
+    /// Record a message in the plugin log and surface it to the user (status bar).
+    private void announce(String message, boolean warning) {
+        if (warning) {
+            loggingService.warn(message);
+        } else {
+            loggingService.info(message);
+        }
+        statusNotifier.accept(message, warning);
     }
 }

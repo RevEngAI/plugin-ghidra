@@ -111,7 +111,7 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
         var fixture = setUp(api);
 
-        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG);
+        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG, (m, w) -> {});
         try {
             syncService.pollAndSync(fixture.analysed(), true);
             assertTrue("a completed unstrip should trigger a sync",
@@ -127,7 +127,7 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
         var fixture = setUp(api);
 
-        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG);
+        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG, (m, w) -> {});
         try {
             syncService.pollAndSync(fixture.analysed(), false);
             Thread.sleep(1000);
@@ -145,7 +145,7 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
         var fixture = setUp(api);
 
-        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG);
+        var syncService = new AutoUnstripSyncService(fixture.service(), NOOP_LOG, (m, w) -> {});
         try {
             syncService.pollAndSync(fixture.analysed(), false);
             assertTrue("a running unstrip that later completes triggers a sync",

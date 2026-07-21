@@ -118,7 +118,8 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
         localEditSyncService = new LocalEditSyncService(revengService, loggingService);
-        autoUnstripSyncService = new AutoUnstripSyncService(revengService, loggingService);
+        autoUnstripSyncService = new AutoUnstripSyncService(revengService, loggingService,
+                (message, warning) -> SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, warning)));
 
         setupActions();
 
