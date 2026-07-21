@@ -12,6 +12,7 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolType;
 import ghidra.program.util.FunctionChangeRecord;
 import ghidra.program.util.ProgramChangeRecord;
 import ghidra.program.util.ProgramEvent;
@@ -84,31 +85,51 @@ public class LocalEditSyncService {
         return new DomainObjectListenerBuilder(this)
                 .ignoreWhen(revengService::isPushbackSuppressed)
                 .each(ProgramEvent.SYMBOL_RENAMED).call(record -> onSymbolRenamed(program, record))
+                // Renaming a decompiler-inferred variable commits it to the database as a new symbol,
+                // which fires SYMBOL_ADDED rather than SYMBOL_RENAMED, so we react to both.
+                .each(ProgramEvent.SYMBOL_ADDED).call(record -> onVariableSymbolChanged(program, record))
                 .each(ProgramEvent.FUNCTION_CHANGED).call(record -> onFunctionChanged(program, record))
                 .build();
     }
 
     private void onSymbolRenamed(Program program, DomainObjectChangeRecord record) {
-        if (!(record instanceof ProgramChangeRecord programChange)
-                || !(programChange.getObject() instanceof Symbol symbol)) {
+        var symbol = symbolOf(record);
+        if (symbol == null || symbol.getSource() != SourceType.USER_DEFINED) {
             return;
         }
-        if (symbol.getSource() != SourceType.USER_DEFINED) {
-            return;
-        }
-        var symbolType = symbol.getSymbolType();
-        if (symbolType == ghidra.program.model.symbol.SymbolType.FUNCTION) {
+        if (symbol.getSymbolType() == SymbolType.FUNCTION) {
             var function = program.getFunctionManager().getFunctionAt(symbol.getAddress());
             if (isSyncable(function)) {
                 scheduleRename(program, function.getEntryPoint());
             }
-        } else if (symbolType == ghidra.program.model.symbol.SymbolType.LOCAL_VAR
-                || symbolType == ghidra.program.model.symbol.SymbolType.PARAMETER) {
-            // A variable was renamed; push the containing function's variables.
-            if (symbol.getParentNamespace() instanceof Function function && isSyncable(function)) {
-                scheduleTypes(program, function.getEntryPoint());
-            }
+        } else {
+            scheduleTypesForVariable(program, symbol);
         }
+    }
+
+    private void onVariableSymbolChanged(Program program, DomainObjectChangeRecord record) {
+        var symbol = symbolOf(record);
+        if (symbol != null) {
+            scheduleTypesForVariable(program, symbol);
+        }
+    }
+
+    /// Push the containing function's types when a local variable or parameter symbol changed.
+    private void scheduleTypesForVariable(Program program, Symbol symbol) {
+        if (symbol.getSymbolType() != SymbolType.LOCAL_VAR && symbol.getSymbolType() != SymbolType.PARAMETER) {
+            return;
+        }
+        if (symbol.getParentNamespace() instanceof Function function && isSyncable(function)) {
+            scheduleTypes(program, function.getEntryPoint());
+        }
+    }
+
+    private static Symbol symbolOf(DomainObjectChangeRecord record) {
+        if (record instanceof ProgramChangeRecord programChange
+                && programChange.getObject() instanceof Symbol symbol) {
+            return symbol;
+        }
+        return null;
     }
 
     private void onFunctionChanged(Program program, DomainObjectChangeRecord record) {
@@ -166,7 +187,10 @@ public class LocalEditSyncService {
     private void pushTypes(Program program, Address entryPoint) {
         withAnalysedFunction(program, entryPoint, (analysedProgram, function) -> {
             try {
-                revengService.pushFunctionTypes(analysedProgram, function);
+                if (revengService.pushFunctionTypes(analysedProgram, function)) {
+                    loggingService.info("Pushed types for function \"%s\" at %s to the RevEng.AI portal"
+                            .formatted(function.getName(), entryPoint));
+                }
             } catch (ApiException e) {
                 Msg.warn(this, "Failed to push types for %s to portal".formatted(function.getName()), e);
             }

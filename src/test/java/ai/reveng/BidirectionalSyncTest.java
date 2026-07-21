@@ -10,9 +10,13 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionData
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.LocalVariableImpl;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
@@ -173,6 +177,53 @@ public class BidirectionalSyncTest extends RevEngMockableHeadedIntegrationTest {
         assertEquals("one conflicting attempt then one successful attempt", 2, api.typePushCalls.size());
         assertEquals(7L, api.typePushCalls.get(0).get(0).functionID().value());
         assertEquals("version fetched before each attempt", 42L, api.typePushCalls.get(0).get(0).version());
+    }
+
+    private static final ReaiLoggingService NOOP_LOG = new ReaiLoggingService() {
+        @Override public void info(String message) {}
+        @Override public void warn(String message) {}
+        @Override public void error(String message) {}
+        @Override public void export(String targetDirectoryPath, String exportedFileName) {}
+    };
+
+    @Test
+    public void reactiveListener_pushesTypesWhenLocalVariableEdited() throws Exception {
+        var api = new CapturingApi();
+        api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "orig", "orig", 0x4000L, 0x100));
+        var service = new GhidraRevengService(api);
+
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        builder.createMemory("mem", "0x4000", 0x100);
+        Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        var program = builder.getProgram();
+        register(service, program);
+
+        var syncService = new LocalEditSyncService(service, NOOP_LOG);
+        try {
+            syncService.attach(program);
+
+            program.withTransaction("add local variable", () -> {
+                try {
+                    function.addLocalVariable(
+                            new LocalVariableImpl("renamed_local", IntegerDataType.dataType, -0x8, program),
+                            SourceType.USER_DEFINED);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            program.flushEvents();
+            waitForSwing();
+
+            long deadline = System.currentTimeMillis() + 5000;
+            while (api.typePushCalls.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+
+            assertEquals("editing a variable pushes the function's types once", 1, api.typePushCalls.size());
+            assertEquals(7L, api.typePushCalls.get(0).get(0).functionID().value());
+        } finally {
+            syncService.dispose();
+        }
     }
 
     @Test
