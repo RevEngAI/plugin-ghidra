@@ -7,7 +7,9 @@ import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
 import ghidra.framework.model.DomainObjectListenerBuilder;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraToServerTypeSerializer;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
@@ -47,6 +49,7 @@ public class LocalEditSyncService {
     private final Map<Program, DomainObjectListener> listeners = new ConcurrentHashMap<>();
     private final Map<Address, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
     private final Map<Address, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> pendingDataTypeScans = new ConcurrentHashMap<>();
 
     public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService) {
         this.revengService = revengService;
@@ -89,6 +92,11 @@ public class LocalEditSyncService {
                 // which fires SYMBOL_ADDED rather than SYMBOL_RENAMED, so we react to both.
                 .each(ProgramEvent.SYMBOL_ADDED).call(record -> onVariableSymbolChanged(program, record))
                 .each(ProgramEvent.FUNCTION_CHANGED).call(record -> onFunctionChanged(program, record))
+                // Editing a data type definition (rename a struct, change its fields, ...) does not
+                // fire a function event, so we react to the data-type events and push every server-known
+                // function that references the edited type — the portal stores types per function.
+                .each(ProgramEvent.DATA_TYPE_CHANGED, ProgramEvent.DATA_TYPE_RENAMED, ProgramEvent.DATA_TYPE_REPLACED)
+                .call(record -> onDataTypeChanged(program, record))
                 .build();
     }
 
@@ -149,6 +157,18 @@ public class LocalEditSyncService {
         scheduleTypes(program, function.getEntryPoint());
     }
 
+    private void onDataTypeChanged(Program program, DomainObjectChangeRecord record) {
+        DataType dataType = null;
+        if (record.getNewValue() instanceof DataType changed) {
+            dataType = changed;
+        } else if (record.getOldValue() instanceof DataType previous) {
+            dataType = previous;
+        }
+        if (dataType != null) {
+            scheduleDataTypeScan(program, dataType.getName());
+        }
+    }
+
     private static boolean isSyncable(Function function) {
         return function != null && !function.isExternal() && !function.isThunk();
     }
@@ -161,7 +181,11 @@ public class LocalEditSyncService {
         schedule(pendingTypes, entryPoint, () -> pushTypes(program, entryPoint));
     }
 
-    private void schedule(Map<Address, ScheduledFuture<?>> pending, Address key, Runnable task) {
+    private void scheduleDataTypeScan(Program program, String typeName) {
+        schedule(pendingDataTypeScans, typeName, () -> pushFunctionsReferencingType(program, typeName));
+    }
+
+    private <K> void schedule(Map<K, ScheduledFuture<?>> pending, K key, Runnable task) {
         var existing = pending.get(key);
         if (existing != null) {
             existing.cancel(false);
@@ -170,6 +194,21 @@ public class LocalEditSyncService {
             pending.remove(key);
             task.run();
         }, DEBOUNCE_MS, TimeUnit.MILLISECONDS));
+    }
+
+    /// Push every server-known function that references the edited type, so a type edit is
+    /// propagated to the portal (which only stores types inside each function's data-types blob).
+    private void pushFunctionsReferencingType(Program program, String typeName) {
+        var analysedProgram = revengService.getAnalysedProgram(program);
+        if (analysedProgram.isEmpty()) {
+            return;
+        }
+        for (Function function : analysedProgram.get().getFunctionMap().values()) {
+            if (isSyncable(function)
+                    && GhidraToServerTypeSerializer.referencedTypeNames(function).contains(typeName)) {
+                scheduleTypes(program, function.getEntryPoint());
+            }
+        }
     }
 
     private void pushRename(Program program, Address entryPoint) {

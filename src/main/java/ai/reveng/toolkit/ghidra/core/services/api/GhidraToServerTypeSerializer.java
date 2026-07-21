@@ -21,9 +21,11 @@ import ghidra.program.model.listing.Variable;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Serialises a Ghidra {@link Function}'s signature and variables into the server's data-type blob
@@ -91,6 +93,37 @@ public final class GhidraToServerTypeSerializer {
         return new FunctionInfo()
                 .funcTypes(funcType)
                 .funcDeps(collectDependencies(function));
+    }
+
+    /// All type names referenced by the function's signature and variables, resolved transitively
+    /// through pointers, arrays, struct/union members and typedefs. Used to decide which functions
+    /// to re-push when a data type is edited.
+    public static Set<String> referencedTypeNames(Function function) {
+        Deque<DataType> queue = new ArrayDeque<>();
+        queue.add(function.getReturnType());
+        for (Parameter parameter : function.getParameters()) {
+            queue.add(parameter.getDataType());
+        }
+        for (Variable variable : function.getLocalVariables()) {
+            queue.add(variable.getDataType());
+        }
+
+        Set<String> names = new HashSet<>();
+        int guard = 0;
+        while (!queue.isEmpty() && guard++ < MAX_DEPENDENCIES) {
+            DataType base = baseType(queue.poll());
+            if (base == null || !names.add(base.getName())) {
+                continue;
+            }
+            if (base instanceof Structure || base instanceof Union) {
+                for (DataTypeComponent component : ((ghidra.program.model.data.Composite) base).getDefinedComponents()) {
+                    queue.add(component.getDataType());
+                }
+            } else if (base instanceof TypeDef typeDef) {
+                queue.add(typeDef.getDataType());
+            }
+        }
+        return names;
     }
 
     private static List<FunctionDependency> collectDependencies(Function function) {

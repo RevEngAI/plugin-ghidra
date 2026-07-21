@@ -13,10 +13,15 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.IntegerDataType;
+import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.LocalVariableImpl;
+import ghidra.program.model.listing.Parameter;
+import ghidra.program.model.listing.ParameterImpl;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
@@ -221,6 +226,49 @@ public class BidirectionalSyncTest extends RevEngMockableHeadedIntegrationTest {
 
             assertEquals("editing a variable pushes the function's types once", 1, api.typePushCalls.size());
             assertEquals(7L, api.typePushCalls.get(0).get(0).functionID().value());
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void reactiveListener_pushesTypesWhenReferencedDataTypeEdited() throws Exception {
+        var api = new CapturingApi();
+        api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "orig", "orig", 0x4000L, 0x100));
+        var service = new GhidraRevengService(api);
+
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        builder.createMemory("mem", "0x4000", 0x100);
+        var struct = new StructureDataType("MyStruct", 0);
+        struct.add(IntegerDataType.dataType, "field0", null);
+        builder.addDataType(struct);
+        Parameter param = new ParameterImpl("arg", new PointerDataType(struct), builder.getProgram());
+        builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8), param);
+        var program = builder.getProgram();
+        register(service, program);
+
+        var syncService = new LocalEditSyncService(service, NOOP_LOG);
+        try {
+            syncService.attach(program);
+
+            DataType resolved = program.getDataTypeManager().getDataType("/MyStruct");
+            program.withTransaction("rename data type", () -> {
+                try {
+                    resolved.setName("RenamedStruct");
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            program.flushEvents();
+            waitForSwing();
+
+            long deadline = System.currentTimeMillis() + 5000;
+            while (api.typePushCalls.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+
+            assertEquals("editing a referenced data type pushes the function that uses it",
+                    7L, api.typePushCalls.get(0).get(0).functionID().value());
         } finally {
             syncService.dispose();
         }
