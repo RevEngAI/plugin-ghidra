@@ -3,6 +3,7 @@ package ai.reveng.toolkit.ghidra.core.services.sync;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
 import ghidra.framework.model.DomainObjectListenerBuilder;
@@ -40,13 +41,15 @@ public class LocalEditSyncService {
     private static final long DEBOUNCE_MS = 400;
 
     private final GhidraRevengService revengService;
+    private final ReaiLoggingService loggingService;
     private final ScheduledExecutorService scheduler;
     private final Map<Program, DomainObjectListener> listeners = new ConcurrentHashMap<>();
     private final Map<Address, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
     private final Map<Address, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
 
-    public LocalEditSyncService(GhidraRevengService revengService) {
+    public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService) {
         this.revengService = revengService;
+        this.loggingService = loggingService;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "RevEng.AI-LocalEditSync");
             thread.setDaemon(true);
@@ -151,7 +154,9 @@ public class LocalEditSyncService {
     private void pushRename(Program program, Address entryPoint) {
         withAnalysedFunction(program, entryPoint, (analysedProgram, function) -> {
             try {
-                revengService.pushFunctionRename(analysedProgram, function);
+                revengService.pushFunctionRename(analysedProgram, function).ifPresent(pushedName ->
+                        loggingService.info("Pushed rename of function at %s to \"%s\" to the RevEng.AI portal"
+                                .formatted(entryPoint, pushedName)));
             } catch (ApiException e) {
                 Msg.warn(this, "Failed to push rename for %s to portal".formatted(function.getName()), e);
             }

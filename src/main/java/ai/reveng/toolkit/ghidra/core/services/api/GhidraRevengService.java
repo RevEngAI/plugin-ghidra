@@ -352,19 +352,37 @@ public class GhidraRevengService {
         }
     }
 
-    /// Push a local function rename back to the portal. No-op if the function is not known on the server.
-    public void pushFunctionRename(AnalysedProgram analysedProgram, Function function) throws ApiException {
+    /// Push a local function rename back to the portal. Returns the namespace-qualified name that was
+    /// pushed, or empty if the function is not known on the server.
+    public Optional<String> pushFunctionRename(AnalysedProgram analysedProgram, Function function) throws ApiException {
         var withId = analysedProgram.getIDForFunction(function);
         if (withId.isEmpty()) {
-            return;
+            return Optional.empty();
         }
+        String qualifiedName = qualifiedServerName(function);
         var item = new BatchRenameItem();
         item.setFunctionId(withId.get().functionID().value());
-        item.setNewName(function.getName());
-        item.setNewMangledName(function.getSymbol().getName(false));
+        item.setNewName(qualifiedName);
+        item.setNewMangledName(qualifiedName);
         var request = new BatchRenameInputBody();
         request.setFunctions(List.of(item));
         api.batchRenameFunctions(request);
+        return Optional.of(qualifiedName);
+    }
+
+    /// The function name as the portal expects it: qualified with its namespace path (joined by
+    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace and the global
+    /// namespace. Ghidra stores only the leaf label on the symbol, so the namespace must be
+    /// re-attached when pushing a rename back — the portal's function names include the namespace.
+    static String qualifiedServerName(Function function) {
+        List<String> parts = new ArrayList<>();
+        parts.add(function.getName());
+        for (Namespace ns = function.getParentNamespace(); ns != null && !ns.isGlobal(); ns = ns.getParentNamespace()) {
+            if (!REVENG_AI_NAMESPACE.equals(ns.getName())) {
+                parts.add(0, ns.getName());
+            }
+        }
+        return String.join(Namespace.DELIMITER, parts);
     }
 
     /// Push the local signature and variables of a function back to the portal. Uses optimistic

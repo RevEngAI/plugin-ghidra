@@ -115,7 +115,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         tool.addComponentProvider(analysisLogComponent, false);
 
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
-        localEditSyncService = new LocalEditSyncService(revengService);
+        localEditSyncService = new LocalEditSyncService(revengService, loggingService);
 
         setupActions();
 

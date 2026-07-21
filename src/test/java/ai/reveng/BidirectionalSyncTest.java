@@ -124,6 +124,35 @@ public class BidirectionalSyncTest extends RevEngMockableHeadedIntegrationTest {
     }
 
     @Test
+    public void pushFunctionRename_qualifiesNameWithNamespace() throws Exception {
+        var api = new CapturingApi();
+        api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "orig", "orig", 0x4000L, 0x100));
+        var service = new GhidraRevengService(api);
+
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        builder.createMemory("mem", "0x4000", 0x100);
+        Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        var program = builder.getProgram();
+        var analysed = register(service, program);
+
+        program.withTransaction("rename in namespace", () -> {
+            try {
+                var namespace = program.getSymbolTable().createNameSpace(
+                        program.getGlobalNamespace(), "MyClass", SourceType.USER_DEFINED);
+                function.setParentNamespace(namespace);
+                function.setName("method", SourceType.USER_DEFINED);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        service.pushFunctionRename(analysed, function);
+
+        var item = api.renameCalls.get(0).getFunctions().get(0);
+        assertEquals("MyClass::method", item.getNewName());
+    }
+
+    @Test
     public void pushFunctionTypes_retriesOnVersionConflictWithLatestVersion() throws Exception {
         var api = new CapturingApi();
         api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "orig", "orig", 0x4000L, 0x100));
