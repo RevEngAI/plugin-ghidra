@@ -26,7 +26,8 @@ public record AIDecompilationStatus(
         @Nullable String predictedFunctionName,
         @Nullable WorkflowProgress.StatusEnum summaryStatus,
         @Nullable WorkflowProgress.StatusEnum inlineCommentsStatus,
-        List<InlineCommentEntry> inlineComments
+        List<InlineCommentEntry> inlineComments,
+        @Nullable WorkflowProgress decompilationProgress
 ) {
     public record InlineCommentEntry(long line, String comment) {}
 }
