@@ -277,6 +277,74 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                 descriptionArea.getText().contains("AI Decompilation failed"));
     }
 
+    @Test
+    public void testInlineCommentsRenderedInCodeBox() throws Exception {
+        var tool = env.getTool();
+
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 10));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.COMPLETED,
+                        "int main() {\n    return 0;\n}",
+                        "Mocked Description Summary",
+                        null,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        List.of(new AIDecompilationStatus.InlineCommentEntry(2, "the exit code")),
+                        null);
+            }
+
+            @Override
+            public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
+                return true;
+            }
+        });
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+        RSyntaxTextArea textArea = (RSyntaxTextArea) getInstanceField("textArea", aiDecompComponent);
+
+        var action = getAction(tool, "AI Decompilation");
+        var context = new ProgramLocationActionContext(
+                null,
+                programWithID.program(),
+                new ProgramLocation(programWithID.program(), func1.getEntryPoint()),
+                null, null);
+        performAction(action, context, true);
+        waitForTasks();
+        waitForSwing();
+
+        String text = textArea.getText();
+        assertTrue("inline comment should be spliced into the code box, was:\n" + text,
+                text.contains("// the exit code"));
+        assertTrue("comment must be rendered above the line it annotates",
+                text.indexOf("// the exit code") < text.indexOf("return 0;"));
+        assertTrue("comment must preserve the annotated line's indentation",
+                text.contains("    // the exit code"));
+    }
+
     static class RatingsAPI extends UnimplementedAPI {
         String lastFeedback;
         String lastReason;

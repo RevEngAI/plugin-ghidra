@@ -31,6 +31,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.StringPropertyMap;
+import ghidra.util.BrowserLoader;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
 import ghidra.util.data.DataTypeParser;
@@ -45,6 +46,7 @@ import javax.annotation.Nullable;
 import java.awt.*;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -935,7 +937,14 @@ public class GhidraRevengService {
 
     public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
         var details = api.getFunctionDetails(functionID);
-        openPortal("analyses", String.format("%s?view=functions&fn=%s", details.analysisId().id(), functionID.value()));
+        openFunctionInPortal(details.analysisId(), functionID);
+    }
+
+    /// Prefer this overload when the caller already knows the analysis the function belongs to:
+    /// it builds the portal URL directly and avoids the getFunctionDetails call, which requires a
+    /// permission the user may not have (returns 403) even when they can view the analysis.
+    public void openFunctionInPortal(TypedApiInterface.AnalysisID analysisID, TypedApiInterface.FunctionID functionID) {
+        openPortal("analyses", String.format("%s?view=functions&fn=%s", analysisID.id(), functionID.value()));
     }
 
     public void openCollectionInPortal(Collection collection) {
@@ -973,27 +982,18 @@ public class GhidraRevengService {
     }
 
     private void openURI(URI uri){
-        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)
-        ) {
-            try {
-                Desktop.getDesktop().browse(uri);
-            } catch (IOException e) {
-                Msg.showError(
-                        this,
-                        null,
-                        "URI Opening Failed",
-                        "Browsing to URI %s failed".formatted(uri),
-                        e
-                );
-            }
-        } else {
+        // Ghidra's BrowserLoader is more reliable than java.awt.Desktop, which frequently
+        // no-ops or is reported unsupported inside Ghidra's JVM.
+        try {
+            BrowserLoader.display(uri.toURL());
+        } catch (MalformedURLException e) {
             Msg.showError(
                     this,
                     null,
-                    "URI Opening unsupported",
-                    "URI %s couldn't be opened because the environment doesn't support opening URLs".formatted(uri)
+                    "URI Opening Failed",
+                    "Browsing to URI %s failed".formatted(uri),
+                    e
             );
-
         }
     }
 
