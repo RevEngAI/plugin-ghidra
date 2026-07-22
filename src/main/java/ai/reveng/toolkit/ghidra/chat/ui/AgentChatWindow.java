@@ -305,10 +305,15 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
                 return;
             }
             // Re-pull names the agent changed server-side so they appear without a manual refresh.
+            // A refresh must never take down the chat: a failure here is logged, not propagated.
             tool.execute(new Task("Refresh functions after agent tool", false, false, false) {
                 @Override
                 public void run(TaskMonitor monitor) {
-                    revengService().pullFunctionInfoFromAnalysis(analysed.get(), monitor);
+                    try {
+                        revengService().pullFunctionInfoFromAnalysis(analysed.get(), monitor);
+                    } catch (Exception e) {
+                        loggingService().warn("Failed to refresh functions after agent tool: " + e.getMessage());
+                    }
                 }
             }, 0);
         }

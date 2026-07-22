@@ -765,8 +765,11 @@ public class GhidraRevengService {
             /// See {@link ghidra.program.model.symbol.SourceType} for more details
             if (function.getSymbol().getSource() == SourceType.DEFAULT) {
                 if (functionSignatureMessageOpt.isEmpty()) {
-                    // We don't have signature information for this function, so we can only try renaming it
-                    if (function.getSymbol().getSource() == SourceType.DEFAULT && !revEngMangledName.startsWith("FUN_")) {
+                    // We don't have signature information for this function, so we can only try renaming it.
+                    // Skip server-side default names — Ghidra's own "FUN_" and IDA's "sub_" — so we never
+                    // overwrite Ghidra's default placeholder with an IDA-style one.
+                    if (function.getSymbol().getSource() == SourceType.DEFAULT
+                            && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")) {
                         // The local function has the default name, so we can rename it
                         // The following check should never fail because it is a default name,
                         // and we checked above that the server name is not a default name
@@ -1210,13 +1213,31 @@ public class GhidraRevengService {
                                         );
                                         fieldType = Undefined.getUndefinedDataType(binSyncStructMember.size());
                                     }
-                                    structType.replaceAtOffset(
-                                            binSyncStructMember.offset(),
-                                            fieldType,
-                                            binSyncStructMember.size(),
-                                            binSyncStructMember.name(),
-                                            null
-                                    );
+                                    // The server occasionally reports a member that extends past the
+                                    // struct's declared size; grow the struct to fit rather than letting
+                                    // replaceAtOffset reject it and abort the whole type load. A member
+                                    // that still can't be placed is skipped so one bad field doesn't sink
+                                    // the entire function pull.
+                                    int end = binSyncStructMember.offset() + Math.max(1, binSyncStructMember.size());
+                                    if (structType.getLength() < end) {
+                                        structType.growStructure(end - structType.getLength());
+                                    }
+                                    try {
+                                        structType.replaceAtOffset(
+                                                binSyncStructMember.offset(),
+                                                fieldType,
+                                                binSyncStructMember.size(),
+                                                binSyncStructMember.name(),
+                                                null
+                                        );
+                                    } catch (IllegalArgumentException e) {
+                                        Msg.error(
+                                                GhidraRevengService.class,
+                                                "Skipping struct member '%s' at offset %d of %s: %s".formatted(
+                                                        binSyncStructMember.name(), binSyncStructMember.offset(),
+                                                        struct.name(), e.getMessage())
+                                        );
+                                    }
                                 }
                         );
                     } else {
