@@ -1686,7 +1686,22 @@ public class GhidraRevengService {
 
 
         public Optional<FunctionWithID> getFunctionForID(TypedApiInterface.FunctionID functionID) {
-            throw new UnsupportedOperationException("Not implemented yet");
+            LongPropertyMap functionIDMap = getFunctionIDPropertyMap(this);
+            var addresses = functionIDMap.getPropertyIterator();
+            while (addresses.hasNext()) {
+                var address = addresses.next();
+                try {
+                    if (functionIDMap.getLong(address) == functionID.value()) {
+                        var function = program.getFunctionManager().getFunctionAt(address);
+                        if (function != null) {
+                            return Optional.of(new FunctionWithID(function, functionID));
+                        }
+                    }
+                } catch (NoValueException e) {
+                    // Iterating over keys, so this should not happen; skip defensively.
+                }
+            }
+            return Optional.empty();
         }
 
         public void setMangledNameForFunction(Function function, String mangledName) {

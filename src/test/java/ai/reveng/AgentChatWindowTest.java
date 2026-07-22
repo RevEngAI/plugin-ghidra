@@ -5,6 +5,7 @@ import ai.reveng.toolkit.ghidra.chat.model.ChatItem;
 import ai.reveng.toolkit.ghidra.chat.model.ChatState;
 import ai.reveng.toolkit.ghidra.chat.ui.AgentChatWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -13,6 +14,8 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.AgentChatPlugin;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Program;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
@@ -21,6 +24,8 @@ import javax.swing.JLabel;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+
+import static org.junit.Assert.assertEquals;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -109,5 +114,48 @@ public class AgentChatWindowTest extends RevEngMockableHeadedIntegrationTest {
                 hrefs.contains("reai://jump/4096"));
         assertTrue("external markdown link href should be resolvable, found: " + hrefs,
                 hrefs.contains("https://example.com/help"));
+    }
+
+    @Test
+    public void forceAppliesAgentRenameOverExistingLocalName() throws Exception {
+        var tool = env.getTool();
+        var api = new UnimplementedAPI() {
+            volatile String currentName = "original_name";
+
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), currentName, currentName, 0x1000L, 10));
+            }
+        };
+        var service = addMockedService(tool, api);
+        env.addPlugin(AgentChatPlugin.class);
+
+        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var func = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        Program program = programWithID.program();
+
+        // Give the function an explicit, non-default local name.
+        int tx = program.startTransaction("test setup rename");
+        func.setName("user_named", ghidra.program.model.symbol.SourceType.USER_DEFINED);
+        program.endTransaction(tx, true);
+        assertEquals("user_named", func.getName());
+
+        // The agent renamed it server-side; applying the authoritative name must overwrite the local one.
+        var analysed = service.getAnalysedProgram(program).orElseThrow();
+        AgentChatWindow.applyRenames(program, analysed, java.util.Map.of(1L, "renamed_by_agent"));
+
+        assertEquals("agent rename must overwrite the existing local name",
+                "renamed_by_agent", func.getName());
     }
 }

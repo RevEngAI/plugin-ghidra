@@ -5,8 +5,10 @@ import ai.reveng.toolkit.ghidra.chat.model.ChatTranscriptRenderer;
 import ai.reveng.toolkit.ghidra.chat.model.ChatItem.ToolConfirmation;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationContext;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationSummary;
+import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.chat.service.ChatService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.app.services.GoToService;
@@ -16,8 +18,11 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.BrowserLoader;
+import ghidra.util.exception.DuplicateNameException;
+import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
 
@@ -32,6 +37,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.net.URI;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -342,23 +348,76 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
             if (program == null) {
                 return;
             }
-            var analysed = revengService().getAnalysedProgram(program);
-            if (analysed.isEmpty()) {
+            var analysedOpt = revengService().getAnalysedProgram(program);
+            if (analysedOpt.isEmpty()) {
                 return;
             }
-            // Re-pull names the agent changed server-side so they appear without a manual refresh.
-            // A refresh must never take down the chat: a failure here is logged, not propagated.
-            tool.execute(new Task("Refresh functions after agent tool", false, false, false) {
+            GhidraRevengService.AnalysedProgram analysed = analysedOpt.get();
+            Set<Long> ids = Set.copyOf(functionIds);
+            // Apply the agent's changes to these functions immediately. Unlike the general portal
+            // pull (which only touches functions that still have Ghidra's default name), a rename the
+            // agent just performed is authoritative, so overwrite the local name. A failure here is
+            // logged, never propagated — a refresh must not take down the chat.
+            tool.execute(new Task("Apply agent function changes", false, false, false) {
                 @Override
                 public void run(TaskMonitor monitor) {
                     try {
-                        revengService().pullFunctionInfoFromAnalysis(analysed.get(), monitor);
+                        applyServerNames(program, analysed, ids);
                     } catch (Exception e) {
-                        loggingService().warn("Failed to refresh functions after agent tool: " + e.getMessage());
+                        loggingService().warn("Failed to apply agent function changes: " + e.getMessage());
                     }
                 }
             }, 0);
         }
+    }
+
+    /// Fetch the current server-side names of the given functions and force them onto the program.
+    private void applyServerNames(Program program, GhidraRevengService.AnalysedProgram analysed, Set<Long> ids)
+            throws ApiException {
+        var idToName = new java.util.HashMap<Long, String>();
+        for (FunctionInfo info : revengService().getApi().getFunctionInfo(analysed.analysisID())) {
+            if (ids.contains(info.functionID().value())) {
+                idToName.put(info.functionID().value(), info.functionName());
+            }
+        }
+        applyRenames(program, analysed, idToName);
+    }
+
+    /**
+     * Force the given names onto the local functions, overwriting any existing name (an agent rename
+     * is authoritative). Returns the number of functions actually renamed. Static and side-effect
+     * contained so it is unit-testable without the panel's network dependencies.
+     */
+    public static int applyRenames(Program program, GhidraRevengService.AnalysedProgram analysed,
+                                   java.util.Map<Long, String> idToName) {
+        int applied = 0;
+        int transaction = program.startTransaction("Apply agent function renames");
+        try {
+            for (var entry : idToName.entrySet()) {
+                String newName = entry.getValue();
+                if (newName == null || newName.isBlank()) {
+                    continue;
+                }
+                var withId = analysed.getFunctionForID(
+                        new ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID(entry.getKey()));
+                if (withId.isEmpty()) {
+                    continue;
+                }
+                Function function = withId.get().function();
+                if (newName.equals(function.getName())) {
+                    continue;
+                }
+                try {
+                    function.setName(newName, SourceType.USER_DEFINED);
+                    applied++;
+                } catch (DuplicateNameException | InvalidInputException e) {
+                    // Skip a name Ghidra rejects (duplicate / invalid); the others still apply.
+                }
+            }
+        } finally {
+            program.endTransaction(transaction, true);
+        }
+        return applied;
     }
 
     private String resolveContextChipText() {
