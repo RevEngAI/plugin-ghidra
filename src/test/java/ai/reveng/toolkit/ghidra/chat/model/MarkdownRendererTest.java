@@ -26,4 +26,25 @@ public class MarkdownRendererTest {
         assertTrue(html.contains("<th>Offset</th>"));
         assertTrue(html.contains("<td>sizes</td>"));
     }
+
+    @Test
+    public void rendersTableWhenLabelDirectlyPrecedesItWithoutBlankLine() {
+        // The agent writes "Parameters:" directly above the table with no blank line between.
+        String md = String.join("\n",
+                "Parameters:",
+                "| Offset | Name | Type |",
+                "|--------|------|------|",
+                "| 0 | sizes | usize |");
+        String html = MarkdownRenderer.toHtml(md);
+        assertTrue("table should render even without a blank line after the label, was: " + html,
+                html.contains("<table>"));
+        assertTrue(html.contains("<td>sizes</td>"));
+    }
+
+    @Test
+    public void leavesProseUnchangedWhenNoTablePresent() {
+        String html = MarkdownRenderer.toHtml("Just a sentence with a | pipe in it.");
+        assertTrue(html.contains("Just a sentence"));
+        assertTrue("a lone pipe must not become a table, was: " + html, !html.contains("<table>"));
+    }
 }
