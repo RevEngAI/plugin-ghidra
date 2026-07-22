@@ -23,6 +23,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses.RecentAnalysi
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
+import ai.reveng.toolkit.ghidra.core.services.sync.AutoUnstripSyncService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
@@ -91,6 +92,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 	private ExportFunctionBoundariesService exportFunctionBoundariesService;
 	private AnalysisLogComponent analysisLogComponent;
 	private LocalEditSyncService localEditSyncService;
+	private AutoUnstripSyncService autoUnstripSyncService;
 
 	private PluginTool tool;
 
@@ -116,6 +118,8 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
         localEditSyncService = new LocalEditSyncService(revengService, loggingService);
+        autoUnstripSyncService = new AutoUnstripSyncService(revengService, loggingService,
+                (message, warning) -> SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, warning)));
 
         setupActions();
 
@@ -295,6 +299,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 // Nothing to do, we already have loaded the function IDs and similar
                 log.info("Loaded analysed program: {}", analysedProgram);
                 localEditSyncService.attach(program);
+                autoUnstripSyncService.pollAndSync(analysedProgram.get(), false);
             } else {
                 // There is an associated program that hasn't been fully loaded yet
                 // This can happen if the analysis was started in a previous session but hadn't finished when closing Ghidra
@@ -345,12 +350,19 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         if (localEditSyncService != null) {
             localEditSyncService.detach(program);
         }
+        if (autoUnstripSyncService != null) {
+            revengService.getKnownProgram(program)
+                    .ifPresent(known -> autoUnstripSyncService.stopPolling(known.analysisID()));
+        }
     }
 
     @Override
     protected void dispose() {
         if (localEditSyncService != null) {
             localEditSyncService.dispose();
+        }
+        if (autoUnstripSyncService != null) {
+            autoUnstripSyncService.dispose();
         }
         super.dispose();
     }
@@ -373,6 +385,9 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                     var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
                     localEditSyncService.attach(program.program());
                     tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
+                    // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
+                    // and sync the recovered names / data types once it finishes (PLU-300).
+                    autoUnstripSyncService.pollAndSync(analysedProgram, true);
                 } catch (Exception e) {
                     Msg.error(this, "Error registering finished analysis for program " + program, e);
                     return;

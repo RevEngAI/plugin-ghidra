@@ -971,6 +971,11 @@ public class GhidraRevengService {
         return api.status(id);
     }
 
+    /// Current status of the server-side auto-unstrip pass, which runs after the analysis is complete.
+    public TypedApiInterface.AutoUnstripStatus getAutoUnstripStatus(TypedApiInterface.AnalysisID id) throws ApiException {
+        return api.getAutoUnstripStatus(id);
+    }
+
     public AnalysisStatus status(ProgramWithID program) {
         try {
             return api.status(program.analysisID());
