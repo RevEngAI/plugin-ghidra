@@ -17,12 +17,14 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.ProgramLocation;
+import ghidra.util.BrowserLoader;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.KeyEvent;
+import java.net.URI;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -257,17 +259,27 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
     }
 
     private void onLinkActivated(String href) {
+        if (href == null) {
+            return;
+        }
         Long offset = ChatTranscriptRenderer.parseJumpHref(href);
-        if (offset == null) {
+        if (offset != null) {
+            Program program = currentProgram();
+            GoToService goToService = tool.getService(GoToService.class);
+            if (program != null && goToService != null) {
+                Address address = program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
+                goToService.goTo(new ProgramLocation(program, address));
+            }
             return;
         }
-        Program program = currentProgram();
-        GoToService goToService = tool.getService(GoToService.class);
-        if (program == null || goToService == null) {
-            return;
+        // A link from the agent's markdown (e.g. a portal or docs URL) — open it in the browser.
+        if (href.startsWith("http://") || href.startsWith("https://")) {
+            try {
+                BrowserLoader.display(URI.create(href).toURL());
+            } catch (Exception e) {
+                loggingService().warn("Failed to open link " + href + ": " + e.getMessage());
+            }
         }
-        Address address = program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
-        goToService.goTo(new ProgramLocation(program, address));
     }
 
     // --- ChatController.Callbacks ------------------------------------------------------------
