@@ -84,11 +84,15 @@ public final class ChatTranscriptRenderer {
                 case UserMessage m ->
                         sb.append("<p><b>You:</b> ").append(withBreaks(m.content())).append("</p>");
                 case AssistantMessage m -> {
-                    String text = m.content() == null ? "" : withBreaks(m.content());
-                    if (m.isStreaming()) {
-                        text = text + " " + CURSOR;
+                    String content = m.content() == null ? "" : m.content();
+                    if (content.isBlank()) {
+                        sb.append("<p><i>").append(ELLIPSIS).append("</i></p>");
+                    } else {
+                        sb.append(MarkdownRenderer.toHtml(content));
+                        if (m.isStreaming()) {
+                            sb.append("<p>").append(CURSOR).append("</p>");
+                        }
                     }
-                    sb.append("<p>").append(text.isBlank() ? "<i>" + ELLIPSIS + "</i>" : text).append("</p>");
                 }
                 case ToolCall c -> {
                     sb.append("<p><code>").append(toolMarker(c.isError(), c.status())).append(' ')

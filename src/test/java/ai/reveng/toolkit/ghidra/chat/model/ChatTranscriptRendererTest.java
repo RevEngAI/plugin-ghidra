@@ -42,6 +42,20 @@ public class ChatTranscriptRendererTest {
     }
 
     @Test
+    public void rendersAssistantMarkdownAsHtml() {
+        ChatState state = ChatReducer.reduce(ChatState.initial(),
+                new EventAction(ChatEvent.normalize("TEXT_MESSAGE_START", Map.of("message_id", "m1"), null)));
+        state = ChatReducer.reduce(state, new EventAction(ChatEvent.normalize("TEXT_MESSAGE_CONTENT",
+                Map.of("message_id", "m1", "delta", "Use **main** and `printf`"), null)));
+        state = ChatReducer.reduce(state,
+                new EventAction(ChatEvent.normalize("TEXT_MESSAGE_END", Map.of("message_id", "m1"), null)));
+
+        String html = ChatTranscriptRenderer.renderTranscriptHtml(state);
+        assertTrue("bold markdown should render as HTML, was: " + html, html.contains("<strong>main</strong>"));
+        assertTrue("inline code should render as HTML, was: " + html, html.contains("<code>printf</code>"));
+    }
+
+    @Test
     public void findsPendingConfirmation() {
         ChatState state = ChatReducer.reduce(ChatState.initial(), new EventAction(
                 ChatEvent.normalize("TOOL_CONFIRMATION_REQUIRED",
