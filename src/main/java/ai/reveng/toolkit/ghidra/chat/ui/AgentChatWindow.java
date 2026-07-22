@@ -22,8 +22,14 @@ import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
 
 import javax.swing.*;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.Element;
+import javax.swing.text.html.HTML;
+import javax.swing.text.html.HTMLDocument;
 import java.awt.*;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -119,9 +125,18 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
         transcript.setContentType("text/html");
         transcript.setEditable(false);
         transcript.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
-        transcript.addHyperlinkListener(e -> {
-            if (e.getEventType() == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
-                onLinkActivated(e.getDescription());
+        // Resolve link clicks by hit-testing the HTML document ourselves rather than relying on
+        // JEditorPane's HyperlinkListener, which Ghidra's themed editor kit does not always fire.
+        transcript.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                int pos = transcript.viewToModel2D(e.getPoint());
+                if (pos >= 0) {
+                    onLinkActivated(hrefAt(pos));
+                }
             }
         });
         root.add(new JScrollPane(transcript), BorderLayout.CENTER);
@@ -256,6 +271,21 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
             controller.requestHistory();
         }
         component.revalidate();
+    }
+
+    /// The href of the HTML anchor covering the given document position, or {@code null} if none.
+    String hrefAt(int pos) {
+        if (!(transcript.getDocument() instanceof HTMLDocument htmlDoc)) {
+            return null;
+        }
+        Element element = htmlDoc.getCharacterElement(pos);
+        AttributeSet attributes = element.getAttributes();
+        Object anchor = attributes.getAttribute(HTML.Tag.A);
+        if (anchor instanceof AttributeSet anchorAttributes) {
+            Object href = anchorAttributes.getAttribute(HTML.Attribute.HREF);
+            return href != null ? href.toString() : null;
+        }
+        return null;
     }
 
     private void onLinkActivated(String href) {

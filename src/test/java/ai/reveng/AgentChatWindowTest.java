@@ -1,6 +1,8 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.toolkit.ghidra.chat.model.ChatItem;
+import ai.reveng.toolkit.ghidra.chat.model.ChatState;
 import ai.reveng.toolkit.ghidra.chat.ui.AgentChatWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
@@ -14,8 +16,11 @@ import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
+import javax.swing.JEditorPane;
 import javax.swing.JLabel;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -69,5 +74,40 @@ public class AgentChatWindowTest extends RevEngMockableHeadedIntegrationTest {
                 contextLabel.getText().contains("analysis #1"));
         assertTrue("context chip should reflect the focused function, was: " + contextLabel.getText(),
                 contextLabel.getText().contains("fn:"));
+    }
+
+    @Test
+    public void resolvesJumpAndExternalLinkHrefsFromRenderedTranscript() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+        });
+        env.addPlugin(AgentChatPlugin.class);
+        var chatWindow = getComponentProvider(AgentChatWindow.class);
+
+        var toolCall = new ChatItem.ToolCall("t1", "rename", "finished", false,
+                List.of(new ChatItem.FunctionRef(0x1000L, "foo")));
+        var message = new ChatItem.AssistantMessage("m1", "See [docs](https://example.com/help)", false);
+        var state = new ChatState(List.of(message, toolCall), null, "idle", null);
+        runSwing(() -> chatWindow.render(state));
+
+        JEditorPane transcript = (JEditorPane) getInstanceField("transcript", chatWindow);
+        Set<String> hrefs = new HashSet<>();
+        int length = transcript.getDocument().getLength();
+        for (int i = 0; i < length; i++) {
+            Object href = invokeInstanceMethod("hrefAt", chatWindow,
+                    new Class[]{int.class}, new Object[]{i});
+            if (href != null) {
+                hrefs.add((String) href);
+            }
+        }
+
+        assertTrue("jump link href should be resolvable from the rendered anchor, found: " + hrefs,
+                hrefs.contains("reai://jump/4096"));
+        assertTrue("external markdown link href should be resolvable, found: " + hrefs,
+                hrefs.contains("https://example.com/help"));
     }
 }
