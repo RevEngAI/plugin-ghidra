@@ -4,10 +4,8 @@ import ai.reveng.api.*;
 import ai.reveng.model.*;
 import ai.reveng.model.ConfigResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
-import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyCollection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.InvalidAPIInfoException;
@@ -56,6 +54,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final AnalysesResultsMetadataApi analysesResultsMetadataApi;
     private final ConfigApi configApi;
     private final SearchApi searchApi;
+    private final CollectionsApi collectionsApi;
     private final FunctionsCoreApi functionsCoreApi;
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
@@ -105,6 +104,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
         this.analysesResultsMetadataApi = new AnalysesResultsMetadataApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
+        this.collectionsApi = new CollectionsApi(apiClient);
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
         this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
@@ -256,70 +256,6 @@ public class TypedApiImplementation implements TypedApiInterface {
                 .reduce((a, b) -> a + "&" + b)
                 .orElse("");
     }
-    /**
-     * <a href="https://api.reveng.ai/v2/docs#tag/Collections/operation/list_collections_v2_collections_get">...</a>
-     *
-     * Parameters are passed via query parameters
-     * @param searchTerm
-     * @return
-     */
-    @Override
-    public List<Collection> searchCollections(String searchTerm,
-                                                    @Nullable List<SearchFilter> filter,
-                                                    int limit,
-                                                    int offset,
-                                                    @Nullable CollectionResultOrder orderBy,
-                                                    @Nullable OrderDirection order
-    ){
-        Map<String, String> params = new HashMap<>();
-        params.put("search_term", searchTerm);
-        params.put("limit", String.valueOf(limit));
-        params.put("offset", String.valueOf(offset));
-        if (filter != null){
-            params.put("filter", filter.stream().map(SearchFilter::name).reduce( (a, b) -> a + "," + b).orElse(null));
-        }
-        if (orderBy != null){
-            params.put("order_by", orderBy.name());
-        }
-        if (order != null){
-            params.put("order", order.name());
-        }
-        params.put("limit", String.valueOf(limit));
-
-        var request = requestBuilderForEndpoint("collections", queryParams(params))
-                .timeout(Duration.ofSeconds(10))
-                .method("GET", HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-        var response = sendVersion2Request(request);
-        var resultAsLegacyCollections =  mapJSONArray(response.getJsonData().getJSONArray("results"), LegacyCollection::fromJSONObject);
-        return resultAsLegacyCollections.stream().map( legacyCollection -> this.getCollectionInfo(legacyCollection.collectionID())).toList();
-    }
-
-    /**
-     * <a href="https://api.reveng.ai/v2/docs#tag/Platform-Search/operation/search_binaries_v2_search_binaries_get">Binaries Search</a>
-     * @param searchTerm
-     * @return
-     */
-    @Override
-    public List<AnalysisID> searchBinaries(String searchTerm) {
-        Map<String, String> params = new HashMap<>();
-        params.put("partial_name", searchTerm);
-        params.put("page_size", "20");
-//        params.put("page", String.valueOf(offset));
-
-        var request = requestBuilderForEndpoint("search", "binaries", queryParams(params))
-                .timeout(Duration.ofSeconds(10))
-                .method("GET", HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-
-        var response = sendVersion2Request(request);
-        var resultIDs =  mapJSONArray(response.getJsonData().getJSONArray("results"), entry -> ((JSONObject) entry).getInt("analysis_id"))
-                .stream().map(AnalysisID::new).toList();
-        return resultIDs;
-    }
-
     @Override
     public String getAnalysisLogs(AnalysisID analysisID) {
         var request = requestBuilderForEndpoint("analyses", String.valueOf(analysisID.id()), "logs")
@@ -633,21 +569,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     /**
-     * <a href="https://api.reveng.ai/v2/docs#tag/Collections/operation/get_collection_v2_collections__collection_id__get">Collection Info</a>
-     *
-     * @param id
-     * @return
-     */
-    @Override
-    public Collection getCollectionInfo(CollectionID id) {
-        var request = requestBuilderForEndpoint("collections", String.valueOf(id.id()))
-                .GET()
-                .build();
-        var response = sendVersion2Request(request);
-        return Collection.fromJSONObject(response.getJsonData());
-    }
-
-    /**
      * https://api.reveng.ai/v2/docs#tag/Confidence-Scores/operation/function_threat_score_v2_confidence_functions_threat_score_post
      */
     @Override
@@ -712,15 +633,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
-        try {
-            return new TypedAutoUnstripResponse(functionsCoreApi.aiUnstrip(analysisID.id(), new AiUnstripRequest()));
-        } catch (ApiException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Override
     public AutoUnstripStatus getAutoUnstripStatus(AnalysisID analysisID) throws ApiException {
         var body = analysisCoreApi.v3GetAnalysisAutoUnstripStatus((long) analysisID.id());
         if (body == null || body.getStatus() == null) {
@@ -748,8 +660,12 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public List<CollectionSearchResult> searchCollections(String partialCollectionName, String modelName) throws ApiException {
-        return this.searchApi.searchCollections(1, 10, partialCollectionName, null, null, null, modelName, List.of(Filters.HIDE_EMPTY), null, null).getData().getResults();
+    public List<CollectionListItemBody> searchCollections(String partialCollectionName) throws ApiException {
+        // The v3 list-collections endpoint does not filter by model; scope is handled server-side.
+        var results = this.collectionsApi
+                .v3ListCollections(partialCollectionName, null, 10L, 0L, null, null)
+                .getResults();
+        return results != null ? results : List.of();
     }
 
     @Override

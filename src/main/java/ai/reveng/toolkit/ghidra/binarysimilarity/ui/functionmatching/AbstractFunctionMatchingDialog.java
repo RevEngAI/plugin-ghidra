@@ -688,7 +688,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected JPanel createCollectionSelectorPanel() {
         collectionSelector = new CollectionSelectionPanel(
-                query -> revengService.searchCollectionsWithIds(query, analysisBasicInfo.getModelName()),
+                query -> revengService.searchCollectionsWithIds(query),
                 3
         );
         collectionSelector.addCollectionSelectionListener(this::onCollectionSelectionChanged);
