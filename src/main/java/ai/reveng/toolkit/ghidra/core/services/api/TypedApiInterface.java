@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Optional;
 
 import ai.reveng.model.*;
-import ai.reveng.model.AutoUnstripResponse;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -42,8 +41,6 @@ public interface TypedApiInterface {
     /// and it implies that the user has (at least read) access to this ID
     record AnalysisID(int id) {}
     // TODO: could add a box type for an analysis that the user has _write_ access to
-
-    record CollectionID(int id) {}
 
     /// Data type for all reveng API responses or parameters that are a binary hash (as returned by the upload method)
     /// The existence of a BinaryHash implies that there is a binary with this hash on the server
@@ -84,34 +81,6 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("upload not implemented yet");
     }
 
-
-    /**
-     * Special filters for the collection search endpoint
-     * https://api.reveng.ai/v2/docs#tag/Collections/operation/list_collections_v2_collections_get
-     */
-    enum SearchFilter {
-        official_only,
-        user_only,
-        team_only,
-        public_only,
-        hide_empty
-    }
-
-    default List<Collection> searchCollections(String searchTerm,
-                                                     @Nullable List<SearchFilter> filter,
-                                                     int limit,
-                                                     int offset,
-                                                     @Nullable CollectionResultOrder orderBy,
-                                                     @Nullable OrderDirection order
-    ) {
-        throw new UnsupportedOperationException("searchCollections not implemented yet");
-    }
-
-    default List<AnalysisID> searchBinaries(
-            String searchTerm
-    ) {
-        throw new UnsupportedOperationException("searchBinaries not implemented yet");
-    }
 
     String getAnalysisLogs(AnalysisID analysisID);
 
@@ -241,25 +210,10 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getNameScores not implemented yet");
     }
 
-    default Collection getCollectionInfo(CollectionID id) {
-        throw new UnsupportedOperationException("getCollectionInfo not implemented yet");
-    };
-
     default FunctionDetails getFunctionDetails(FunctionID id) {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
     }
 
-    ///
-    /// Typed Box Placeholder for {@link AutoUnstripResponse}
-    record TypedAutoUnstripResponse(
-            AutoUnstripResponse autoUnstripResponse
-    ) {
-    }
-
-
-    default TypedAutoUnstripResponse aiUnstrip(AnalysisID analysisID) {
-        throw new UnsupportedOperationException("aiUnstrip not implemented yet");
-    }
 
     /// Progress of the server-side auto-unstrip pass, which runs after an analysis is marked complete.
     enum AutoUnstripStatus { UNINITIALISED, PENDING, RUNNING, COMPLETED, FAILED, UNKNOWN }
@@ -277,7 +231,7 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("aiDecompRating not implemented yet");
     }
 
-    default List<CollectionSearchResult> searchCollections(String partialCollectionName, String modelName) throws ApiException {
+    default List<CollectionListItemBody> searchCollections(String partialCollectionName) throws ApiException {
         throw new UnsupportedOperationException("searchCollections not implemented yet");
     }
 

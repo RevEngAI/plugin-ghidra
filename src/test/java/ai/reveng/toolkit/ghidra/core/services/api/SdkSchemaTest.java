@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 
 public class SdkSchemaTest {
 
-    private static final int[] PINNED = {3, 100, 0};
+    private static final int[] PINNED = {3, 123, 0};
 
     @Test
     public void installedSdkIsAtLeastPinned() {
@@ -32,14 +32,15 @@ public class SdkSchemaTest {
     public void apiClientsExposeMethodsThePluginCalls() {
         Map<String, String[]> apis = new LinkedHashMap<>();
         apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
-        apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries", "searchCollections"});
+        apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
+        apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
                 "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
         apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
-                "aiUnstrip", "getFunctionBlocks", "getFunctionDetails"});
+                "getFunctionBlocks", "getFunctionDetails"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
                 "renameFunctionId", "batchRenameFunctions"});
         apis.put("ai.reveng.api.FunctionsDataTypesApi", new String[]{

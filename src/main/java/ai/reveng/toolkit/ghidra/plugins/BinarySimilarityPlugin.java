@@ -16,13 +16,11 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.collectiondialog.DataSetControlPanelComponent;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.BinaryLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.SimilarFunctionsWindow;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
-import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -31,7 +29,6 @@ import ghidra.app.context.ProgramLocationActionContext;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
 import ghidra.app.services.ProgramManager;
-import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.PluginEvent;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
@@ -41,7 +38,6 @@ import ghidra.util.Msg;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
 
-import java.util.Arrays;
 
 /**
  * This plugin provides features for performing binary code similarity using the
@@ -111,10 +107,6 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
         similarFunctionsWindow = new SimilarFunctionsWindow(tool);
         similarFunctionsWindow.addToTool();
-
-        // Install Collections Control Panel
-        DataSetControlPanelComponent collectionsComponent = new DataSetControlPanelComponent(tool, REVENG_AI_NAMESPACE);
-		collectionsComponent.addToTool();
 	}
 
 	private void setupActions() {
@@ -301,26 +293,6 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				summary.dedupedNames(),
 				summary.pushedNames(),
 				summary.pushedTypeSets());
-	}
-
-	@Override
-	public void readDataState(SaveState saveState) {
-		var apiService = getApiService();
-		if (apiService == null) return;
-		int[] rawCollectionIDs = saveState.getInts("collectionIDs", new int[0]);
-		var restoredCollections = Arrays.stream(rawCollectionIDs)
-				.mapToObj(TypedApiInterface.CollectionID::new)
-				.map(cID -> apiService.getApi().getCollectionInfo(cID))
-				.toList();
-		apiService.setActiveCollections(restoredCollections);
-	}
-
-	@Override
-	public void writeDataState(SaveState saveState) {
-		var apiService = getApiService();
-		if (apiService == null) return;
-		int[] collectionIDs = apiService.getActiveCollections().stream().map(Collection::collectionID).mapToInt(TypedApiInterface.CollectionID::id).toArray();
-		saveState.putInts("collectionIDs", collectionIDs);
 	}
 
 	@Override

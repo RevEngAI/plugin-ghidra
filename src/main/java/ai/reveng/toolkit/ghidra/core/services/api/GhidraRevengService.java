@@ -13,7 +13,6 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilation
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.Collection;
 import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import com.google.common.collect.BiMap;
@@ -94,8 +93,6 @@ public class GhidraRevengService {
 
     /// Number of times a data-type push is retried when the server reports a version conflict.
     private static final int TYPE_PUSH_MAX_RETRIES = 3;
-    private final List<Collection> collections = new ArrayList<>();
-    private final List<AnalysisResult> analysisIDFilter = new ArrayList<>();
 
     /// dedicated functions on the GhidraRevengService should be used instead to enforce assumptions via
     /// type level guarantees
@@ -1298,13 +1295,6 @@ public class GhidraRevengService {
         openPortal("analyses", String.format("%s?view=functions&fn=%s", analysisID.id(), functionID.value()));
     }
 
-    public void openCollectionInPortal(Collection collection) {
-        openPortal("collections/", String.valueOf(collection.collectionID().id()));
-    }
-
-    public void openPortalFor(Collection c){
-        openCollectionInPortal(c);
-    }
     public void openPortalFor(TypedApiInterface.FunctionID f){
         openFunctionInPortal(f);
     }
@@ -1348,25 +1338,6 @@ public class GhidraRevengService {
         }
     }
 
-
-    public void setActiveCollections(List<Collection> collections){
-        Msg.info(this, "Setting active collections to %s".formatted(collections));
-        this.collections.clear();
-        this.collections.addAll(collections);
-    }
-
-    public List<Collection> getActiveCollections() {
-        return Collections.unmodifiableList(this.collections);
-    }
-
-    public void setAnalysisIDMatchFilter(List<AnalysisResult> analysisIDS) {
-        this.analysisIDFilter.clear();
-        this.analysisIDFilter.addAll(analysisIDS);
-    }
-
-    public List<AnalysisResult> getActiveAnalysisIDsFilter() {
-        return Collections.unmodifiableList(this.analysisIDFilter);
-    }
 
     /**
      * @param tool   The UI tool for firing an event on status changes. Can be null
@@ -1480,17 +1451,17 @@ public class GhidraRevengService {
 
     }
 
-    public CompletableFuture<List<SelectableItem>> searchCollectionsWithIds(String query, String modelName) {
+    public CompletableFuture<List<SelectableItem>> searchCollectionsWithIds(String query) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Call the actual API endpoint
-                List<CollectionSearchResult> results = api.searchCollections(query, modelName);
+                List<CollectionListItemBody> results = api.searchCollections(query);
 
                 // Convert to SelectableItem objects with both ID and name
                 List<SelectableItem> selectableItems = results.stream()
-                        .filter(result -> !result.getCollectionName().trim().isEmpty())
+                        .filter(result -> result.getCollectionName() != null && !result.getCollectionName().trim().isEmpty())
                         .map(result -> new SelectableItem(
-                                result.getCollectionId(),
+                                result.getCollectionId().intValue(),
                                 result.getCollectionName()
                         ))
                         .collect(Collectors.toList());
