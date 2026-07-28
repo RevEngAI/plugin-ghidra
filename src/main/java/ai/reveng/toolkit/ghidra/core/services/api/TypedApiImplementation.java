@@ -230,23 +230,37 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+        // The server caps page_size at 1000, so paginate until every function is retrieved.
+        int pageSize = 1000;
+        List<FunctionInfo> functions = new ArrayList<>();
+        int page = 1;
+        while (true) {
+            BaseResponseAnalysisFunctions response;
+            try {
+                response = this.analysesResultsMetadataApi.getFunctionsList(
+                        analysisID.id(), null, null, null, false, page, pageSize);
+            } catch (ApiException e) {
+                throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+            }
 
-        BaseResponseAnalysisFunctions response = null;
-        try {
-            response = this.analysesResultsMetadataApi.getFunctionsList(analysisID.id(), null, null, null, false, null, null);
-        } catch (ApiException e) {
-            throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+            response.getData().getFunctions().stream().map(f -> (
+                    new FunctionInfo(
+                            new FunctionID(f.getFunctionId()),
+                            f.getFunctionName(),
+                            f.getFunctionMangledName(),
+                            f.getFunctionVaddr(),
+                            f.getFunctionSize()
+                    )
+            )).forEach(functions::add);
+
+            var pagination = response.getMeta() != null ? response.getMeta().getPagination() : null;
+            if (pagination == null || !Boolean.TRUE.equals(pagination.getHasNextPage())) {
+                break;
+            }
+            page++;
         }
 
-        return response.getData().getFunctions().stream().map(f -> (
-                new FunctionInfo(
-                        new FunctionID(f.getFunctionId()),
-                        f.getFunctionName(),
-                        f.getFunctionMangledName(),
-                        f.getFunctionVaddr(),
-                        f.getFunctionSize()
-                )
-        )).toList();
+        return functions;
     }
 
     private String queryParams(Map<String, String> params){
