@@ -56,6 +56,8 @@ repositories {
 	// dropped into the lib/ directory.
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html for more info.
 	// Ex: mavenCentral()
+	// mavenLocal() is listed first so that locally installed artifacts take precedence.
+	mavenLocal()
 	mavenCentral()
 }
 
@@ -76,6 +78,30 @@ dependencies {
 	implementation group: 'org.jetbrains', name: 'annotations', version: '26.0.2'
 
 }
+
+// Build against a different ai.reveng:sdk than the pin above, e.g. one installed into the local
+// Maven repository:
+//
+//     ./gradlew buildExtension -PrevengSdkVersion=<version>
+//
+// The pin in the dependencies block stays the literal default so that
+// .github/scripts/bump_revengai.py can still find and rewrite it.
+if (project.hasProperty('revengSdkVersion')) {
+	configurations.all {
+		resolutionStrategy.force "ai.reveng:sdk:${project.revengSdkVersion}"
+	}
+}
+
+// Ghidra's copyDependencies task copies runtime jars into lib/ but never prunes, and everything
+// in lib/ ends up on the compile classpath and in the extension zip. Without this, changing the
+// SDK version leaves the old jar behind and two versions get shipped. Deleting unconditionally
+// keeps this correct without duplicating the version literal; copyDependencies puts back whichever
+// jar actually resolved.
+tasks.register('pruneStaleSdkJars', Delete) {
+	delete fileTree(dir: 'lib', include: 'sdk-*.jar')
+}
+copyDependencies.dependsOn pruneStaleSdkJars
+
 test {
 	maxParallelForks = 3
 	useJUnitPlatform()
