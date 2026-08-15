@@ -161,6 +161,43 @@ public class GhidraDataTypeEncoderTest extends ghidra.test.AbstractGhidraHeadles
         assertEquals(Long.valueOf(3), members.get(1).getBitSize());
     }
 
+    /// The API wants a bitfield's offset from the start of the containing type. Ghidra reports the
+    /// offset of the least-significant bit within the component's storage unit, and on a big-endian
+    /// target that is counted from the far end of the unit: the same four fields report 7, 4, 0 and
+    /// 0 rather than 0, 1, 4 and 0. Taking that at face value would put the first field of a
+    /// big-endian struct at bit 7 and then walk backwards.
+    @Test
+    public void bitfieldOffsetsAreCountedFromTheStartOfTheTypeOnEitherEndianness() throws Exception {
+        assertEquals("little-endian offsets run 0, 1, 4, 8",
+                List.of(0L, 1L, 4L, 8L), bitOffsetsOfPackedFlags(false));
+        assertEquals("and big-endian offsets have to run the same way",
+                List.of(0L, 1L, 4L, 8L), bitOffsetsOfPackedFlags(true));
+    }
+
+    /// `int a:1; int b:3; int c:4; int d:8;` packed into a manager of the given endianness.
+    private static List<Long> bitOffsetsOfPackedFlags(boolean bigEndian) throws Exception {
+        var organization = ghidra.program.model.data.DataOrganizationImpl.getDefaultOrganization(null);
+        organization.setBigEndian(bigEndian);
+        var dtm = new ghidra.program.model.data.StandAloneDataTypeManager("endianness", organization);
+        int transaction = dtm.startTransaction("build");
+        try {
+            var flags = new StructureDataType("Flags", 0, dtm);
+            flags.setPackingEnabled(true);
+            flags.addBitField(new IntegerDataType(dtm), 1, "a", null);
+            flags.addBitField(new IntegerDataType(dtm), 3, "b", null);
+            flags.addBitField(new IntegerDataType(dtm), 4, "c", null);
+            flags.addBitField(new IntegerDataType(dtm), 8, "d", null);
+
+            var updated = (ai.reveng.model.UpdateStructDataType) instanceOfUpdate(flags, key -> 1L);
+            return updated.getDefinition().getMembers().stream()
+                    .map(ai.reveng.model.DataTypeMemberEntry::getBitOffset)
+                    .toList();
+        } finally {
+            dtm.endTransaction(transaction, true);
+            dtm.close();
+        }
+    }
+
     @Test
     public void unionMembersAllSitAtOffsetZero() {
         var union = new UnionDataType("U");

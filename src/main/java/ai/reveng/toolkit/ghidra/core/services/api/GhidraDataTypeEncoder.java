@@ -398,6 +398,7 @@ public final class GhidraDataTypeEncoder {
     private static List<ai.reveng.model.DataTypeMemberEntry> membersOf(Composite composite,
                                                                       boolean union,
                                                                       Ids ids) {
+        boolean bigEndian = isBigEndian(composite);
         List<ai.reveng.model.DataTypeMemberEntry> members = new ArrayList<>();
         for (DataTypeComponent component : composite.getDefinedComponents()) {
             DataType memberType = memberTypeOf(component);
@@ -409,7 +410,7 @@ public final class GhidraDataTypeEncoder {
                     .dataTypeId(memberType == null ? null : ids.idOf(keyOf(memberType)));
             if (component.getDataType() instanceof BitFieldDataType bitField) {
                 member.isBitfield(true)
-                        .bitOffset(component.getOffset() * 8L + bitField.getBitOffset())
+                        .bitOffset(bitOffsetOf(component, bitField, bigEndian))
                         .bitSize((long) bitField.getBitSize());
             } else {
                 member.isBitfield(false);
@@ -417,6 +418,29 @@ public final class GhidraDataTypeEncoder {
             members.add(member);
         }
         return members;
+    }
+
+    /// The bit offset of a bitfield member from the start of the containing type, which is what the
+    /// API asks for.
+    ///
+    /// Ghidra reports the offset of the least-significant bit within the component's storage unit,
+    /// so the two agree only on a little-endian target, where the least-significant bit *is* the
+    /// first one. Big-endian fills a storage unit from the most-significant end, so the same field
+    /// has to be counted from the other side of the unit: a big-endian `int a:1` at the start of a
+    /// struct reports a bit offset of 7, not 0, and successive fields count down rather than up.
+    private static long bitOffsetOf(DataTypeComponent component, BitFieldDataType bitField, boolean bigEndian) {
+        long withinUnit = bigEndian
+                ? component.getLength() * 8L - bitField.getBitOffset() - bitField.getBitSize()
+                : bitField.getBitOffset();
+        return component.getOffset() * 8L + withinUnit;
+    }
+
+    /// A composite with no manager cannot say what it is laid out for; little-endian is both the
+    /// commoner case and what Ghidra's own default data organisation assumes.
+    private static boolean isBigEndian(Composite composite) {
+        var manager = composite.getDataTypeManager();
+        return manager != null && manager.getDataOrganization() != null
+                && manager.getDataOrganization().isBigEndian();
     }
 
     /// Enum constants keep their decimal-string form all the way out: a value may be negative or
