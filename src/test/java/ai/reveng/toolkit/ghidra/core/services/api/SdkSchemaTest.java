@@ -45,7 +45,12 @@ public class SdkSchemaTest {
                 "renameFunctionId", "batchRenameFunctions"});
         apis.put("ai.reveng.api.DataTypesApi", new String[]{
                 "v3ListFunctionSignaturesCall", "v3ListAnalysisDataTypesCall",
-                "v3GetFunctionSignatureHistory"});
+                "v3GetFunctionSignatureHistory",
+                // The write path: the two batch data-type endpoints go through the call form
+                // because their responses embed DataTypeEntry, while the singular signature write
+                // uses the typed form so its status code survives on the ApiException.
+                "v3CreateAnalysisDataTypesCall", "v3UpdateAnalysisDataTypesCall",
+                "v3UpdateFunctionSignature"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
                 "createAiDecompilation", "getAiDecompilation", "getAiDecompilationTokenised",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
@@ -74,6 +79,35 @@ public class SdkSchemaTest {
                 "getName", "getOrdinal", "getDataTypeId", "getBitLength");
         requireMethods(missing, "ai.reveng.model.GetFunctionSignatureHistoryBody", "getVersions");
 
+        // The write path builds request bodies out of generated models — serialisation of the
+        // oneOf unions works even though deserialisation does not — so their setters are the
+        // surface that has to stay put.
+        requireMethods(missing, "ai.reveng.model.CreateAnalysisDataTypesInputBody", "setDataTypes");
+        requireMethods(missing, "ai.reveng.model.UpdateAnalysisDataTypesInputBody", "setDataTypes");
+        requireMethods(missing, "ai.reveng.model.CreateDataTypeEntry", "getActualInstance");
+        requireMethods(missing, "ai.reveng.model.UpdateDataTypeEntry", "getActualInstance");
+        requireMethods(missing, "ai.reveng.model.CreateStructDataType",
+                "kind", "name", "namespace", "size", "definition");
+        requireMethods(missing, "ai.reveng.model.UpdateStructDataType",
+                "kind", "dataTypeId", "name", "namespace", "size", "definition");
+        requireMethods(missing, "ai.reveng.model.DataTypeMemberEntry",
+                "name", "offset", "size", "dataTypeId", "isBitfield", "bitOffset", "bitSize");
+        requireMethods(missing, "ai.reveng.model.DataTypeEnumValueEntry", "name", "value");
+        requireMethods(missing, "ai.reveng.model.DataTypeFunctionParameterEntry",
+                "ordinal", "size", "name", "dataTypeId");
+        requireMethods(missing, "ai.reveng.model.StructDefinition", "members");
+        requireMethods(missing, "ai.reveng.model.UnionDefinition", "members");
+        requireMethods(missing, "ai.reveng.model.EnumDefinition", "values");
+        requireMethods(missing, "ai.reveng.model.TypedefDefinition", "targetDataTypeId");
+        requireMethods(missing, "ai.reveng.model.PointerDefinition", "pointeeDataTypeId");
+        requireMethods(missing, "ai.reveng.model.ArrayDefinition", "count", "elementDataTypeId");
+        requireMethods(missing, "ai.reveng.model.FunctionTypeDefinition",
+                "parameters", "returnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.UpdateFunctionSignatureInputBody",
+                "setCallingConvention", "setParameters", "setReturnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.SignatureParameterInput",
+                "ordinal", "name", "dataTypeId", "bitLength", "storage");
+        requireMethods(missing, "ai.reveng.model.SignatureStorageInput", "kind", "location");
         requireMethods(missing, "ai.reveng.model.FunctionSignatureVersion",
                 "getValue", "getUpdatedAt", "getUpdatedBy");
 

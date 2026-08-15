@@ -1,6 +1,7 @@
 package ai.reveng.toolkit.ghidra.core.services.sync;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraDataTypeEncoder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -198,9 +199,21 @@ public class LocalEditSyncService {
     /// Push every server-known function that references the edited type, so a type edit is
     /// propagated to the portal.
     ///
-    /// TODO: temporarily a no-op, along with the per-function type push it schedules. Deciding which
-    /// functions reach a given type needs the type walk that the v3 write path brings with it.
+    /// A data type is not attached to any one function, so an edit to it is turned back into
+    /// function pushes: each affected function's own push re-resolves the type and writes its new
+    /// definition. Rescheduling rather than pushing directly means the per-function debounce still
+    /// applies, so editing several members of a struct collapses into one push per function.
     private void pushFunctionsReferencingType(Program program, String typeName) {
+        var analysedProgram = revengService.getAnalysedProgram(program);
+        if (analysedProgram.isEmpty()) {
+            return;
+        }
+        for (Function function : analysedProgram.get().getFunctionMap().values()) {
+            if (isSyncable(function)
+                    && GhidraDataTypeEncoder.referencedTypeNames(function).contains(typeName)) {
+                scheduleTypes(program, function.getEntryPoint());
+            }
+        }
     }
 
     private void pushRename(Program program, Address entryPoint) {

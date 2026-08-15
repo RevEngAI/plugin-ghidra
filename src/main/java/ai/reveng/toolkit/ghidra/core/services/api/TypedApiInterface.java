@@ -173,6 +173,36 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("canonicalizeFunctionNames not implemented yet");
     }
 
+    /// POST /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Create types the analysis does not have. The bodies carry no `data_type_id`; the server
+    /// assigns one to each and returns the stored types. Callers should go through
+    /// {@link AnalysisDataTypesService}, which resolves against the catalogue first and chunks the
+    /// batch.
+    default List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                         CreateAnalysisDataTypesInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("createAnalysisDataTypes not implemented yet");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Replace stored types in full — a field left out of the request is cleared. Every body must
+    /// name the `data_type_id` it replaces.
+    default List<ServerDataType> updateAnalysisDataTypes(AnalysisID analysisID,
+                                                         UpdateAnalysisDataTypesInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("updateAnalysisDataTypes not implemented yet");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/functions/{function_id}/signature
+    ///
+    /// Replace one function's parameters, return type and calling convention. Edit-only: a function
+    /// the server has no extracted signature for is answered with 404. Callers should go through
+    /// {@link FunctionSignatureService#put}, which treats that 404 as "nothing to edit".
+    default void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                         UpdateFunctionSignatureInputBody signature) throws ApiException {
+        throw new UnsupportedOperationException("updateFunctionSignature not implemented yet");
+    }
+
     void renameFunction(FunctionID id, String newName, String newNameMangled);
 
     default FunctionNameScore getNameScore(FunctionMatch match) {

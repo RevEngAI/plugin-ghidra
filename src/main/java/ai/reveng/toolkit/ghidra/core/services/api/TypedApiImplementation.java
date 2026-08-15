@@ -391,6 +391,39 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 
+    /// POST /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Written through the generated call for the same reason the reads are: the 201 body embeds
+    /// `DataTypeEntry`. The request body is a generated model, which serialises correctly — only
+    /// the deserialiser is unusable.
+    @Override
+    public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                        CreateAnalysisDataTypesInputBody request) throws ApiException {
+        var call = dataTypesApi.v3CreateAnalysisDataTypesCall((long) analysisID.id(), request, null);
+        return ServerDataTypeReader.readEntries(
+                executeForJsonObject(call, "create analysis data types"), "data_types");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/data-types
+    @Override
+    public List<ServerDataType> updateAnalysisDataTypes(AnalysisID analysisID,
+                                                        UpdateAnalysisDataTypesInputBody request) throws ApiException {
+        var call = dataTypesApi.v3UpdateAnalysisDataTypesCall((long) analysisID.id(), request, null);
+        return ServerDataTypeReader.readEntries(
+                executeForJsonObject(call, "update analysis data types"), "data_types");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/functions/{function_id}/signature
+    ///
+    /// The response holds no `DataTypeEntry`, so the generated model reads it fine — and going
+    /// through it keeps the status code on the {@link ApiException}, which is how a function
+    /// without an extracted signature is told apart from a real failure.
+    @Override
+    public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                        UpdateFunctionSignatureInputBody signature) throws ApiException {
+        dataTypesApi.v3UpdateFunctionSignature((long) analysisID.id(), functionID.value(), signature);
+    }
+
     /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
     ///
     /// The history body holds no `DataTypeEntry`, so the generated model reads it fine.

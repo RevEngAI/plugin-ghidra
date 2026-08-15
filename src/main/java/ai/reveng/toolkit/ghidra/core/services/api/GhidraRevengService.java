@@ -408,13 +408,39 @@ public class GhidraRevengService {
     }
 
     /// Push the local signature and variables of a function back to the portal.
-    ///
-    /// TODO: temporarily a no-op. The v2 push serialised the whole function into one data-type blob
-    /// under optimistic concurrency, and neither that endpoint nor its models exist any more. The v3
-    /// write path — resolve the types a function reaches against the analysis' catalogue, then write
-    /// the signature that refers to them by id — replaces it.
     public boolean pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
-        return false;
+        return pushFunctionTypes(analysedProgram, List.of(function)) > 0;
+    }
+
+    /// Push the local signatures of several functions, and answer with how many the server took.
+    ///
+    /// The two halves of the write path compose here, and only here. Data-type management is a
+    /// batch affair — the union of everything the functions reach is resolved against the analysis'
+    /// catalogue and created where it is missing, in one pass — while a signature is written one
+    /// function at a time. Running the type pass once for the whole set is the point of keeping the
+    /// two apart: the alternative re-resolves the same closure per function.
+    public int pushFunctionTypes(AnalysedProgram analysedProgram, Collection<Function> functions) throws ApiException {
+        Map<Function, TypedApiInterface.FunctionID> known = new LinkedHashMap<>();
+        for (Function function : functions) {
+            analysedProgram.getIDForFunction(function)
+                    .ifPresent(withId -> known.put(function, withId.functionID()));
+        }
+        if (known.isEmpty()) {
+            return 0;
+        }
+
+        List<DataType> roots = new ArrayList<>();
+        known.keySet().forEach(function -> roots.addAll(GhidraDataTypeEncoder.reachableTypes(function)));
+        var ids = analysisDataTypes().ensure(analysedProgram.analysisID(), roots);
+
+        int pushed = 0;
+        for (var entry : known.entrySet()) {
+            var signature = GhidraDataTypeEncoder.signatureOf(entry.getKey(), ids);
+            if (signatures().put(analysedProgram.analysisID(), entry.getValue(), signature)) {
+                pushed++;
+            }
+        }
+        return pushed;
     }
 
     /// Breakdown of a bidirectional analysis sync, shown to the user afterwards.
@@ -585,7 +611,7 @@ public class GhidraRevengService {
                 .collect(Collectors.toSet());
 
         var functionMap = analysedProgram.getFunctionMap();
-        int pushed = 0;
+        List<Function> candidates = new ArrayList<>();
         for (TypedApiInterface.FunctionID functionID : matchedIds) {
             if (monitor.isCancelled()) {
                 break;
@@ -599,17 +625,21 @@ public class GhidraRevengService {
                     || function.getSignatureSource() == SourceType.DEFAULT) {
                 continue;
             }
-            try {
-                if (pushFunctionTypes(analysedProgram, function)) {
-                    pushed++;
-                    log.info("Pushed local types for \"%s\" at %s (remote had none)"
-                            .formatted(function.getName(), function.getEntryPoint()));
-                }
-            } catch (ApiException e) {
-                Msg.warn(this, "Failed to push types for %s during sync".formatted(function.getName()), e);
-            }
+            candidates.add(function);
         }
-        return pushed;
+        if (candidates.isEmpty()) {
+            return 0;
+        }
+        try {
+            // One type pass over the union of every candidate's types, then a signature write each.
+            int pushed = pushFunctionTypes(analysedProgram, candidates);
+            log.info("Pushed local types for %d of %d functions the portal had none for"
+                    .formatted(pushed, candidates.size()));
+            return pushed;
+        } catch (ApiException e) {
+            Msg.warn(this, "Failed to push local types during sync", e);
+            return 0;
+        }
     }
 
     private boolean applyRemoteName(Program program, Function function, Namespace revEngNamespace, String name) {

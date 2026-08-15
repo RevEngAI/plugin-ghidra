@@ -1,6 +1,8 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.model.BatchFunctionSignatureEntry;
+import ai.reveng.model.UpdateFunctionSignatureInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
@@ -116,5 +118,68 @@ public class FunctionSignatureServiceTest {
                 present.get().dataTypes().isEmpty());
 
         assertTrue(service.get(new FunctionID(3)).isEmpty());
+    }
+
+    /// Accepts a signature write for one function and answers 404 for every other, which is how the
+    /// endpoint reports a function it never extracted a signature for.
+    private static class WritingApi extends UnimplementedAPI {
+        final List<FunctionID> written = new ArrayList<>();
+        private final FunctionID extracted;
+
+        WritingApi(FunctionID extracted) {
+            this.extracted = extracted;
+        }
+
+        @Override
+        public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                            UpdateFunctionSignatureInputBody signature) throws ApiException {
+            if (!extracted.equals(functionID)) {
+                throw new ApiException(404, "Not Found");
+            }
+            written.add(functionID);
+        }
+    }
+
+    @Test
+    public void writesTheSignatureOfAFunctionTheServerExtracted() throws Exception {
+        var api = new WritingApi(new FunctionID(1));
+        var service = new FunctionSignatureService(api);
+
+        assertTrue(service.put(new AnalysisID(1), new FunctionID(1),
+                new UpdateFunctionSignatureInputBody().parameters(List.of())));
+        assertEquals(List.of(new FunctionID(1)), api.written);
+    }
+
+    /// `has_signature` false is a normal state — a thunk, an external function, or an analysis where
+    /// type extraction never ran — and the endpoint reports it as a 404. The push is reactive on a
+    /// short debounce, so this must be a quiet skip rather than an exception or a warning.
+    @Test
+    public void skipsFunctionsTheServerHasNoExtractedSignatureFor() throws Exception {
+        var api = new WritingApi(new FunctionID(1));
+        var service = new FunctionSignatureService(api);
+
+        assertFalse(service.put(new AnalysisID(1), new FunctionID(2),
+                new UpdateFunctionSignatureInputBody().parameters(List.of())));
+        assertTrue("nothing was written", api.written.isEmpty());
+    }
+
+    /// Anything that is not a missing signature is a real failure and has to reach the caller.
+    @Test
+    public void otherFailuresStillSurface() {
+        var service = new FunctionSignatureService(new UnimplementedAPI() {
+            @Override
+            public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                                UpdateFunctionSignatureInputBody signature) throws ApiException {
+                throw new ApiException(403, "Forbidden");
+            }
+        });
+
+        try {
+            service.put(new AnalysisID(1), new FunctionID(1),
+                    new UpdateFunctionSignatureInputBody().parameters(List.of()));
+            org.junit.Assert.fail("a 403 must not be swallowed");
+        } catch (ApiException e) {
+            assertEquals(403, e.getCode());
+        }
     }
 }
