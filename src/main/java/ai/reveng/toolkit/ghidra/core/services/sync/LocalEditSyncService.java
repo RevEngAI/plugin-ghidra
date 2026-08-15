@@ -7,7 +7,6 @@ import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
 import ghidra.framework.model.DomainObjectListenerBuilder;
-import ai.reveng.toolkit.ghidra.core.services.api.GhidraToServerTypeSerializer;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.Function;
@@ -197,18 +196,11 @@ public class LocalEditSyncService {
     }
 
     /// Push every server-known function that references the edited type, so a type edit is
-    /// propagated to the portal (which only stores types inside each function's data-types blob).
+    /// propagated to the portal.
+    ///
+    /// TODO: temporarily a no-op, along with the per-function type push it schedules. Deciding which
+    /// functions reach a given type needs the type walk that the v3 write path brings with it.
     private void pushFunctionsReferencingType(Program program, String typeName) {
-        var analysedProgram = revengService.getAnalysedProgram(program);
-        if (analysedProgram.isEmpty()) {
-            return;
-        }
-        for (Function function : analysedProgram.get().getFunctionMap().values()) {
-            if (isSyncable(function)
-                    && GhidraToServerTypeSerializer.referencedTypeNames(function).contains(typeName)) {
-                scheduleTypes(program, function.getEntryPoint());
-            }
-        }
     }
 
     private void pushRename(Program program, Address entryPoint) {

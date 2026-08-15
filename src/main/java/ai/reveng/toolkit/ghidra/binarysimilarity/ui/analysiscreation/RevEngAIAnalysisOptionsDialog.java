@@ -44,8 +44,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JTextField tagsTextBox;
     private JCheckBox scrapeExternalTagsBox;
     private JCheckBox identifyCapabilitiesCheckBox;
-    private JCheckBox identifyCVECheckBox;
-    private JCheckBox generateSBOMCheckBox;
     private JComboBox<String> architectureComboBox;
     private boolean okPressed = false;
 
@@ -166,20 +164,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         identifyCapabilitiesCheckBox = new JCheckBox("Identify Capabilities");
         identifyCapabilitiesCheckBox.setToolTipText("Identify capabilities of the binary");
 
-        // Add Check box for identifying CVEs
-        identifyCVECheckBox = new JCheckBox("Identify CVEs");
-        identifyCVECheckBox.setToolTipText("Identify CVEs in the binary");
-
-        // Add Check box for generating the SBOM
-        generateSBOMCheckBox = new JCheckBox("Generate SBOM");
-        generateSBOMCheckBox.setToolTipText("Generate a Software Bill of Materials (SBOM) for the binary");
-
 //        checkBoxPanel.add(dynamicExecutionCheckBox);
 //        checkBoxPanel.add(advancedAnalysisCheckBox);
 //        checkBoxPanel.add(scrapeExternalTagsBox);
 //        checkBoxPanel.add(identifyCapabilitiesCheckBox);
-//        checkBoxPanel.add(identifyCVECheckBox);
-//        checkBoxPanel.add(generateSBOMCheckBox);
 //        workPanel.add(checkBoxPanel);
 
         // Add custom tags field
@@ -224,9 +212,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         options.skipScraping(!scrapeExternalTagsBox.isSelected());
         options.skipCapabilities(!identifyCapabilitiesCheckBox.isSelected());
-
-        options.skipSBOM(!generateSBOMCheckBox.isSelected());
-        options.skipCVE(!identifyCVECheckBox.isSelected());
 
         options.advancedAnalysis(advancedAnalysisCheckBox.isSelected());
         options.dynamicExecution(dynamicExecutionCheckBox.isSelected());

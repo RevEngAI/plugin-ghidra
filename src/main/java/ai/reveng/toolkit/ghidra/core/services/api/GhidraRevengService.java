@@ -23,6 +23,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Structure;
+import ghidra.program.model.data.TypedefDataType;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.CircularDependencyException;
 import ghidra.program.model.listing.Function;
@@ -90,9 +91,6 @@ public class GhidraRevengService {
     /// reactive listener does not echo those changes straight back to the portal. Mirrors the IDA
     /// plugin's {@code analysis_sync_service.is_worker_running()} guard.
     private final AtomicBoolean pushbackSuppressed = new AtomicBoolean(false);
-
-    /// Number of times a data-type push is retried when the server reports a version conflict.
-    private static final int TYPE_PUSH_MAX_RETRIES = 3;
 
     /// dedicated functions on the GhidraRevengService should be used instead to enforce assumptions via
     /// type level guarantees
@@ -383,45 +381,13 @@ public class GhidraRevengService {
         return String.join(Namespace.DELIMITER, parts);
     }
 
-    /// Push the local signature and variables of a function back to the portal. Uses optimistic
-    /// concurrency: the current server version is fetched and sent back, and version conflicts are
-    /// retried against the latest version. Returns true if the server accepted the update.
-    /// No-op (returns false) if the function is not known on the server.
+    /// Push the local signature and variables of a function back to the portal.
+    ///
+    /// TODO: temporarily a no-op. The v2 push serialised the whole function into one data-type blob
+    /// under optimistic concurrency, and neither that endpoint nor its models exist any more. The v3
+    /// write path — resolve the types a function reaches against the analysis' catalogue, then write
+    /// the signature that refers to them by id — replaces it.
     public boolean pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
-        var withId = analysedProgram.getIDForFunction(function);
-        if (withId.isEmpty()) {
-            return false;
-        }
-        var functionID = withId.get().functionID();
-        long imageBase = analysedProgram.program().getImageBase().getOffset();
-        var localTypes = GhidraToServerTypeSerializer.buildFunctionInfo(function, imageBase);
-
-        for (int attempt = 0; attempt < TYPE_PUSH_MAX_RETRIES; attempt++) {
-            long version = api.getFunctionDataTypesWithVersion(functionID)
-                    .map(TypedApiInterface.VersionedFunctionTypes::version)
-                    .orElse(0L);
-            var results = api.pushFunctionDataTypes(analysedProgram.analysisID(),
-                    List.of(new TypedApiInterface.FunctionDataTypeUpdate(functionID, localTypes, version)));
-            if (results.isEmpty()) {
-                return false;
-            }
-            var result = results.get(0);
-            switch (result.status()) {
-                case UPDATED -> {
-                    return true;
-                }
-                case VERSION_CONFLICT -> {
-                    // Re-fetch the latest version and retry.
-                }
-                default -> {
-                    Msg.warn(this, "Failed to push types for function %s: %s"
-                            .formatted(function.getName(), result.error()));
-                    return false;
-                }
-            }
-        }
-        Msg.warn(this, "Gave up pushing types for function %s after %d version conflicts"
-                .formatted(function.getName(), TYPE_PUSH_MAX_RETRIES));
         return false;
     }
 

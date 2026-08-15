@@ -86,18 +86,8 @@ public class AnalysisOptionsBuilder {
                 );
     }
 
-    public AnalysisOptionsBuilder skipSBOM(boolean b) {
-        options.put("skip_sbom", b);
-        return this;
-    }
-
     public AnalysisOptionsBuilder skipScraping(boolean b) {
         options.put("skip_scraping", b);
-        return this;
-    }
-
-    public AnalysisOptionsBuilder skipCVE(boolean b) {
-        options.put("skip_cves", b);
         return this;
     }
 
@@ -196,14 +186,6 @@ public class AnalysisOptionsBuilder {
         }
 
         var analysisConfig = new ai.reveng.model.AnalysisConfig();
-
-        if (options.has("skip_sbom")) {
-            analysisConfig.setGenerateSbom(!options.getBoolean("skip_sbom"));
-        }
-
-        if (options.has("skip_cves")) {
-            analysisConfig.setGenerateCves(!options.getBoolean("skip_cves"));
-        }
 
         if (options.has("skip_capabilities")) {
             analysisConfig.setGenerateCapabilities(!options.getBoolean("skip_capabilities"));

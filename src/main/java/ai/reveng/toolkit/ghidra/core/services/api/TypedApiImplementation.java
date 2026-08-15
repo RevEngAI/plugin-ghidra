@@ -324,38 +324,6 @@ public class TypedApiImplementation implements TypedApiInterface {
         return analysisID;
     }
 
-    /**
-     * Triggers the generation of function data types for a provided list of functions
-     * <a href="https://api.reveng.ai/v2/docs#tag/Function-Overview/operation/generate_function_datatypes_v2_analyses__analysis_id__info_functions_data_types_post">...</a>
-     * https://api.reveng.ai/v2/analyses/{analysis_id}/info/functions/data_types
-     * @param functionIDS
-     * @return
-     */
-    @Override
-    public DataTypeList generateFunctionDataTypes(AnalysisID analysisID, List<FunctionID> functionIDS) throws APIConflictException{
-        JSONObject params = new JSONObject();
-        params.put("function_ids", functionIDS.stream().map(FunctionID::value).toList());
-
-        var request = requestBuilderForEndpoint("analyses/%s/info/functions/data_types".formatted(analysisID.id()))
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-
-        var response = sendVersion2Request(request);
-        return DataTypeList.fromJson(response.getJsonData().getJSONObject("data_types_list"));
-    }
-
-    @Override
-    public DataTypeList getFunctionDataTypes(List<FunctionID> functionIDS) {
-        String queryString = functionIDS.stream().map( f -> "function_ids=" + f.value() ).reduce((a, b) -> a + "&" + b).orElseThrow();
-        var request = requestBuilderForEndpoint("functions", "data_types?", queryString)
-                .GET()
-                .header("Content-Type", "application/json" )
-                .build();
-        var response = sendVersion2Request(request);
-        return DataTypeList.fromJson(response.getJsonData());
-    }
-
     public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID id, List<FunctionID> ids) {
         try {
             List<Integer> functionIds = null;
@@ -397,25 +365,12 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public Optional<FunctionDataTypeStatus> getFunctionDataTypes(AnalysisID analysisID, FunctionID functionID) {
-        // https://api.reveng.ai/v2/analyses/{analysis_id}/info/functions/{function_id}/data_types
-        var request = requestBuilderForEndpoint("analyses/%s/info/functions/%s/data_types".formatted(analysisID.id(), functionID.value()))
-                .GET()
-                .header("Content-Type", "application/json" )
-                .build();
-        var response = sendVersion2Request(request);
-        if (response.errors() == null){
-            return Optional.of(FunctionDataTypeStatus.fromJson(response.getJsonData()));
-        } else {
-            return Optional.empty();
-        }
-    }
-
-    @Override
     public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         try {
             // POST /v3/functions/{function_id}/ai-decompilation
-            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), false, null);
+            // The context_aware flag was removed from the API with no replacement; temperature is
+            // left null so the server applies its own default.
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null);
             return Boolean.TRUE.equals(result.getStatus());
         } catch (ApiException e) {
             throw new RuntimeException("Failed to trigger AI decompilation", e);
@@ -684,7 +639,7 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public List<BinarySearchResult> searchBinaries(String partialBinaryName, String modelName) throws ApiException {
-        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null).getData().getResults();
+        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null, null).getData().getResults();
     }
 
     @Override
@@ -775,52 +730,12 @@ public class TypedApiImplementation implements TypedApiInterface {
         return mapping;
     }
 
-    @Override
-    public Optional<VersionedFunctionTypes> getFunctionDataTypesWithVersion(FunctionID functionID) throws ApiException {
-        var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(List.of(functionID.asInteger())).getData();
-        if (data == null || data.getItems() == null) {
-            return Optional.empty();
-        }
-        return data.getItems().stream()
-                .filter(item -> item.getFunctionId() != null && item.getFunctionId() == functionID.value())
-                .findFirst()
-                .map(item -> new VersionedFunctionTypes(
-                        item.getDataTypes(),
-                        item.getDataTypesVersion() == null ? 0L : item.getDataTypesVersion().longValue()));
-    }
-
-    @Override
-    public List<DataTypePushResult> pushFunctionDataTypes(AnalysisID analysisID, List<FunctionDataTypeUpdate> updates) throws ApiException {
-        var items = updates.stream()
-                .map(update -> new BatchUpdateDataTypesItem()
-                        .functionId(update.functionID().value())
-                        .dataTypes(update.dataTypes())
-                        .dataTypesVersion(update.version()))
-                .toList();
-        var body = new BatchUpdateDataTypesInputBody().functions(items);
-        var response = functionsDataTypesApi.batchUpdateFunctionDataTypes((long) analysisID.id(), body);
-        if (response.getResults() == null) {
-            return List.of();
-        }
-        return response.getResults().stream()
-                .map(result -> new DataTypePushResult(
-                        new FunctionID(result.getFunctionId()),
-                        mapPushStatus(result.getStatus()),
-                        result.getError()))
-                .toList();
-    }
-
-    private static DataTypePushStatus mapPushStatus(BatchUpdateDataTypesResult.StatusEnum status) {
-        if (status == null) {
-            return DataTypePushStatus.UNKNOWN;
-        }
-        return switch (status) {
-            case UPDATED -> DataTypePushStatus.UPDATED;
-            case VERSION_CONFLICT -> DataTypePushStatus.VERSION_CONFLICT;
-            case ERROR -> DataTypePushStatus.ERROR;
-            default -> DataTypePushStatus.UNKNOWN;
-        };
-    }
+    // TODO: getFunctionDataTypesWithVersion / pushFunctionDataTypes / mapPushStatus were removed
+    // here. They pushed a whole v2 data-type blob per function under optimistic concurrency, and
+    // neither those endpoints nor their models exist in the v3 API. The replacement writes types
+    // and signatures separately — POST/PATCH /v3/analyses/{analysis_id}/data-types to mint or
+    // update a type and get its data_type_id back, then PUT the signature that refers to it — and
+    // lands in a follow-up.
 
     @Override
     public ConfigResponse getConfig() {

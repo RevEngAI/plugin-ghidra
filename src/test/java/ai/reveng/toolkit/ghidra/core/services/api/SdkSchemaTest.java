@@ -63,9 +63,6 @@ public class SdkSchemaTest {
     public void modelTypesExposeAccessorsThePluginReliesOn() {
         List<String> missing = new ArrayList<>();
 
-        requireMethods(missing, "ai.reveng.model.FunctionInfo", "fromJson", "getFuncTypes", "getFuncDeps");
-        requireMethods(missing, "ai.reveng.model.FunctionType", "getName", "getHeader", "getType");
-        requireMethods(missing, "ai.reveng.model.FunctionHeader", "getName", "getArgs");
         requireMethods(missing, "ai.reveng.model.FunctionDataTypesList", "getItems");
         requireMethods(missing, "ai.reveng.model.FunctionDataTypesListItem",
                 "getDataTypes", "getCompleted", "getFunctionId");
@@ -104,7 +101,10 @@ public class SdkSchemaTest {
     }
 
     private static int[] installedSdkVersion() {
-        Class<?> anchor = classOrNull("ai.reveng.model.FunctionInfo");
+        // Anchored on the invoker rather than a model class: models come and go between SDK
+        // releases, and when the anchor disappears this assertion misreports the SDK as absent
+        // from the classpath entirely.
+        Class<?> anchor = classOrNull("ai.reveng.invoker.ApiClient");
         assertNotNull("ai.reveng:sdk is not on the test classpath", anchor);
         CodeSource codeSource = anchor.getProtectionDomain().getCodeSource();
         assertNotNull("Could not locate the ai.reveng:sdk code source", codeSource);
