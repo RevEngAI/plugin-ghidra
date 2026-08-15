@@ -1,6 +1,5 @@
 package ai.reveng;
 
-import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -9,15 +8,14 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
-import org.jetbrains.annotations.Nullable;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 public class SyncMarkingTest extends RevEngMockableHeadedIntegrationTest {
 
@@ -41,12 +39,9 @@ public class SyncMarkingTest extends RevEngMockableHeadedIntegrationTest {
             }
 
             @Override
-            public FunctionDataTypesList listFunctionDataTypesForAnalysis(TypedApiInterface.AnalysisID analysisID, @Nullable List<TypedApiInterface.FunctionID> ids) {
-                try {
-                    return FunctionDataTypesList.fromJson("{\"total_count\":0,\"total_data_types_count\":0,\"items\":[]}");
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+            public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                                 boolean includeDataTypes) {
+                return FunctionSignatureBatch.empty();
             }
         });
 

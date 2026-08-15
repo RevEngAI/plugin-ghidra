@@ -13,7 +13,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilation
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
-import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
@@ -35,13 +35,11 @@ import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.BrowserLoader;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
-import ghidra.util.data.DataTypeParser;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.exception.NoValueException;
 import ghidra.util.task.TaskMonitor;
-import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
 import java.awt.*;
@@ -97,6 +95,34 @@ public class GhidraRevengService {
 //    @Deprecated
     public TypedApiInterface getApi() {
         return api;
+    }
+
+    private FunctionSignatureService signatureService;
+    private AnalysisDataTypesService analysisDataTypesService;
+
+    /// Reads function signatures and the data types they reference.
+    public FunctionSignatureService signatures() {
+        if (signatureService == null) {
+            signatureService = new FunctionSignatureService(api);
+        }
+        return signatureService;
+    }
+
+    /// Reads an analysis' data-type catalogue, which owns its `data_type_id` namespace.
+    public AnalysisDataTypesService analysisDataTypes() {
+        if (analysisDataTypesService == null) {
+            analysisDataTypesService = new AnalysisDataTypesService(api);
+        }
+        return analysisDataTypesService;
+    }
+
+    /// One decoder per analysis: a `data_type_id` only means something inside the analysis that
+    /// minted it, so each group of types gets its own {@link DataTypeManager}.
+    private static ServerDataTypeDecoder decoderFor(Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders,
+                                                    FunctionSignatureBatch batch,
+                                                    BatchFunctionSignatureEntry entry) {
+        var analysisID = new TypedApiInterface.AnalysisID(Math.toIntExact(entry.getAnalysisId()));
+        return decoders.computeIfAbsent(analysisID, id -> ServerDataTypeDecoder.decode(batch.dataTypesFor(id)));
     }
 
     public GhidraRevengService(ApiInfo apiInfo){
@@ -549,10 +575,12 @@ public class GhidraRevengService {
                                                  Set<TypedApiInterface.FunctionID> matchedIds,
                                                  TaskMonitor monitor,
                                                  ReaiLoggingService log) {
-        var remoteItems = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID()).getItems();
-        Set<TypedApiInterface.FunctionID> remotePresent = (remoteItems == null ? List.<FunctionDataTypesListItem>of() : remoteItems).stream()
-                .filter(item -> "completed".equals(item.getStatus()))
-                .filter(item -> item.getDataTypes() != null && item.getDataTypes().getFuncTypes() != null)
+        // Only the matched functions are candidates, and only whether the server holds a signature
+        // at all matters here, so ask for exactly those ids and skip the type closure.
+        Set<TypedApiInterface.FunctionID> remotePresent = signatures()
+                .getMany(List.copyOf(matchedIds), false)
+                .items().stream()
+                .filter(BatchFunctionSignatureEntry::getHasSignature)
                 .map(item -> new TypedApiInterface.FunctionID(item.getFunctionId()))
                 .collect(Collectors.toSet());
 
@@ -657,14 +685,19 @@ public class GhidraRevengService {
                 );
 
 
-        Map<TypedApiInterface.FunctionID, @NotNull FunctionDataTypesListItem> signatureMap = api.listFunctionDataTypesForAnalysis(analysedProgram.analysisID).getItems()
+        // /v3/functions/signatures is addressed by function id rather than by analysis, so ask for
+        // the functions this analysis reported. The response carries the types those signatures
+        // reference alongside them, which is what the decoders below are built from.
+        var signatureBatch = signatures().getMany(List.copyOf(functionInfoMap.keySet()));
+        Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
+        Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
                 .stream()
-                .filter(item -> item.getStatus().equals("completed"))
-                .filter(item -> item.getDataTypes().getFuncTypes() != null)
+                .filter(BatchFunctionSignatureEntry::getHasSignature)
                 .collect(
                 Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
-                        fdtStatus -> fdtStatus
+                        item -> item,
+                        (existing, replacement) -> existing
                 )
         );
 
@@ -699,23 +732,11 @@ public class GhidraRevengService {
                 continue;
             }
 
-            var sig = Optional.ofNullable(signatureMap.get(fID.get().functionID));
-            // Get the type information on the server side
-            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt = sig
-                    // Try getting the data types if they are available
-                    // If they are available, try converting them to a Ghidra signature
-                    // If the conversion fails, act like there is no signature available
-                    .flatMap (item -> Optional.ofNullable(item.getDataTypes()))
-                    .flatMap((functionDataTypeMessage -> {
-                        try {
-                            return getFunctionSignature(functionDataTypeMessage);
-                        } catch (DataTypeDependencyException e) {
-                            // Something went wrong loading the data type dependencies
-                            // just skip applying the signature and treat it like none being available
-                            Msg.error(this, "Could not get parse signature for function %s".formatted(function.getName()));
-                            return Optional.empty();
-                        }
-                    }));
+            // Get the type information on the server side. Every type the signature refers to is
+            // resolved by id against its analysis' decoder, so there is nothing left to fail on.
+            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
+                    Optional.ofNullable(signatureMap.get(fID.get().functionID))
+                            .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
 
 
             analysedProgram.setMangledNameForFunction(function, revEngMangledName);
@@ -1027,209 +1048,19 @@ public class GhidraRevengService {
     }
 
     /**
-     * Create a {@link FunctionDefinitionDataType} from a @{@link ai.reveng.model.FunctionInfo} in isolation
+     * Create a self-contained {@link FunctionDefinitionDataType} from a function's server signature.
      *
-     * All the required dependency types will be stored in the DataTypeManager that is associated with this
-     * FunctionDefinitionDataType
+     * <p>Every type the signature refers to is named by a {@code data_type_id}, so the decoder that
+     * holds this analysis' types resolves the return type and each parameter by lookup. The decoder's
+     * {@link DataTypeManager} owns the dependencies, which is what makes the result standalone.
      *
-     * @param functionDataTypeMessage The message containing the function signature, received from the API
+     * @param entry   the signature as the server reports it
+     * @param decoder the decoded types of the analysis that {@code entry} belongs to
      * @return Self-contained signature for the function
      */
-    public static Optional<FunctionDefinitionDataType> getFunctionSignature(ai.reveng.model.V2FunctionInfo functionDataTypeMessage) throws DataTypeDependencyException {
-
-        // Create Data Type Manager with all dependencies
-        var d = FunctionDependencies.fromOpenAPI(functionDataTypeMessage.getFuncDeps());
-        DataTypeManager tmpDtm = null;
-        try {
-            tmpDtm = loadDependencyDataTypes(d);
-        } catch (EndlessTypeParsingException e) {
-            Msg.error("getFunctionSignature", null, e);
-            return Optional.empty();
-        }
-        DataTypeManager dtm = tmpDtm;
-
-        if (functionDataTypeMessage.getFuncTypes() == null){
-            return Optional.empty();
-        }
-        var funcName = functionDataTypeMessage.getFuncTypes().getName();
-        FunctionDefinitionDataType f = new FunctionDefinitionDataType(funcName, dtm);
-
-        try {
-            f.setName(funcName);
-        } catch (InvalidNameException e) {
-            throw new RuntimeException(e);
-        }
-
-        ParameterDefinitionImpl[] args = functionDataTypeMessage.getFuncTypes().getHeader().getArgs().values().stream().map(
-                arg -> {
-                    DataType ghidraType = null;
-                    try {
-                        var scopedName = TypePathAndName.fromString(arg.getType());
-                        ghidraType = loadDataType(dtm, scopedName);
-                    } catch (DataTypeDependencyException e) {
-                        Msg.error(GhidraRevengService.class,
-                                ("" +
-                                        "Couldn't find type '%s' for param of %s").formatted(arg.getType(), funcName)
-                        );
-                        ghidraType = Undefined.getUndefinedDataType(arg.getSize());
-                    }
-                    // Add the type to the DataTypeManager
-                    return new ParameterDefinitionImpl(arg.getName(), ghidraType, null);
-                }).toArray(ParameterDefinitionImpl[]::new);
-
-        f.setArguments(args);
-
-        DataType returnType = null;
-        returnType = loadDataType(dtm, TypePathAndName.fromString(functionDataTypeMessage.getFuncTypes().getHeader().getType()));
-        f.setReturnType(returnType);
-
-
-        return Optional.of(f);
-    }
-
-    public static class EndlessTypeParsingException extends Exception {
-
-        public FunctionDependencies deps;
-        public List<Typedef> remaining;
-        private EndlessTypeParsingException(FunctionDependencies dependencies, List<Typedef> remainingTypes) {
-            super("Endless type parsing detected for function dependencies: " + dependencies);
-            deps = dependencies;
-            remaining = remainingTypes;
-
-        }
-    }
-
-    public static DataTypeManager loadDependencyDataTypes(FunctionDependencies dependencies) throws EndlessTypeParsingException{
-        DataTypeManager dtm = new StandAloneDataTypeManager("transient");
-
-        if (dependencies == null){
-            return dtm;
-        }
-        DataTypeParser dataTypeParser = new DataTypeParser(
-                dtm,
-                null,
-                null,
-                DataTypeParser.AllowedDataTypes.ALL);
-
-        // We do this in two passes:
-
-        // First add all types as empty placeholders
-        var transactionId = dtm.startTransaction("Load Dependencies");
-        Arrays.stream(dependencies.structs()).forEach(
-                struct -> {
-//                        CategoryPath path = new CategoryPath(CategoryPath.ROOT, struct.name().split("/"));
-                        var typePathAndName = TypePathAndName.fromString(struct.name());
-                        StructureDataType structDataType = new StructureDataType(
-                                typePathAndName.toCategoryPath(),
-                                typePathAndName.name(),
-                                struct.size(),
-                                dtm);
-                        dtm.addDataType(structDataType, DataTypeConflictHandler.REPLACE_EMPTY_STRUCTS_OR_RENAME_AND_ADD_HANDLER);
-                }
-        );
-        // The following would be a lot nicer of BinSync could guarantee us that all dependencies are sorted
-        // As a workaround we just retry until all types are available
-        // In some cases (specifically bugs in BinSync when dependencies are missing) this will loop forever by default
-        // To work around _that_ we have a limit of 1000 retries
-        Queue<Typedef> typeDefsToAdd = Arrays.stream(dependencies.typedefs()).collect(Collectors.toCollection(LinkedList::new));
-        int retries = 0;
-        while (!typeDefsToAdd.isEmpty()){
-            if (retries > 1000){
-                dtm.endTransaction(transactionId, false);
-                dtm.close();
-                throw new EndlessTypeParsingException(dependencies, typeDefsToAdd.stream().toList());
-            }
-            var typeDef = typeDefsToAdd.remove();
-            var path = TypePathAndName.fromString(typeDef.name());
-            DataType type;
-            try {
-                var scopedType = TypePathAndName.fromString(typeDef.type());
-                type = dataTypeParser.parse(scopedType.name());
-            } catch (InvalidDataTypeException e) {
-                // The type wasn't available in the DataTypeManager yet, try again later
-                typeDefsToAdd.add(typeDef);
-                retries++;
-                continue;
-            } catch (CancelledException e) {
-                throw new RuntimeException(e);
-            }
-            TypedefDataType typedefDataType = new TypedefDataType(path.toCategoryPath(), path.name(), type, null);
-            dtm.addDataType(typedefDataType, DataTypeConflictHandler.REPLACE_EMPTY_STRUCTS_OR_RENAME_AND_ADD_HANDLER);
-        }
-
-        // Now we have all necessary types, we can fill out the structs
-        Arrays.stream(dependencies.structs()).forEach(
-                struct -> {
-                    var path = TypePathAndName.fromString(struct.name());
-                    // Get struct type
-                    var type = dtm.getDataType(path.toCategoryPath(), path.name());
-                    if (type instanceof Structure structType) {
-                        Arrays.stream(struct.members()).forEach(
-                                binSyncStructMember -> {
-                                    DataType fieldType = null;
-                                    try {
-                                        fieldType = loadDataType(dtm, TypePathAndName.fromString(binSyncStructMember.type()));
-                                    } catch (DataTypeDependencyException e) {
-                                        Msg.error(
-                                                GhidraRevengService.class,
-                                                "Couldn't find type '%s' for field of %s".formatted(binSyncStructMember.type(), struct.name())
-                                        );
-                                        fieldType = Undefined.getUndefinedDataType(binSyncStructMember.size());
-                                    }
-                                    // The server occasionally reports a member that extends past the
-                                    // struct's declared size; grow the struct to fit rather than letting
-                                    // replaceAtOffset reject it and abort the whole type load. A member
-                                    // that still can't be placed is skipped so one bad field doesn't sink
-                                    // the entire function pull.
-                                    int end = binSyncStructMember.offset() + Math.max(1, binSyncStructMember.size());
-                                    if (structType.getLength() < end) {
-                                        structType.growStructure(end - structType.getLength());
-                                    }
-                                    try {
-                                        structType.replaceAtOffset(
-                                                binSyncStructMember.offset(),
-                                                fieldType,
-                                                binSyncStructMember.size(),
-                                                binSyncStructMember.name(),
-                                                null
-                                        );
-                                    } catch (IllegalArgumentException e) {
-                                        Msg.error(
-                                                GhidraRevengService.class,
-                                                "Skipping struct member '%s' at offset %d of %s: %s".formatted(
-                                                        binSyncStructMember.name(), binSyncStructMember.offset(),
-                                                        struct.name(), e.getMessage())
-                                        );
-                                    }
-                                }
-                        );
-                    } else {
-                        throw new RuntimeException("Struct type not found: %s".formatted(struct.name()));
-                    }
-
-                }
-        );
-
-        dtm.endTransaction(transactionId, true);
-        return dtm;
-    }
-
-    private static DataType loadDataType(DataTypeManager dtm, TypePathAndName type) throws DataTypeDependencyException {
-        DataTypeParser dataTypeParser = new DataTypeParser(
-                dtm,
-                null,
-                null,
-                DataTypeParser.AllowedDataTypes.ALL);
-        DataType dataType;
-        try {
-            dataType = dataTypeParser.parse(type.name());
-        } catch (InvalidDataTypeException e) {
-            // The type wasn't available in the DataTypeManager, so we have to find it in the dependencies
-            throw new DataTypeDependencyException("Data type not found in DataTypeManager: %s".formatted(type), e);
-        } catch (CancelledException e) {
-            throw new RuntimeException(e);
-        }
-        return dataType;
+    public static FunctionDefinitionDataType getFunctionSignature(BatchFunctionSignatureEntry entry,
+                                                                  ServerDataTypeDecoder decoder) {
+        return decoder.signature(entry.getFunctionName(), entry.getReturnDataTypeId(), entry.getParameters());
     }
 
     public String getAnalysisLog(TypedApiInterface.AnalysisID analysisID) {
@@ -1377,41 +1208,31 @@ public class GhidraRevengService {
     public Map<GhidraFunctionMatch, FunctionDefinitionDataType> getSignatures(java.util.Collection<GhidraFunctionMatch> values) {
 
 
-        // Get all data type info for the neighbour functions. Several local functions can match the same
+        // Get all signature info for the neighbour functions. Several local functions can match the same
         // neighbour, so dedupe the ids before fetching to avoid requesting (and getting back) duplicates.
-        var dataTypesList = this.api.listFunctionDataTypesForFunctions(
+        // The neighbours can come from any number of analyses; the response groups their types per
+        // analysis, which is why each signature is decoded against its own analysis' types.
+        var batch = signatures().getMany(
                 values.stream().map(GhidraFunctionMatch::nearest_neighbor_id).distinct().toList()
         );
-        // Create a map from FunctionID to FunctionInfo for easy lookup, only for completed signatures.
+        // Create a map from FunctionID to signature for easy lookup, only where the server has one.
         // The same neighbour can still appear more than once in the response, so keep the first.
-        Map<TypedApiInterface.FunctionID, ai.reveng.model.@NotNull V2FunctionInfo> signatureMap = dataTypesList.getItems().stream()
-                // Only keep completed signatures
-                .filter(FunctionDataTypesListItem::getCompleted)
-                // Double check that there is a data type available
-                .filter(functionDataTypesListItem -> functionDataTypesListItem.getDataTypes() != null)
+        Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = batch.items().stream()
+                .filter(BatchFunctionSignatureEntry::getHasSignature)
                 .collect(Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
-                        FunctionDataTypesListItem::getDataTypes,
+                        item -> item,
                         (existing, replacement) -> existing
                 ));
 
-        Map<GhidraFunctionMatch, ai.reveng.model.@NotNull V2FunctionInfo> matchMap =  values.stream()
-                .filter(match -> signatureMap.containsKey(match.functionMatch().nearest_neighbor_id()))
-                .collect(Collectors.toMap(
-                match -> match,
-                match -> signatureMap.get(match.functionMatch().nearest_neighbor_id()),
-                (existing, replacement) -> existing
-        ));
-
-        // Now parse all signatures
+        Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
         Map<GhidraFunctionMatch, FunctionDefinitionDataType> result = new HashMap<>();
-        for (var entry : matchMap.entrySet()){
-            try {
-                var funcDefOpt = getFunctionSignature(entry.getValue());
-                funcDefOpt.ifPresent(funcDef -> result.put(entry.getKey(), funcDef));
-            } catch (DataTypeDependencyException e) {
-                Msg.error(this, "Could not parse signature for function %s".formatted(entry.getKey().functionMatch()), e);
+        for (GhidraFunctionMatch match : values) {
+            var entry = signatureMap.get(match.functionMatch().nearest_neighbor_id());
+            if (entry == null) {
+                continue;
             }
+            result.put(match, getFunctionSignature(entry, decoderFor(decoders, batch, entry)));
         }
         return result;
 

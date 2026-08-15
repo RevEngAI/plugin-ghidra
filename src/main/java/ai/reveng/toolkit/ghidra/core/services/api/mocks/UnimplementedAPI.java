@@ -1,9 +1,8 @@
 package ai.reveng.toolkit.ghidra.core.services.api.mocks;
 
-import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -52,7 +51,8 @@ public class UnimplementedAPI implements TypedApiInterface {
     /// This gets called when registering the initial mock analysis
     /// it just pretends that there is no type info available
     @Override
-    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
-        return new FunctionDataTypesList();
+    public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
+        return FunctionSignatureBatch.empty();
     }
+
 }

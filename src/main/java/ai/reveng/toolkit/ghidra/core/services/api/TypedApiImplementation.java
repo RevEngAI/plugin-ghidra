@@ -3,6 +3,9 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 import ai.reveng.api.*;
 import ai.reveng.model.*;
 import ai.reveng.model.ConfigResponse;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataTypeReader;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -32,6 +35,11 @@ import java.time.Duration;
 import java.util.*;
 
 import ai.reveng.invoker.Configuration;
+import ai.reveng.invoker.JSON;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.invoker.ApiException;
 
@@ -58,7 +66,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsCoreApi functionsCoreApi;
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
-    private final FunctionsDataTypesApi functionsDataTypesApi;
+    private final DataTypesApi dataTypesApi;
     private final IamUsersApi iamUsersApi;
 
     // Cache for binary ID to analysis ID mappings
@@ -108,7 +116,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
         this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
-        this.functionsDataTypesApi = new FunctionsDataTypesApi(apiClient);
+        this.dataTypesApi = new DataTypesApi(apiClient);
         this.configApi = new ConfigApi(apiClient);
         this.iamUsersApi = new IamUsersApi(apiClient);
 
@@ -324,43 +332,94 @@ public class TypedApiImplementation implements TypedApiInterface {
         return analysisID;
     }
 
-    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID id, List<FunctionID> ids) {
+    /// GET /v3/functions/signatures
+    ///
+    /// Read through the generated call rather than the generated response model: the response
+    /// embeds `DataTypeEntry`, whose generated deserialiser picks a variant by counting matching
+    /// fields instead of reading the `kind` discriminator, and every variant carries the same
+    /// required fields. The call still builds the request — path, query, auth — exactly as the SDK
+    /// would; only the body is read by {@link ServerDataTypeReader}.
+    @Override
+    public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
         try {
-            List<Integer> functionIds = null;
-            if (ids == null) {
-                functionIds = null;
-            } else {
-                functionIds = ids.stream().map(FunctionID::value).map(Long::intValue).toList();
+            var call = dataTypesApi.v3ListFunctionSignaturesCall(
+                    functionIDs.stream().map(FunctionID::value).toList(), includeDataTypes, null);
+            JsonObject body = executeForJsonObject(call, "list function signatures");
+
+            List<BatchFunctionSignatureEntry> items = new ArrayList<>();
+            JsonArray rawItems = body.getAsJsonArray("items");
+            if (rawItems != null) {
+                for (JsonElement item : rawItems) {
+                    items.add(JSON.getGson().fromJson(item, BatchFunctionSignatureEntry.class));
+                }
             }
-            var r = functionsDataTypesApi.listFunctionDataTypesForAnalysis(id.id(), functionIds);
-            var data = r.getData();
-            return data;
+
+            Map<AnalysisID, List<ServerDataType>> dataTypes = new LinkedHashMap<>();
+            JsonArray groups = body.getAsJsonArray("data_types");
+            if (groups != null) {
+                for (JsonElement group : groups) {
+                    if (!group.isJsonObject()) {
+                        continue;
+                    }
+                    JsonElement analysisId = group.getAsJsonObject().get("analysis_id");
+                    if (analysisId == null || analysisId.isJsonNull()) {
+                        continue;
+                    }
+                    dataTypes.computeIfAbsent(new AnalysisID(analysisId.getAsInt()), ignored -> new ArrayList<>())
+                            .addAll(ServerDataTypeReader.readEntries(group, "items"));
+                }
+            }
+            return new FunctionSignatureBatch(items, dataTypes);
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
     }
 
-    /// GET /v2/functions/data_types carries the function ids as a query parameter. A whole-binary match
-    /// resolves type info for every matched function at once, so the id list overflows the request URI
-    /// (HTTP 414) unless it is chunked.
-    private static final int DATA_TYPES_BATCH_SIZE = 50;
-
+    /// GET /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Read through the generated call for the same reason as
+    /// {@link #listFunctionSignatures(List, boolean)}.
     @Override
-    public FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
+    public List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
         try {
-            List<Integer> ids = functionIDs.stream().map(FunctionID::value).map(Long::intValue).toList();
-            var merged = new FunctionDataTypesList();
-            merged.setItems(new ArrayList<>());
-            for (int i = 0; i < ids.size(); i += DATA_TYPES_BATCH_SIZE) {
-                var batch = ids.subList(i, Math.min(i + DATA_TYPES_BATCH_SIZE, ids.size()));
-                var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(batch).getData();
-                if (data != null && data.getItems() != null) {
-                    merged.getItems().addAll(data.getItems());
-                }
-            }
-            return merged;
+            var call = dataTypesApi.v3ListAnalysisDataTypesCall(
+                    (long) analysisID.id(), offset, limit, null, null, null, null, null, null, null);
+            return ServerDataTypeReader.readEntries(
+                    executeForJsonObject(call, "list analysis data types"), "items");
         } catch (ApiException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
+    ///
+    /// The history body holds no `DataTypeEntry`, so the generated model reads it fine.
+    @Override
+    public List<FunctionSignatureVersion> getFunctionSignatureHistory(AnalysisID analysisID, FunctionID functionID) {
+        try {
+            var versions = dataTypesApi
+                    .v3GetFunctionSignatureHistory((long) analysisID.id(), functionID.value())
+                    .getVersions();
+            return versions == null ? List.of() : versions;
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static JsonObject executeForJsonObject(okhttp3.Call call, String what) throws ApiException {
+        try (okhttp3.Response response = call.execute()) {
+            okhttp3.ResponseBody responseBody = response.body();
+            String text = responseBody == null ? "" : responseBody.string();
+            if (!response.isSuccessful()) {
+                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+            }
+            JsonElement parsed = JsonParser.parseString(text);
+            if (!parsed.isJsonObject()) {
+                throw new ApiException("Failed to %s: response was not a JSON object".formatted(what));
+            }
+            return parsed.getAsJsonObject();
+        } catch (IOException e) {
+            throw new ApiException(e);
         }
     }
 

@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Optional;
 
 import ai.reveng.model.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -84,16 +86,26 @@ public interface TypedApiInterface {
 
     String getAnalysisLogs(AnalysisID analysisID);
 
-    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID) {
-        return listFunctionDataTypesForAnalysis(analysisID, null);
+    /// GET /v3/functions/signatures
+    ///
+    /// Signatures for the given functions, which may belong to different analyses, plus — when
+    /// `includeDataTypes` is set — every data type those signatures reference, grouped by owning
+    /// analysis. Callers should go through {@link FunctionSignatureService}, which chunks the ids.
+    default FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
+        throw new UnsupportedOperationException("listFunctionSignatures not implemented yet");
     }
 
-    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
-        throw new UnsupportedOperationException("listFunctionDataTypesForAnalysis not implemented yet");
+    /// GET /v3/analyses/{analysis_id}/data-types
+    ///
+    /// One page of an analysis' data types. Callers should go through
+    /// {@link AnalysisDataTypesService}, which pages this into a catalogue.
+    default List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+        throw new UnsupportedOperationException("listAnalysisDataTypes not implemented yet");
     }
 
-    default FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
-        throw new UnsupportedOperationException("listFunctionDataTypesForFunctions not implemented yet");
+    /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
+    default List<FunctionSignatureVersion> getFunctionSignatureHistory(AnalysisID analysisID, FunctionID functionID) {
+        throw new UnsupportedOperationException("getFunctionSignatureHistory not implemented yet");
     }
 
     @Deprecated

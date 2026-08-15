@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationTest {
 
@@ -282,11 +283,10 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForFunctions(List<TypedApiInterface.FunctionID> functionIDs) {
-            // Return empty list - no signatures available in mock
-            var result = new FunctionDataTypesList();
-            result.setItems(List.of());
-            return result;
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            // No signatures available in mock
+            return FunctionSignatureBatch.empty();
         }
     }
 }

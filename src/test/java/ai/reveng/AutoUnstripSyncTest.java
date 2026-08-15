@@ -1,7 +1,6 @@
 package ai.reveng;
 
 import ai.reveng.model.BatchRenameInputBody;
-import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AutoUnstripStatus;
@@ -15,10 +14,8 @@ import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.task.TaskMonitor;
-import org.jetbrains.annotations.Nullable;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -26,6 +23,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 /**
  * Integration tests for the post-auto-unstrip sync (PLU-300): once the server-side auto-unstrip pass
@@ -59,12 +57,9 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForAnalysis(TypedApiInterface.AnalysisID analysisID, @Nullable List<TypedApiInterface.FunctionID> ids) {
-            try {
-                return FunctionDataTypesList.fromJson("{\"total_count\":0,\"total_data_types_count\":0,\"items\":[]}");
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            return FunctionSignatureBatch.empty();
         }
 
         @Override

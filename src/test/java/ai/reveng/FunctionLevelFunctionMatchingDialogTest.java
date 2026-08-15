@@ -18,6 +18,7 @@ import javax.swing.*;
 import java.util.List;
 
 import static org.junit.Assert.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 /**
  * Integration tests for the FunctionLevelFunctionMatchingDialog.
@@ -358,9 +359,10 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForFunctions(List<TypedApiInterface.FunctionID> functionIDs) {
-            // Return empty list - no type info available
-            return new FunctionDataTypesList();
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            // No type info available
+            return FunctionSignatureBatch.empty();
         }
     }
 }

@@ -43,8 +43,9 @@ public class SdkSchemaTest {
                 "getFunctionBlocks", "getFunctionDetails"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
                 "renameFunctionId", "batchRenameFunctions"});
-        apis.put("ai.reveng.api.FunctionsDataTypesApi", new String[]{
-                "listFunctionDataTypesForAnalysis", "listFunctionDataTypesForFunctions"});
+        apis.put("ai.reveng.api.DataTypesApi", new String[]{
+                "v3ListFunctionSignaturesCall", "v3ListAnalysisDataTypesCall",
+                "v3GetFunctionSignatureHistory"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
                 "createAiDecompilation", "getAiDecompilation", "getAiDecompilationTokenised",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
@@ -63,10 +64,18 @@ public class SdkSchemaTest {
     public void modelTypesExposeAccessorsThePluginReliesOn() {
         List<String> missing = new ArrayList<>();
 
-        requireMethods(missing, "ai.reveng.model.FunctionDataTypesList", "getItems");
-        requireMethods(missing, "ai.reveng.model.FunctionDataTypesListItem",
-                "getDataTypes", "getCompleted", "getFunctionId");
-        requireClass(missing, "ai.reveng.model.FuncDepsInner");
+        // The data-type read path deserialises DataTypeEntry itself (see ServerDataTypeReader), so
+        // what has to stay stable is the signature surface around it: the entries the plugin reads
+        // out of the /v3/functions/signatures body, and the history models it reads whole.
+        requireMethods(missing, "ai.reveng.model.BatchFunctionSignatureEntry",
+                "getAnalysisId", "getFunctionId", "getFunctionName", "getHasSignature",
+                "getParameters", "getReturnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.SignatureParameterEntry",
+                "getName", "getOrdinal", "getDataTypeId", "getBitLength");
+        requireMethods(missing, "ai.reveng.model.GetFunctionSignatureHistoryBody", "getVersions");
+
+        requireMethods(missing, "ai.reveng.model.FunctionSignatureVersion",
+                "getValue", "getUpdatedAt", "getUpdatedBy");
 
         requireMethods(missing, "ai.reveng.model.AnalysisCreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
@@ -116,12 +125,6 @@ public class SdkSchemaTest {
                 Integer.parseInt(matcher.group(2)),
                 Integer.parseInt(matcher.group(3))
         };
-    }
-
-    private static void requireClass(List<String> missing, String className) {
-        if (classOrNull(className) == null) {
-            missing.add(className + " (class)");
-        }
     }
 
     private static void requireMethods(List<String> missing, String className, String... methods) {

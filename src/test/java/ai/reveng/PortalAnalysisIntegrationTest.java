@@ -1,16 +1,18 @@
 package ai.reveng;
 
 import ai.reveng.invoker.ApiException;
-import ai.reveng.model.FunctionDataTypesList;
-import ai.reveng.model.FunctionDataTypesListItem;
+import ai.reveng.model.BatchFunctionSignatureEntry;
+import ai.reveng.model.SignatureParameterEntry;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataTypeReader;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.*;
+import com.google.gson.JsonParser;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ghidra.framework.Application;
 import ghidra.framework.ApplicationVersion;
@@ -18,12 +20,11 @@ import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
-import org.jetbrains.annotations.Nullable;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -49,64 +50,73 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
             }
 
             @Override
-            public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
+            public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs,
+                                                                 boolean includeDataTypes) {
+                // int portal_name_demangled(EVP_PKEY_CTX *ctx), where EVP_PKEY_CTX is a typedef in
+                // the "ossl_typ.h" namespace for an (empty) struct. Every reference between the
+                // types is by data_type_id, which is what the decoder resolves.
+                var dataTypes = ServerDataTypeReader.readEntries(JsonParser.parseString(
+                        """
+                        {
+                          "items": [
+                            {
+                              "data_type_id": 10,
+                              "namespace": "",
+                              "name": "int",
+                              "kind": "BASE",
+                              "size": 4,
+                              "source_type": "AUTO",
+                              "has_definition": false
+                            },
+                            {
+                              "data_type_id": 11,
+                              "namespace": "ossl_typ.h",
+                              "name": "evp_pkey_ctx_st",
+                              "kind": "STRUCT",
+                              "size": 0,
+                              "source_type": "AUTO",
+                              "has_definition": true,
+                              "definition": { "members": [] }
+                            },
+                            {
+                              "data_type_id": 12,
+                              "namespace": "ossl_typ.h",
+                              "name": "EVP_PKEY_CTX",
+                              "kind": "TYPEDEF",
+                              "size": 0,
+                              "source_type": "AUTO",
+                              "has_definition": true,
+                              "definition": { "target_data_type_id": 11 }
+                            },
+                            {
+                              "data_type_id": 13,
+                              "namespace": "",
+                              "name": "EVP_PKEY_CTX *",
+                              "kind": "POINTER",
+                              "size": 8,
+                              "source_type": "AUTO",
+                              "has_definition": true,
+                              "definition": { "pointee_data_type_id": 12 }
+                            }
+                          ]
+                        }
+                        """), "items");
 
-                try {
-                    var list = FunctionDataTypesList.fromJson(
-                            """
-                                       {
-                                           "total_count": 1,
-                                           "total_data_types_count": 1,
-                                           "items": [
-                                             {
-                                               "completed": true,
-                                               "status": "completed",
-                                               "data_types": {
-                                                 "func_types": {
-                                                   "addr": 1052960,
-                                                   "size": 22,
-                                                   "header": {
-                                                     "name": "portal_name_demangled",
-                                                     "addr": 1052960,
-                                                     "type": "int",
-                                                     "args": {
-                                                       "0x0": {
-                                                         "offset": 0,
-                                                         "name": "ctx",
-                                                         "type": "ossl_typ.h::EVP_PKEY_CTX *",
-                                                         "size": 1
-                                                       }
-                                                     }
-                                                   },
-                                                   "name": "portal_name_demangled",
-                                                   "type": "int",
-                                                   "artifact_type": "Function"
-                                                 },
-                                                 "func_deps": [
-                                                   {
-                                                     "name": "evp_pkey_ctx_st",
-                                                     "size": 0,
-                                                     "members": {},
-                                                     "artifact_type": "Struct"
-                                                   },
-                                                   {
-                                                     "name": "EVP_PKEY_CTX",
-                                                     "type": "ossl_typ.h::evp_pkey_ctx_st",
-                                                     "artifact_type": "Typedef"
-                                                   }
-                                                 ]
-                                               },
-                                               "function_id": 1
-                                             }
-                                             ]                                          
-                                             }
-                                    """
-                    );
-                    return list;
+                var parameter = new SignatureParameterEntry();
+                parameter.setName("ctx");
+                parameter.setOrdinal(0L);
+                parameter.setDataTypeId(13L);
+                parameter.setBitLength(64L);
 
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+                var entry = new BatchFunctionSignatureEntry();
+                entry.setAnalysisId(1L);
+                entry.setFunctionId(1L);
+                entry.setFunctionName("portal_name_demangled");
+                entry.setHasSignature(true);
+                entry.setReturnDataTypeId(10L);
+                entry.setParameters(List.of(parameter));
+
+                return new FunctionSignatureBatch(List.of(entry), Map.of(new AnalysisID(1), dataTypes));
             }
 
             @Override
