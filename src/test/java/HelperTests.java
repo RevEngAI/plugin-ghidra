@@ -1,4 +1,4 @@
-import ai.reveng.toolkit.ghidra.core.services.api.types.binsync.TypePathAndName;
+import ai.reveng.toolkit.ghidra.core.services.api.types.TypePathAndName;
 import org.junit.Test;
 
 public class HelperTests {

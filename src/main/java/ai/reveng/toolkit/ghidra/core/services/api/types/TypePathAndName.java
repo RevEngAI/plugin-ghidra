@@ -1,22 +1,22 @@
-package ai.reveng.toolkit.ghidra.core.services.api.types.binsync;
+package ai.reveng.toolkit.ghidra.core.services.api.types;
 
 import ghidra.program.model.data.CategoryPath;
 
+/// A scoped type name split into its Ghidra {@link CategoryPath} and its leaf name.
+///
+/// The server reports a type's scope in a `namespace` field, using `::` as the separator, e.g.
+/// `stdint`, `DWARF::stdio.h` or the empty string for the root scope. Ghidra models the same idea
+/// as a {@link CategoryPath}, so this splits one into the other.
 public record TypePathAndName(
         String name,
         String[] path
 ) {
 
-
-
-    /// based on `ArtifactLifter.parse_scoped_type` from binsync
     /// Takes strings like:
     ///
     /// - "uint32_t"
     /// - "stdint::uint32_t"
     /// - "DWARF::stdio.h::off_t"
-    /// @param str
-    /// @return
     public static TypePathAndName fromString(String str){
         // split into path and name on "::"
         if (str.contains("::")) {
