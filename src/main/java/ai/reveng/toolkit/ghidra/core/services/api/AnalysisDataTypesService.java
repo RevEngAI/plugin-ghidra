@@ -9,10 +9,12 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /// Owns an analysis' `data_type_id` namespace.
@@ -146,7 +148,9 @@ public final class AnalysisDataTypesService {
     /// **Resolve before create.** Every type in the closure is first looked up in the analysis'
     /// catalogue by `(namespace, name, kind)`; only the genuine gaps are created. A push is
     /// reactive and repeats on every edit, so a version that created unconditionally would fill the
-    /// analysis with duplicates of the same type.
+    /// analysis with duplicates of the same type. Which namespace a Ghidra type is looked up and
+    /// filed under is {@link #storageKey}'s decision, and part of the same property: a namespace
+    /// the analysis has never used is a Ghidra-side scope, not a server one.
     ///
     /// **Create in two phases.** A `Create*` body carries no `data_type_id`, so nothing in a batch
     /// can refer to anything else in that same batch. The gaps are therefore created with empty
@@ -159,6 +163,8 @@ public final class AnalysisDataTypesService {
     ///
     /// The returned map is keyed by the Ghidra-derived {@link GhidraDataTypeEncoder#keyOf} of every
     /// type in the closure, so a caller can look an id up with nothing but the Ghidra type in hand.
+    /// Where a type was filed under a different namespace than its category path implies — see
+    /// {@link #storageKey} — that key is present too, pointing at the same id.
     public Map<TypeKey, Long> ensure(AnalysisID analysisID, Collection<DataType> roots) throws ApiException {
         List<DataType> closure = GhidraDataTypeEncoder.closure(roots);
         if (closure.isEmpty()) {
@@ -167,25 +173,44 @@ public final class AnalysisDataTypesService {
 
         Catalogue catalogue = catalogue(analysisID);
         Map<TypeKey, Long> ids = new LinkedHashMap<>();
+        // The key each Ghidra type is stored under, which is its derived key unless that namespace
+        // turned out to be a purely local one.
+        Map<TypeKey, TypeKey> storage = new LinkedHashMap<>();
         Map<TypeKey, DataType> missing = new LinkedHashMap<>();
         for (DataType type : closure) {
-            TypeKey key = GhidraDataTypeEncoder.keyOf(type);
-            catalogue.idOf(key).ifPresentOrElse(
-                    id -> ids.put(key, id),
-                    () -> missing.putIfAbsent(key, type));
+            TypeKey derived = GhidraDataTypeEncoder.keyOf(type);
+            TypeKey stored = storageKey(catalogue, derived);
+            storage.put(derived, stored);
+            catalogue.idOf(stored).ifPresentOrElse(
+                    id -> {
+                        ids.put(derived, id);
+                        ids.putIfAbsent(stored, id);
+                    },
+                    // Two derived keys can flatten onto one storage key; that is one server type.
+                    () -> missing.putIfAbsent(stored, type));
         }
 
         if (!missing.isEmpty()) {
             for (ServerDataType created : create(analysisID, missing)) {
                 ids.putIfAbsent(TypeKey.of(created), created.id());
             }
+            storage.forEach((derived, stored) -> {
+                Long id = ids.get(stored);
+                if (id != null) {
+                    ids.putIfAbsent(derived, id);
+                }
+            });
         }
 
         List<ai.reveng.model.UpdateDataTypeEntry> updates = new ArrayList<>();
+        Set<Long> written = new HashSet<>();
         for (DataType type : closure) {
-            Long id = ids.get(GhidraDataTypeEncoder.keyOf(type));
-            if (id != null) {
-                GhidraDataTypeEncoder.updateEntry(type, id, ids::get).ifPresent(updates::add);
+            TypeKey derived = GhidraDataTypeEncoder.keyOf(type);
+            Long id = ids.get(derived);
+            // One id is written once even if several Ghidra types resolved onto it.
+            if (id != null && written.add(id)) {
+                GhidraDataTypeEncoder.updateEntry(type, storage.get(derived).namespace(), id, ids::get)
+                        .ifPresent(updates::add);
             }
         }
         update(analysisID, updates);
@@ -193,12 +218,35 @@ public final class AnalysisDataTypesService {
         return Map.copyOf(ids);
     }
 
+    /// The key the analysis should hold a Ghidra type under, given what it already holds.
+    ///
+    /// A Ghidra category path is not only ever a server namespace. A type out of one of Ghidra's own
+    /// data-type archives sits in a category named after that archive — `/windows_vs12_32/DWORD` —
+    /// and never came from the server; taking that category as a namespace would look for a type the
+    /// analysis has never heard of and create a duplicate of the `DWORD` it does hold at the root.
+    /// The rule is that only the server names namespaces: a type the analysis already has under the
+    /// derived namespace keeps it, and anything else is local and belongs at the root.
+    ///
+    /// This cannot conflate two genuinely distinct types that share a name in different server
+    /// namespaces. Both of those are in the catalogue under their own namespaces, so both take the
+    /// first branch and resolve to their own ids; the root is only ever fallen back to for a
+    /// namespace the analysis holds no such type in at all, where there is nothing to be confused
+    /// with. What it does accept is that a Ghidra archive's `DWORD` and a root `DWORD` of the same
+    /// kind are one type — which is exactly what already happens to a `DWORD` the analyst declares
+    /// at the root by hand.
+    private static TypeKey storageKey(Catalogue catalogue, TypeKey derived) {
+        if (derived.namespace().isEmpty() || catalogue.idOf(derived).isPresent()) {
+            return derived;
+        }
+        return new TypeKey("", derived.name(), derived.kind());
+    }
+
     /// `POST /v3/analyses/{analysis_id}/data-types` for types the analysis does not have, chunked to
     /// the endpoint's batch limit. Returns the created types as the server stored them, ids
     /// included.
     private List<ServerDataType> create(AnalysisID analysisID, Map<TypeKey, DataType> types) throws ApiException {
-        List<ai.reveng.model.CreateDataTypeEntry> entries = types.values().stream()
-                .map(GhidraDataTypeEncoder::createEntry)
+        List<ai.reveng.model.CreateDataTypeEntry> entries = types.entrySet().stream()
+                .map(entry -> GhidraDataTypeEncoder.createEntry(entry.getValue(), entry.getKey().namespace()))
                 .toList();
         List<ServerDataType> created = new ArrayList<>();
         for (int start = 0; start < entries.size(); start += WRITE_BATCH_SIZE) {

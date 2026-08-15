@@ -6,9 +6,12 @@ import ai.reveng.toolkit.ghidra.core.services.api.AnalysisDataTypesService.TypeK
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
+import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.CharDataType;
 import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.TypedefDataType;
+import ghidra.program.model.data.UnsignedIntegerDataType;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -263,6 +266,135 @@ public class AnalysisDataTypesServiceTest {
         service.ensure(new AnalysisID(1), List.of(new IntegerDataType()));
 
         assertEquals(List.of("list", "create"), api.calls);
+    }
+
+    /// Every namespace the closure was written under, whichever create batch it went out in.
+    private static List<String> createdNamespaces(WritingApi api, String name) {
+        return api.creates.stream()
+                .flatMap(request -> request.getDataTypes().stream())
+                .map(entry -> entry.getActualInstance())
+                .filter(instance -> name.equals(WritingApi.invoke(instance, "getName")))
+                .map(instance -> WritingApi.invoke(instance, "getNamespace"))
+                .toList();
+    }
+
+    /// A Ghidra category is not only ever a server namespace. `/windows_vs12_32/DWORD` comes out of
+    /// one of Ghidra's own data-type archives, not out of this analysis, so reading that category as
+    /// a namespace would miss the `DWORD` the analysis holds at the root and create a second one —
+    /// on every edit, because the push is reactive.
+    @Test
+    public void aTypeInAGhidraArchiveCategoryResolvesToTheServerEntryAtTheRoot() throws Exception {
+        var dword = new TypedefDataType(new CategoryPath("/windows_vs12_32"), "DWORD",
+                new UnsignedIntegerDataType());
+        var api = new WritingApi(List.of(
+                serverType(7L, "", "DWORD", ServerDataType.Kind.TYPEDEF),
+                serverType(8L, "", "uint", ServerDataType.Kind.BASE)));
+        var service = new AnalysisDataTypesService(api);
+
+        var ids = service.ensure(new AnalysisID(1), List.of(dword));
+
+        assertFalse("the analysis already has this type, so nothing may be created",
+                api.calls.contains("create"));
+        assertEquals("and the Ghidra type resolves to it", Long.valueOf(7),
+                ids.get(new TypeKey("windows_vs12_32", "DWORD", ServerDataType.Kind.TYPEDEF)));
+    }
+
+    /// The same type when the analysis does not have it yet: it is created once, at the root, and
+    /// the next push resolves what the first one wrote rather than creating it again.
+    @Test
+    public void aTypeInAGhidraArchiveCategoryIsCreatedOnceAtTheRoot() throws Exception {
+        var api = new WritingApi(List.of());
+        var service = new AnalysisDataTypesService(api);
+        var analysis = new AnalysisID(1);
+
+        var first = service.ensure(analysis, List.of(
+                new TypedefDataType(new CategoryPath("/windows_vs12_32"), "DWORD",
+                        new UnsignedIntegerDataType())));
+
+        assertEquals("created at the root, not under the Ghidra archive's category",
+                List.of(""), createdNamespaces(api, "DWORD"));
+
+        int createsAfterFirst = api.creates.size();
+        var second = service.ensure(analysis, List.of(
+                new TypedefDataType(new CategoryPath("/windows_vs12_32"), "DWORD",
+                        new UnsignedIntegerDataType())));
+
+        assertEquals("the second push resolves it instead", createsAfterFirst, api.creates.size());
+        assertEquals("and lands on the same id",
+                first.get(new TypeKey("windows_vs12_32", "DWORD", ServerDataType.Kind.TYPEDEF)),
+                second.get(new TypeKey("windows_vs12_32", "DWORD", ServerDataType.Kind.TYPEDEF)));
+    }
+
+    /// The root is only ever fallen back to for a namespace the analysis holds no such type in. Two
+    /// distinct types that share a name in different server namespaces are both in the catalogue
+    /// under their own namespace, so both resolve there and neither is flattened onto the other.
+    @Test
+    public void sameNameInDifferentServerNamespacesStillResolvesIndependently() throws Exception {
+        var fromLibA = new StructureDataType(new CategoryPath("/libA"), "Config", 0);
+        fromLibA.add(new IntegerDataType(), "a", null);
+        var fromLibB = new StructureDataType(new CategoryPath("/libB"), "Config", 0);
+        fromLibB.add(new CharDataType(), "b", null);
+
+        var api = new WritingApi(List.of(
+                serverType(11L, "libA", "Config", ServerDataType.Kind.STRUCT),
+                serverType(22L, "libB", "Config", ServerDataType.Kind.STRUCT),
+                serverType(33L, "", "Config", ServerDataType.Kind.STRUCT),
+                serverType(8L, "", "int", ServerDataType.Kind.BASE),
+                serverType(9L, "", "char", ServerDataType.Kind.BASE)));
+        var service = new AnalysisDataTypesService(api);
+
+        var ids = service.ensure(new AnalysisID(1), List.of(fromLibA, fromLibB));
+
+        assertFalse("both are already known", api.calls.contains("create"));
+        assertEquals(Long.valueOf(11), ids.get(new TypeKey("libA", "Config", ServerDataType.Kind.STRUCT)));
+        assertEquals(Long.valueOf(22), ids.get(new TypeKey("libB", "Config", ServerDataType.Kind.STRUCT)));
+
+        // And each is written back to its own entry, still in its own namespace.
+        var byId = api.updates.get(0).getDataTypes().stream()
+                .map(entry -> (ai.reveng.model.UpdateStructDataType) entry.getActualInstance())
+                .collect(java.util.stream.Collectors.toMap(
+                        ai.reveng.model.UpdateStructDataType::getDataTypeId,
+                        ai.reveng.model.UpdateStructDataType::getNamespace));
+        assertEquals("libA", byId.get(11L));
+        assertEquals("libB", byId.get(22L));
+    }
+
+    /// A namespace the analysis does have a type in is a server namespace, so it is kept — this is
+    /// what makes a type the plugin pulled from the server resolve back to the entry it came from.
+    @Test
+    public void aNamespaceTheAnalysisAlreadyUsesIsKept() throws Exception {
+        var file = new StructureDataType(new CategoryPath("/DWARF/stdio.h"), "FILE", 0);
+        file.add(new IntegerDataType(), "fd", null);
+
+        var api = new WritingApi(List.of(
+                serverType(5L, "DWARF::stdio.h", "FILE", ServerDataType.Kind.STRUCT),
+                serverType(8L, "", "int", ServerDataType.Kind.BASE)));
+        var service = new AnalysisDataTypesService(api);
+
+        var ids = service.ensure(new AnalysisID(1), List.of(file));
+
+        assertFalse(api.calls.contains("create"));
+        assertEquals(Long.valueOf(5),
+                ids.get(new TypeKey("DWARF::stdio.h", "FILE", ServerDataType.Kind.STRUCT)));
+        var updated = (ai.reveng.model.UpdateStructDataType)
+                api.updates.get(0).getDataTypes().get(0).getActualInstance();
+        assertEquals("the update must not move the entry out of its namespace",
+                "DWARF::stdio.h", updated.getNamespace());
+    }
+
+    /// A local type the analysis has never seen is still created exactly once, and the second push
+    /// resolves it — the reactive case, where a miss would duplicate on every edit.
+    @Test
+    public void aGenuinelyNewLocalTypeIsCreatedOnceAndOnlyOnce() throws Exception {
+        var api = new WritingApi(List.of());
+        var service = new AnalysisDataTypesService(api);
+        var analysis = new AnalysisID(1);
+
+        service.ensure(analysis, List.of(packetHeader()));
+        service.ensure(analysis, List.of(packetHeader()));
+
+        assertEquals("exactly one create of the struct, over both pushes",
+                List.of(""), createdNamespaces(api, "packet_header"));
     }
 
     /// The write endpoints cap a request at 100 types, so a large closure has to be chunked.

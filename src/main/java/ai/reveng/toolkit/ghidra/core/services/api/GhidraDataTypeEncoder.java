@@ -45,6 +45,12 @@ import java.util.Set;
 /// `namespace` is the inverse of the decoder's category path: a type at the root category encodes
 /// as the empty namespace, which is what a locally authored Ghidra type gets, and a type the plugin
 /// pulled from the server round-trips back to the namespace it arrived with.
+///
+/// The derived namespace is what a type is *looked up* by. What it is *written* under is a separate
+/// decision, because a Ghidra category is not only ever a server namespace — a type out of one of
+/// Ghidra's own archives sits in a category named after that archive and never came from the server
+/// at all. {@link AnalysisDataTypesService} makes that call and passes the namespace in; the
+/// overloads without one keep the derived value.
 public final class GhidraDataTypeEncoder {
 
     /// Upper bound on transitive dependency resolution, so a pathological type graph cannot make a
@@ -159,9 +165,14 @@ public final class GhidraDataTypeEncoder {
     /// the definitions are deliberately left empty here and filled in by
     /// {@link #updateEntry(DataType, long, Ids)} once the server has assigned ids.
     public static ai.reveng.model.CreateDataTypeEntry createEntry(DataType type) {
+        return createEntry(type, namespaceOf(type));
+    }
+
+    /// As {@link #createEntry(DataType)}, but filed under `namespace` rather than under the one the
+    /// type's category path implies.
+    public static ai.reveng.model.CreateDataTypeEntry createEntry(DataType type, String namespace) {
         Long size = sizeOf(type);
         String name = nameOf(type);
-        String namespace = namespaceOf(type);
         return new ai.reveng.model.CreateDataTypeEntry(switch (kindOf(type)) {
             case STRUCT -> new ai.reveng.model.CreateStructDataType()
                     .kind(ai.reveng.model.CreateStructDataType.KindEnum.STRUCT)
@@ -211,9 +222,18 @@ public final class GhidraDataTypeEncoder {
     /// placeholder. `PUT` replaces a stored type in full, so writing an empty definition would
     /// erase whatever the server extracted; a push that has nothing to say says nothing.
     public static Optional<ai.reveng.model.UpdateDataTypeEntry> updateEntry(DataType type, long id, Ids ids) {
+        return updateEntry(type, namespaceOf(type), id, ids);
+    }
+
+    /// As {@link #updateEntry(DataType, long, Ids)}, but filed under `namespace` rather than under
+    /// the one the type's category path implies. `PUT` replaces a stored type in full, so this has
+    /// to be the namespace the entry `id` already lives at — otherwise the update would move it.
+    public static Optional<ai.reveng.model.UpdateDataTypeEntry> updateEntry(DataType type,
+                                                                            String namespace,
+                                                                            long id,
+                                                                            Ids ids) {
         Long size = sizeOf(type);
         String name = nameOf(type);
-        String namespace = namespaceOf(type);
         return switch (kindOf(type)) {
             case STRUCT -> {
                 List<ai.reveng.model.DataTypeMemberEntry> members = membersOf((Composite) type, false, ids);
