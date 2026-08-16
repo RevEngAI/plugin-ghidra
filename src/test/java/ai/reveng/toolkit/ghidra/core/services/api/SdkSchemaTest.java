@@ -52,7 +52,7 @@ public class SdkSchemaTest {
                 "v3CreateAnalysisDataTypesCall", "v3UpdateAnalysisDataTypesCall",
                 "v3UpdateFunctionSignature"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
-                "createAiDecompilation", "getAiDecompilation", "getAiDecompilationTokenised",
+                "createAiDecompilation", "getAiDecompilation", "v3GetAiDecompilationTokenValues",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
                 "regenerateAiDecompilationSummary", "regenerateAiDecompilationInlineComments",
@@ -127,6 +127,11 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.BatchRenameItem",
                 "setFunctionId", "setNewName", "setNewMangledName");
         requireMethods(missing, "ai.reveng.model.FunctionRename", "getNewName", "getNewMangledName");
+
+        // Resolving a double-clicked identifier back to the token to override reads the tokenised
+        // source and both name maps, which arrive unmerged.
+        requireMethods(missing, "ai.reveng.model.TokenValuesData",
+                "getAiDecomp", "getTokenToValue", "getTokenToValueUserOverrides");
 
         assertTrue("SDK model surface drifted: " + missing, missing.isEmpty());
     }

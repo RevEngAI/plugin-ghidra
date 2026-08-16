@@ -475,6 +475,10 @@ public class TypedApiImplementation implements TypedApiInterface {
             // GET /v3/functions/{function_id}/ai-decompilation
             DecompilationData data = functionsAiDecompilationApi.getAiDecompilation(functionID.value());
             String summary = null;
+            // TODO: no v3 endpoint currently returns a predicted function name. It used to ride on
+            // the removed /ai-decompilation/tokenised response; neither /token-values nor
+            // /line-attributions carries it, so the predicted-name panel stays hidden until the API
+            // offers it again.
             String predictedFunctionName = null;
             WorkflowProgress.StatusEnum summaryStatus = null;
             WorkflowProgress.StatusEnum inlineCommentsStatus = null;
@@ -503,13 +507,6 @@ public class TypedApiImplementation implements TypedApiInterface {
                     summary = summaryData.getAiSummary() != null ? summaryData.getAiSummary() : summaryData.getSummary();
                 } catch (ApiException e) {
                     Msg.info(this, "Decompilation completed but summary not yet available for function " + functionID.value());
-                }
-                try {
-                    // GET /v3/functions/{function_id}/ai-decompilation/tokenised — carries the predicted name
-                    TokenisedData tokenised = functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
-                    predictedFunctionName = tokenised.getPredictedFunctionName();
-                } catch (ApiException e) {
-                    Msg.info(this, "Could not fetch predicted function name for function " + functionID.value() + ": " + e.getMessage());
                 }
                 try {
                     // GET /v3/functions/{function_id}/ai-decompilation/inline-comments/status
@@ -574,9 +571,9 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
-        // GET /v3/functions/{function_id}/ai-decompilation/tokenised
-        return functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
+    public TokenValuesData getAIDecompilationTokenValues(FunctionID functionID) throws ApiException {
+        // GET /v3/functions/{function_id}/ai-decompilation/token-values
+        return functionsAiDecompilationApi.v3GetAiDecompilationTokenValues(functionID.value());
     }
 
     @Override

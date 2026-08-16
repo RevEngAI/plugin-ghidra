@@ -1,11 +1,9 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
-import ai.reveng.model.AIDecompFunctionMapping;
 import ai.reveng.model.DecompilationData;
 import ai.reveng.model.ProgressMessage;
-import ai.reveng.model.ReplacementValue;
-import ai.reveng.model.TokenisedData;
+import ai.reveng.model.TokenValuesData;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -38,6 +36,7 @@ import java.awt.event.MouseEvent;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -586,8 +585,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             @Override
             public void run(TaskMonitor monitor) {
                 try {
-                    TokenisedData tokenised = service.getApi().getAIDecompilationTokenised(functionID);
-                    String token = resolveToken(tokenised, sourceIndex, identIndex, word);
+                    TokenValuesData tokenValues = service.getApi().getAIDecompilationTokenValues(functionID);
+                    String token = resolveToken(tokenValues, sourceIndex, identIndex, word);
                     if (token == null) {
                         SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
                                 "Rename", "'%s' is not a renameable variable or type.".formatted(word)));
@@ -725,71 +724,52 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     /**
      * Resolve a displayed identifier to the token to override, mirroring the IDA plugin's
      * {@code resolve_token}: prefer the token at the same identifier position in the tokenised line,
-     * and fall back to a unique match across the renameable categories by effective value.
+     * and fall back to a unique match by effective value across every token the server rendered.
      */
-    static String resolveToken(TokenisedData tokenised, int sourceIndex, int identIndex, String oldIdent) {
-        if (tokenised == null) {
+    static String resolveToken(TokenValuesData tokenValues, int sourceIndex, int identIndex, String oldIdent) {
+        if (tokenValues == null) {
             return null;
         }
-        AIDecompFunctionMapping mapping = tokenised.getFunctionMapping();
-        if (mapping == null) {
-            return null;
-        }
+        Map<String, String> effectiveValues = effectiveValues(tokenValues);
 
-        String tokenisedText = tokenised.getTokenisedDecompilation();
+        String tokenisedText = tokenValues.getAiDecomp();
         String[] tokenisedLines = (tokenisedText == null ? "" : tokenisedText).split("\n", -1);
         if (sourceIndex >= 0 && sourceIndex < tokenisedLines.length) {
             var tokenIdentifiers = identifiers(tokenisedLines[sourceIndex]);
             if (identIndex >= 0 && identIndex < tokenIdentifiers.size()) {
                 String candidate = tokenIdentifiers.get(identIndex);
-                for (TokenEntry entry : renameableTokens(mapping)) {
-                    if (entry.token().equals(candidate)
-                            && oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
-                        return candidate;
-                    }
+                if (oldIdent.equals(effectiveValues.get(candidate))) {
+                    return candidate;
                 }
             }
         }
 
         String uniqueMatch = null;
-        for (TokenEntry entry : renameableTokens(mapping)) {
-            if (oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
+        for (var entry : effectiveValues.entrySet()) {
+            if (oldIdent.equals(entry.getValue())) {
                 if (uniqueMatch != null) {
                     return null;
                 }
-                uniqueMatch = entry.token();
+                uniqueMatch = entry.getKey();
             }
         }
         return uniqueMatch;
     }
 
-    private record TokenEntry(String token, ReplacementValue replacement) {}
-
-    private static List<TokenEntry> renameableTokens(AIDecompFunctionMapping mapping) {
-        var entries = new ArrayList<TokenEntry>();
-        addTokens(entries, mapping.getUnmatchedVars());
-        addTokens(entries, mapping.getUnmatchedGlobalVars());
-        addTokens(entries, mapping.getUnmatchedExternalVars());
-        addTokens(entries, mapping.getUnmatchedCustomTypes());
-        addTokens(entries, mapping.getUnmatchedEnums());
-        return entries;
-    }
-
-    private static void addTokens(List<TokenEntry> entries, Map<String, ReplacementValue> category) {
-        if (category == null) {
-            return;
+    /**
+     * Each token mapped to the name currently rendered for it: the caller's own override where one
+     * exists, otherwise the value the server predicted. The two maps arrive unmerged, so overrides
+     * are layered on top here.
+     */
+    static Map<String, String> effectiveValues(TokenValuesData tokenValues) {
+        var result = new LinkedHashMap<String, String>();
+        if (tokenValues.getTokenToValue() != null) {
+            result.putAll(tokenValues.getTokenToValue());
         }
-        for (var e : category.entrySet()) {
-            entries.add(new TokenEntry(e.getKey(), e.getValue()));
+        if (tokenValues.getTokenToValueUserOverrides() != null) {
+            result.putAll(tokenValues.getTokenToValueUserOverrides());
         }
-    }
-
-    private static String effectiveValue(AIDecompFunctionMapping mapping, String token, ReplacementValue replacement) {
-        Map<String, String> overrides = mapping.getUserOverrideMappings();
-        if (overrides != null && overrides.containsKey(token)) {
-            return overrides.get(token);
-        }
-        return replacement == null ? null : replacement.getValue();
+        return result;
     }
 
 

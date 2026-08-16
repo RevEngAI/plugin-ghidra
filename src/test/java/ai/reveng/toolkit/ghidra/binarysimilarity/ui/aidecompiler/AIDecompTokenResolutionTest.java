@@ -1,15 +1,13 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
-import ai.reveng.model.AIDecompFunctionMapping;
-import ai.reveng.model.ReplacementValue;
-import ai.reveng.model.TokenisedData;
+import ai.reveng.model.TokenValuesData;
 import org.junit.Test;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Unit tests for the identifier → token resolution that backs the "rename variable/type" edit,
@@ -37,89 +35,109 @@ public class AIDecompTokenResolutionTest {
     }
 
     @Test
+    public void effectiveValues_overrideWinsOverPredictedValue() {
+        var tokenValues = tokenValues("int TOKEN_A = TOKEN_B;",
+                Map.of("TOKEN_A", "result", "TOKEN_B", "value"),
+                Map.of("TOKEN_A", "myResult"));
+
+        assertEquals(Map.of("TOKEN_A", "myResult", "TOKEN_B", "value"),
+                AIDecompilationdWindow.effectiveValues(tokenValues));
+    }
+
+    @Test
+    public void effectiveValues_toleratesTheNullMapsReturnedBeforeARunSucceeds() {
+        var tokenValues = new TokenValuesData();
+        tokenValues.setAiDecomp("");
+        assertTrue(AIDecompilationdWindow.effectiveValues(tokenValues).isEmpty());
+    }
+
+    @Test
+    public void effectiveValues_keepsAnOverrideForATokenMissingFromTokenToValue() {
+        var tokenValues = tokenValues("int TOKEN_A = 1;", Map.of(), Map.of("TOKEN_A", "myResult"));
+
+        assertEquals(Map.of("TOKEN_A", "myResult"), AIDecompilationdWindow.effectiveValues(tokenValues));
+    }
+
+    @Test
     public void resolveToken_matchesTokenAtSameIdentifierPosition() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedVars(vars(Map.of(
-                "TOKEN_A", "result",
-                "TOKEN_B", "value")));
-        var tokenised = tokenised("int TOKEN_A = compute(TOKEN_B);", mapping);
+        var tokenValues = tokenValues("int TOKEN_A = compute(TOKEN_B);",
+                Map.of("TOKEN_A", "result", "TOKEN_B", "value"),
+                Map.of());
 
         // "result" is the identifier at index 1 in the source line.
-        assertEquals("TOKEN_A", AIDecompilationdWindow.resolveToken(tokenised, 0, 1, "result"));
+        assertEquals("TOKEN_A", AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
         // "value" is the identifier at index 3.
-        assertEquals("TOKEN_B", AIDecompilationdWindow.resolveToken(tokenised, 0, 3, "value"));
+        assertEquals("TOKEN_B", AIDecompilationdWindow.resolveToken(tokenValues, 0, 3, "value"));
     }
 
     @Test
     public void resolveToken_userOverrideTakesPrecedenceOverPredictedValue() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedVars(vars(Map.of("TOKEN_A", "result")));
-        mapping.setUserOverrideMappings(Map.of("TOKEN_A", "myResult"));
-        var tokenised = tokenised("int TOKEN_A = 1;", mapping);
+        var tokenValues = tokenValues("int TOKEN_A = 1;",
+                Map.of("TOKEN_A", "result"),
+                Map.of("TOKEN_A", "myResult"));
 
         // The displayed name is the override, so that is what the user double-clicks.
-        assertEquals("TOKEN_A", AIDecompilationdWindow.resolveToken(tokenised, 0, 1, "myResult"));
+        assertEquals("TOKEN_A", AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "myResult"));
         // The stale predicted value no longer resolves.
-        assertNull(AIDecompilationdWindow.resolveToken(tokenised, 0, 1, "result"));
+        assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
     }
 
     @Test
-    public void resolveToken_resolvesTypeCategory() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedCustomTypes(vars(Map.of("TOKEN_T", "MyStruct")));
-        var tokenised = tokenised("TOKEN_T *p = 0;", mapping);
+    public void resolveToken_resolvesTypeToken() {
+        var tokenValues = tokenValues("TOKEN_T *p = 0;", Map.of("TOKEN_T", "MyStruct"), Map.of());
 
-        assertEquals("TOKEN_T", AIDecompilationdWindow.resolveToken(tokenised, 0, 0, "MyStruct"));
+        assertEquals("TOKEN_T", AIDecompilationdWindow.resolveToken(tokenValues, 0, 0, "MyStruct"));
     }
 
     @Test
     public void resolveToken_fallsBackToUniqueValueMatchWhenPositionMisses() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedVars(vars(Map.of("TOKEN_X", "foo")));
         // Position lookup misses (identIndex out of range for the tokenised line), but there is
         // exactly one token whose effective value is "foo", so it still resolves.
-        var tokenised = tokenised("return 0;", mapping);
+        var tokenValues = tokenValues("return 0;", Map.of("TOKEN_X", "foo"), Map.of());
 
-        assertEquals("TOKEN_X", AIDecompilationdWindow.resolveToken(tokenised, 0, 99, "foo"));
+        assertEquals("TOKEN_X", AIDecompilationdWindow.resolveToken(tokenValues, 0, 99, "foo"));
+    }
+
+    @Test
+    public void resolveToken_fallbackUsesOverriddenValueNotPredictedValue() {
+        var tokenValues = tokenValues("return 0;",
+                Map.of("TOKEN_X", "foo"),
+                Map.of("TOKEN_X", "bar"));
+
+        assertEquals("TOKEN_X", AIDecompilationdWindow.resolveToken(tokenValues, 0, 99, "bar"));
+        assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 99, "foo"));
     }
 
     @Test
     public void resolveToken_ambiguousValueMatchReturnsNull() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedVars(vars(Map.of(
-                "TOKEN_X", "foo",
-                "TOKEN_Y", "foo")));
-        var tokenised = tokenised("return 0;", mapping);
+        var tokenValues = tokenValues("return 0;",
+                Map.of("TOKEN_X", "foo", "TOKEN_Y", "foo"),
+                Map.of());
 
-        assertNull(AIDecompilationdWindow.resolveToken(tokenised, 0, 99, "foo"));
+        assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 99, "foo"));
     }
 
     @Test
     public void resolveToken_unknownIdentifierReturnsNull() {
-        var mapping = new AIDecompFunctionMapping();
-        mapping.setUnmatchedVars(vars(Map.of("TOKEN_A", "result")));
-        var tokenised = tokenised("int TOKEN_A = 1;", mapping);
+        var tokenValues = tokenValues("int TOKEN_A = 1;", Map.of("TOKEN_A", "result"), Map.of());
 
-        assertNull(AIDecompilationdWindow.resolveToken(tokenised, 0, 0, "int"));
+        assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 0, "int"));
     }
 
     @Test
-    public void resolveToken_nullMappingReturnsNull() {
-        var tokenised = new TokenisedData();
-        tokenised.setTokenisedDecompilation("int TOKEN_A = 1;");
-        assertNull(AIDecompilationdWindow.resolveToken(tokenised, 0, 1, "result"));
+    public void resolveToken_noTokenValuesReturnsNull() {
+        var tokenValues = new TokenValuesData();
+        tokenValues.setAiDecomp("int TOKEN_A = 1;");
+        assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
     }
 
-    private static Map<String, ReplacementValue> vars(Map<String, String> tokenToValue) {
-        var result = new LinkedHashMap<String, ReplacementValue>();
-        tokenToValue.forEach((token, value) -> result.put(token, new ReplacementValue().value(value)));
-        return result;
-    }
-
-    private static TokenisedData tokenised(String tokenisedDecompilation, AIDecompFunctionMapping mapping) {
-        var data = new TokenisedData();
-        data.setTokenisedDecompilation(tokenisedDecompilation);
-        data.setFunctionMapping(mapping);
+    private static TokenValuesData tokenValues(String aiDecomp,
+                                               Map<String, String> tokenToValue,
+                                               Map<String, String> userOverrides) {
+        var data = new TokenValuesData();
+        data.setAiDecomp(aiDecomp);
+        data.setTokenToValue(tokenToValue);
+        data.setTokenToValueUserOverrides(userOverrides);
         return data;
     }
 }

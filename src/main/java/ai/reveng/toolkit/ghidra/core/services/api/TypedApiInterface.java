@@ -137,10 +137,11 @@ public interface TypedApiInterface {
     /**
      * Tokenised view of an AI decompilation. The tokenised text mirrors the human-readable
      * decompilation but with renameable identifiers replaced by stable tokens, and carries the
-     * mapping used to resolve a displayed name back to the token to override.
+     * value each token renders as, plus the caller's own overrides as a separate map, which is
+     * how a displayed name is resolved back to the token to override.
      */
-    default TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
-        throw new UnsupportedOperationException("getAIDecompilationTokenised not implemented yet");
+    default TokenValuesData getAIDecompilationTokenValues(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAIDecompilationTokenValues not implemented yet");
     }
 
     /**
