@@ -274,10 +274,9 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public Basic getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
-            // Create a Basic object with required fields
-            var basic = new Basic();
-            basic.setModelId(1);
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
+            var basic = new AnalysisBasicInfoOutputBody();
+            basic.setModelId(1L);
             basic.setModelName("test-model");
             basic.setBinaryName("test_binary");
             basic.setSha256Hash("0".repeat(64));

@@ -35,7 +35,7 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
-                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo",
+                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
@@ -140,6 +140,9 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.AnalysisFunctionEntry",
                 "getFunctionId", "getFunctionName", "getMangledName", "getFunctionVaddr",
                 "getFunctionSize");
+
+        requireMethods(missing, "ai.reveng.model.AnalysisBasicInfoOutputBody",
+                "getBinaryName", "getSha256Hash", "getModelName");
 
         requireMethods(missing, "ai.reveng.model.FunctionDetailsOutputBody",
                 "getFunctionId", "getMangledName", "getFunctionVaddr", "getFunctionSize",

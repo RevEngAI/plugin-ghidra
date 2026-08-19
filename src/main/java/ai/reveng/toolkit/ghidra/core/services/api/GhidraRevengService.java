@@ -1317,7 +1317,7 @@ public class GhidraRevengService {
         });
     }
 
-    public Basic getBasicDetailsForAnalysis(TypedApiInterface.AnalysisID analysisID) throws ApiException {
+    public AnalysisBasicInfoOutputBody getBasicDetailsForAnalysis(TypedApiInterface.AnalysisID analysisID) throws ApiException {
         return api.getAnalysisBasicInfo(analysisID);
     }
 

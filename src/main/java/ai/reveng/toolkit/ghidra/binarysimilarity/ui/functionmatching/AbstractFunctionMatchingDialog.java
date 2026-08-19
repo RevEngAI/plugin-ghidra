@@ -56,7 +56,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected AssemblyDiffPanel assemblyDiffPanel;
 
     // Data
-    protected Basic analysisBasicInfo;
+    protected AnalysisBasicInfoOutputBody analysisBasicInfo;
     protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
     protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 

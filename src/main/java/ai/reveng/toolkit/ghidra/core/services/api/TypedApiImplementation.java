@@ -72,8 +72,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     @Deprecated
     private final Map<BinaryID, AnalysisID> binaryToAnalysisCache = new HashMap<>();
 
-    // Cache for analysis basic info to avoid repeated API calls
-    private final Map<AnalysisID, ai.reveng.model.Basic> analysisBasicInfoCache = new HashMap<>();
+    private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
     public TypedApiImplementation(String baseUrl, String apiKey) {
         var apiClient = Configuration.getDefaultApiClient();
@@ -667,16 +666,10 @@ public class TypedApiImplementation implements TypedApiInterface {
         return mapJSONArray(responseData, FunctionNameScore::fromJSONObject);
     }
 
-    /**
-     *
-     * @param id
-     * @return
-     */
     @Override
     public AnalysisResult getInfoForAnalysis(AnalysisID id) {
         try {
-            var response = analysisCoreApi.getAnalysisBasicInfo(id.id());
-            var data = response.getData();
+            var data = analysisCoreApi.getAnalysisBasicInfo_0((long) id.id());
             if (data == null) {
                 throw new RuntimeException("Unexpected null data for analysis ID: " + id.id());
             }
@@ -740,19 +733,16 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public ai.reveng.model.Basic getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
-        // Check cache first
-        ai.reveng.model.Basic cachedResult = analysisBasicInfoCache.get(analysisID);
+    public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
+        AnalysisBasicInfoOutputBody cachedResult = analysisBasicInfoCache.get(analysisID);
         if (cachedResult != null) {
             Msg.info(this, "Returning cached analysis basic info for analysis ID: " + analysisID.id());
             return cachedResult;
         }
 
-        // If not in cache, make API call
         Msg.info(this, "Fetching analysis basic info from API for analysis ID: " + analysisID.id());
-        ai.reveng.model.Basic result = this.analysisCoreApi.getAnalysisBasicInfo(analysisID.id()).getData();
+        AnalysisBasicInfoOutputBody result = this.analysisCoreApi.getAnalysisBasicInfo_0((long) analysisID.id());
 
-        // Cache the result for future requests
         analysisBasicInfoCache.put(analysisID, result);
 
         return result;

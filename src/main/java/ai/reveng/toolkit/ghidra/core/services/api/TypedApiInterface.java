@@ -238,7 +238,7 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("searchBinaries not implemented yet");
     }
 
-    default ai.reveng.model.Basic getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
+    default AnalysisBasicInfoOutputBody getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
         throw new UnsupportedOperationException("getAnalysisBasicInfo not implemented yet");
     }
 

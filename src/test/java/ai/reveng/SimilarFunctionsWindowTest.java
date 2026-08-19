@@ -204,9 +204,9 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         }
 
         @Override
-        public Basic getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) throws ApiException {
-            var basic = new Basic();
-            basic.setModelId(1);
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) throws ApiException {
+            var basic = new AnalysisBasicInfoOutputBody();
+            basic.setModelId(1L);
             basic.setSha256Hash("abc123");
             basic.setBinaryName("test_binary");
             return basic;

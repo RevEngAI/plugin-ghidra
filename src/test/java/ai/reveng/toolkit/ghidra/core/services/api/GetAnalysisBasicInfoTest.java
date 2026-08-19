@@ -1,0 +1,140 @@
+package ai.reveng.toolkit.ghidra.core.services.api;
+
+import ai.reveng.invoker.ApiClient;
+import ai.reveng.invoker.Configuration;
+import com.sun.net.httpserver.HttpServer;
+import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * {@link TypedApiImplementation#getAnalysisBasicInfo} memoises per analysis id and its ids are
+ * 64-bit on the wire, so this covers the cache and a binary id above 2^31.
+ */
+public class GetAnalysisBasicInfoTest extends AbstractGhidraHeadlessIntegrationTest {
+
+    private static final int ANALYSIS_ID = 4321;
+    private static final long BINARY_ID = 5_000_000_000L;
+
+    private HttpServer server;
+    private ApiClient originalApiClient;
+    private final List<String> requestPaths = new CopyOnWriteArrayList<>();
+
+    @Before
+    public void startStubServer() throws Exception {
+        originalApiClient = Configuration.getDefaultApiClient();
+        Configuration.setDefaultApiClient(new ApiClient());
+
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v3/analyses", exchange -> {
+            requestPaths.add(exchange.getRequestURI().getPath());
+            byte[] bytes = body().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        server.start();
+    }
+
+    @After
+    public void stopStubServer() {
+        if (server != null) {
+            server.stop(0);
+        }
+        if (originalApiClient != null) {
+            Configuration.setDefaultApiClient(originalApiClient);
+        }
+    }
+
+    @Test
+    public void getAnalysisBasicInfo_readsTheV3Endpoint() throws Exception {
+        var info = api().getAnalysisBasicInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+
+        assertEquals(List.of("/v3/analyses/" + ANALYSIS_ID + "/basic"), requestPaths);
+        assertEquals("test_binary", info.getBinaryName());
+        assertEquals("0".repeat(64), info.getSha256Hash());
+        assertEquals("binnet-0.5", info.getModelName());
+    }
+
+    @Test
+    public void getAnalysisBasicInfo_widensIdsBeyondIntRange() throws Exception {
+        var info = api().getAnalysisBasicInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+
+        assertEquals(Long.valueOf(BINARY_ID), info.getBinaryId());
+        assertEquals(Long.valueOf(9_000_000_000L), info.getBinarySize());
+        assertEquals(Long.valueOf(4_294_967_296L), info.getBaseAddress());
+    }
+
+    @Test
+    public void getAnalysisBasicInfo_secondReadOfTheSameIdIsServedFromCache() throws Exception {
+        var api = api();
+        var first = api.getAnalysisBasicInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+        var second = api.getAnalysisBasicInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+
+        assertEquals(1, requestPaths.size());
+        assertTrue("a cache hit should return the memoised instance", first == second);
+
+        api.getAnalysisBasicInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID + 1));
+        assertEquals(2, requestPaths.size());
+        assertEquals("/v3/analyses/" + (ANALYSIS_ID + 1) + "/basic", requestPaths.get(1));
+    }
+
+    @Test
+    public void getInfoForAnalysis_readsTheV3EndpointUncached() {
+        var api = api();
+        api.getInfoForAnalysis(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+        var result = api.getInfoForAnalysis(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+
+        assertEquals(2, requestPaths.size());
+        assertEquals("/v3/analyses/" + ANALYSIS_ID + "/basic", requestPaths.get(0));
+        assertEquals("test_binary", result.binary_name());
+        assertEquals("0".repeat(64), result.sha_256_hash().sha256());
+    }
+
+    private static String body() {
+        return """
+                {
+                  "analysis_scope": "PRIVATE",
+                  "base_address": 4294967296,
+                  "binary_id": %d,
+                  "binary_name": "test_binary",
+                  "binary_size": 9000000000,
+                  "binary_uuid": "1a2b3c4d-0000-0000-0000-000000000000",
+                  "creation": "2026-01-01T00:00:00Z",
+                  "debug": false,
+                  "detected_architecture": "x86_64",
+                  "detected_binary_format": "ELF",
+                  "detected_binary_type": "EXEC",
+                  "function_count": 12,
+                  "is_advanced": false,
+                  "is_owner": true,
+                  "is_system": false,
+                  "model_id": 7,
+                  "model_name": "binnet-0.5",
+                  "owner_username": "tester",
+                  "sequencer_version": null,
+                  "sha_256_hash": "%s",
+                  "supplied_architecture": "Auto",
+                  "supplied_binary_format": "Auto",
+                  "supplied_binary_type": "Auto",
+                  "team_id": 3
+                }
+                """.formatted(BINARY_ID, "0".repeat(64));
+    }
+
+    private TypedApiImplementation api() {
+        return new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
+    }
+}
