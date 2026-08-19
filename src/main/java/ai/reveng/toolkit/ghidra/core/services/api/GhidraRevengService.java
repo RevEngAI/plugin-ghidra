@@ -14,7 +14,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
@@ -182,57 +181,7 @@ public class GhidraRevengService {
         }
         return revengMatchNamespace;
     }
-    /**
-     * Tries to find a BinaryID for a given program
-     * If the program already has a BinaryID associated with it, it will return that
-     * If we don't have a BinaryID it will return an empty Optional
-     * @param program
-     * @return
-     */
-    @Deprecated
-    public Optional<BinaryID> getBinaryIDFor(Program program) {
-        return getBinaryIDfromOptions(program);
-    }
-
-    @SuppressWarnings("deprecation") // Using deprecated method to support legacy BinaryID
-    private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFor(Program program){
-        var optAnalysisID = getAnalysisIDFromOptions(program);
-        if (optAnalysisID.isPresent()){
-            return optAnalysisID;
-        }
-        // Fallback to getting it from the BinaryID, if one exists
-        var legacyBinaryID = getBinaryIDFor(program);
-        if (legacyBinaryID.isPresent()) {
-            // We have a legacy binary ID, upgrade to AnalysisID
-            var analysisID = api.getAnalysisIDfromBinaryID(legacyBinaryID.get());
-            addAnalysisIDtoProgramOptions(program, analysisID);
-            program.withTransaction("Remove legacy BinaryID from program options", () ->
-                    program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY)
-                    .setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID)
-            );
-            return Optional.of(analysisID);
-        }
-        return Optional.empty();
-    }
-
-    /// This is a helper to get the AnalysisID from the BinaryID, in the rare cases that this is required
-    /// Currently the only known case is when opening the analysis on the portal in the browser
-    private Optional<BinaryID> getBinaryIDFromAnalysisID(TypedApiInterface.AnalysisID analysisID) {
-        try {
-            var info = api.getAnalysisBasicInfo(analysisID);
-            var results = api.search(new TypedApiInterface.BinaryHash(info.getSha256Hash()));
-            var binaryId = results.stream().filter( r -> r.analysis_id().equals(analysisID))
-                .findAny().map( r -> r.binary_id());
-            return binaryId;
-
-        } catch (ApiException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFromOptions(
-            Program program
-    ) {
+    private Optional<TypedApiInterface.AnalysisID> getAnalysisIDFor(Program program) {
         long bid = program.getOptions(
                 ReaiPluginPackage.REAI_OPTIONS_CATEGORY).getLong(OPTION_KEY_ANALYSIS_ID,
                 ReaiPluginPackage.INVALID_ANALYSIS_ID);
@@ -240,36 +189,6 @@ public class GhidraRevengService {
             return Optional.empty();
         }
         return Optional.of(new TypedApiInterface.AnalysisID((int) bid));
-    }
-
-    @Deprecated
-    private Optional<BinaryID> getBinaryIDfromOptions(
-            Program program
-    ) {
-        long bid = program.getOptions(
-                ReaiPluginPackage.REAI_OPTIONS_CATEGORY).getLong(ReaiPluginPackage.OPTION_KEY_BINID,
-                ReaiPluginPackage.INVALID_BINARY_ID);
-        if (bid == ReaiPluginPackage.INVALID_BINARY_ID) {
-            return Optional.empty();
-        }
-        var binID = new BinaryID((int) bid);
-        // Check that it's really valid in the context of the currently configured API
-        AnalysisStatus status;
-        try {
-            status = api.status(binID);
-        } catch (APIAuthenticationException | ApiException e) {
-            Msg.error(this,
-                    ("The Binary ID %s stored in the program options is invalid for the currently configured RevEng.AI server %s. "
-                            + "This could be an intermittent error, or you switched servers")
-                            .formatted(binID, this.apiInfo.hostURI()), e);
-            return Optional.empty();
-        }
-        var analysisID = api.getAnalysisIDfromBinaryID(binID);
-        statusCache.put(analysisID, status);
-
-        // Now it's certain that it is a valid binary ID
-
-        return Optional.of(binID);
     }
 
     /// Loads the function info into a dedicated user property map.
@@ -874,7 +793,7 @@ public class GhidraRevengService {
     }
 
     @Deprecated
-    public List<LegacyAnalysisResult> searchForHash(TypedApiInterface.BinaryHash hash){
+    public List<AnalysisRecordBody> searchForHash(TypedApiInterface.BinaryHash hash){
         return api.search(hash);
     }
 
@@ -892,8 +811,6 @@ public class GhidraRevengService {
             revengTag.delete();
         }
         var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
-        //noinspection deprecation
-        reaiOptions.setLong(ReaiPluginPackage.OPTION_KEY_BINID, ReaiPluginPackage.INVALID_BINARY_ID);
         reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
         // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
         // because this method should still work even if the analysis ID or binary ID that was associated is invalid
@@ -952,7 +869,6 @@ public class GhidraRevengService {
             var hash = api.upload(filePath);
             if (hash.equals(hashOfProgram(program))){
                 // TODO: Save the information that this program has been uploaded
-//                program.getOptions(REAI_OPTIONS_CATEGORY).setBoolean(ReaiPluginPackage.OPTION_KEY_BINID, hash.value());
                 return hash;
             } else {
                 // This means the file on disk has
@@ -969,15 +885,6 @@ public class GhidraRevengService {
         try {
             return api.upload(path);
         } catch (FileNotFoundException | ApiException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Deprecated
-    public AnalysisStatus pollStatus(BinaryID bid) {
-        try {
-            return api.status(bid);
-        } catch (ApiException e) {
             throw new RuntimeException(e);
         }
     }
@@ -1096,19 +1003,6 @@ public class GhidraRevengService {
         return api.getAnalysisLogs(analysisID);
     }
 
-    /**
-     * Get the "name score" confidence of a match via the new API.
-     * The old kind of confidence is now called similarity
-     *
-     * @param functionMatch the match to get the confidence for
-     * @return the confidence of the match
-     */
-    public BoxPlot getNameScoreForMatch(GhidraFunctionMatch functionMatch) {
-        var functionNameScore = api.getNameScore(functionMatch.functionMatch());
-        return functionNameScore.score();
-
-    }
-
     public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
         var details = api.getFunctionDetails(functionID);
         openFunctionInPortal(details.analysisId(), functionID);
@@ -1188,9 +1082,7 @@ public class GhidraRevengService {
                 if (logger != null) {
                     logger.consumeLogs(logs, programWithID);
                 }
-                var logsLines = logs.lines().toList();
-                var lastLine = logsLines.get(logsLines.size() - 1);
-                monitor.setMessage(lastLine);
+                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
             }
             if (currentStatus != lastStatus) {
                 lastStatus = currentStatus;
@@ -1216,17 +1108,6 @@ public class GhidraRevengService {
         var analysisID = api.analyse(analysisOptionsBuilder);
 
         return addAnalysisIDtoProgramOptions(program, analysisID);
-    }
-
-    public Map<GhidraFunctionMatch, BoxPlot> getNameScores(java.util.Collection<GhidraFunctionMatch> values) {
-        // Get the confidence scores for each match in the input
-        List<FunctionNameScore> r =  api.getNameScores(values.stream().map(GhidraFunctionMatch::functionMatch).toList(), false);
-        // Collect to a Map from the FunctionID to the actual score
-        Map<TypedApiInterface.FunctionID, BoxPlot> plots = r.stream().collect(Collectors.toMap(FunctionNameScore::functionID, FunctionNameScore::score));
-        return values.stream().collect(Collectors.toMap(
-                match -> match,
-                match -> plots.get(match.functionMatch().origin_function_id())
-        ));
     }
 
     /**

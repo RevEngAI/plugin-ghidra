@@ -6,8 +6,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
-import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
+import ai.reveng.model.AnalysisRecordBody;
 import docking.DockingWindowManager;
 import ghidra.program.database.ProgramBuilder;
 import org.junit.Test;
@@ -68,7 +67,7 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         var tableModelField = getInstanceField("recentAnalysesTableModel", foundDialog);
         assertNotNull("Table model should exist in dialog", tableModelField);
         @SuppressWarnings("unchecked")
-        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<LegacyAnalysisResult, ?>) tableModelField;
+        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<AnalysisRecordBody, ?>) tableModelField;
 
         // Wait for the threaded table model to finish loading
         waitForTableModel(tableModel);
@@ -156,28 +155,21 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         static final int MOCK_BINARY_ID = 88888;
 
         @Override
-        public List<LegacyAnalysisResult> search(TypedApiInterface.BinaryHash hash) {
+        public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
             // Return a single recent analysis result
             return List.of(
-                new LegacyAnalysisResult(
-                    new TypedApiInterface.AnalysisID(MOCK_ANALYSIS_ID),
-                    new BinaryID(MOCK_BINARY_ID),
-                    "test_binary",
-                    "2024-01-15 10:00:00",
-                    1,
-                    "binnet-0.2-x86-linux",
-                    hash,
-                    AnalysisStatus.Complete,
-                    0x0L,  // Default image base for x64 programs
-                    "abc123hash"
-                )
+                new AnalysisRecordBody()
+                    .analysisId((long) MOCK_ANALYSIS_ID)
+                    .binaryId((long) MOCK_BINARY_ID)
+                    .binaryName("test_binary")
+                    .creation(java.time.OffsetDateTime.parse("2024-01-15T10:00:00Z"))
+                    .modelId(1L)
+                    .modelName("binnet-0.2-x86-linux")
+                    .sha256Hash(hash.sha256())
+                    .status(AnalysisStatus.Complete.name())
+                    .baseAddress(0x0L)  // Default image base for x64 programs
+                    .functionBoundariesHash("abc123hash")
             );
-        }
-
-        @Override
-        public TypedApiInterface.AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-            assertEquals("Binary ID should match mock data", MOCK_BINARY_ID, binaryID.value());
-            return new TypedApiInterface.AnalysisID(MOCK_ANALYSIS_ID);
         }
 
         @Override

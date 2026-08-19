@@ -56,21 +56,9 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
     }
 
+    /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
     @Deprecated
-    default List<FunctionInfo> getFunctionInfo(BinaryID binID) throws ApiException {
-        return getFunctionInfo(getAnalysisIDfromBinaryID(binID));
-    }
-
-    @Deprecated
-    default AnalysisStatus status(BinaryID binID) throws ApiException {
-        throw new UnsupportedOperationException("status not implemented yet");
-    };
-
-    /**
-     * https://docs.reveng.ai/#/Utility/get_search
-     */
-    @Deprecated
-    default List<LegacyAnalysisResult> search(BinaryHash hash) {
+    default List<AnalysisRecordBody> search(BinaryHash hash) {
         throw new UnsupportedOperationException("search not implemented yet");
     }
 
@@ -102,11 +90,6 @@ public interface TypedApiInterface {
     /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
     default List<FunctionSignatureVersion> getFunctionSignatureHistory(AnalysisID analysisID, FunctionID functionID) {
         throw new UnsupportedOperationException("getFunctionSignatureHistory not implemented yet");
-    }
-
-    @Deprecated
-    default AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-        throw new UnsupportedOperationException("getAnalysisIDfromBinaryID not implemented yet");
     }
 
     default AnalysisResult getInfoForAnalysis(AnalysisID id) {
@@ -201,13 +184,6 @@ public interface TypedApiInterface {
     }
 
     void renameFunction(FunctionID id, String newName, String newNameMangled);
-
-    default FunctionNameScore getNameScore(FunctionMatch match) {
-        throw new UnsupportedOperationException("getNameScore not implemented yet");
-    }
-    default List<FunctionNameScore> getNameScores(List<FunctionMatch> matches, Boolean isDebug) {
-        throw new UnsupportedOperationException("getNameScores not implemented yet");
-    }
 
     default FunctionDetails getFunctionDetails(FunctionID id) {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");

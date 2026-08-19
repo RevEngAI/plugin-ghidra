@@ -2,7 +2,6 @@ package ai.reveng.toolkit.ghidra.core;
 
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
-import ai.reveng.toolkit.ghidra.core.services.api.types.BinaryID;
 import ghidra.framework.plugintool.PluginEvent;
 import ghidra.program.model.listing.Program;
 

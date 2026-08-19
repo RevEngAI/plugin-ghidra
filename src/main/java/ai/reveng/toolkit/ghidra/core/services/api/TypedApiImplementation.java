@@ -8,31 +8,20 @@ import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataTypeReader;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.InvalidAPIInfoException;
 import ghidra.framework.Application;
 import ghidra.framework.Platform;
 import ghidra.util.Msg;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import resources.ResourceManager;
 
 import javax.annotation.Nullable;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import ai.reveng.invoker.Configuration;
 import ai.reveng.invoker.JSON;
@@ -44,19 +33,18 @@ import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.invoker.ApiException;
 
 import static ai.reveng.toolkit.ghidra.core.services.api.LoggingInterceptor.*;
-import static ai.reveng.toolkit.ghidra.core.services.api.Utils.mapJSONArray;
-import static java.net.http.HttpClient.Version.HTTP_1_1;
 
-/// The main implementation of the RevEng HTTP API
-/// It partially relies on the old manual implementation, but should be migrated to the OpenAPI generated client over time
+/// The main implementation of the RevEng HTTP API, on top of the generated SDK client
 /// Design notes:
 /// - every method should correspond to a single API endpoint
 /// - every method should simply execute the request and return the response
 ///      - i.e. no smart checks relying on other API calls to check if e.g. a binary has already been uploaded
 public class TypedApiImplementation implements TypedApiInterface {
-    private final HttpClient httpClient;
-    private final String baseUrl;
-    Map<String, String> headers;
+    /// /v3/analyses caps page_size at 50 and pages forward with an opaque token.
+    private static final long ANALYSIS_LIST_PAGE_SIZE = 50;
+
+    /// Omitting analysis_scope makes the server default to PRIVATE only.
+    private static final List<String> ALL_ANALYSIS_SCOPES = List.of("PRIVATE", "TEAM", "PUBLIC");
 
     private final AnalysesCoreApi analysisCoreApi;
     private final ConfigApi configApi;
@@ -67,10 +55,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
     private final DataTypesApi dataTypesApi;
     private final IamUsersApi iamUsersApi;
-
-    // Cache for binary ID to analysis ID mappings
-    @Deprecated
-    private final Map<BinaryID, AnalysisID> binaryToAnalysisCache = new HashMap<>();
 
     private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
@@ -116,19 +100,6 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.dataTypesApi = new DataTypesApi(apiClient);
         this.configApi = new ConfigApi(apiClient);
         this.iamUsersApi = new IamUsersApi(apiClient);
-
-        this.baseUrl = baseUrl + "/";
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .version(HTTP_1_1) // by default the client would attempt HTTP2.0 which leads to weird issues
-                .build();
-        headers = new HashMap<>();
-        headers.put("Authorization", apiKey);
-        headers.put("User-Agent", userAgent);
-        headers.put("X-RevEng-Application", userAgent);
-
-        // TODO: Actually implement support for some encodings and then accept them
-//        headers.put("Accept-Encoding", "gzip, deflate, br");
     }
 
 
@@ -147,67 +118,33 @@ public class TypedApiImplementation implements TypedApiInterface {
         return new BinaryHash(result.getData().getSha256Hash());
     }
 
-    /*
-    Allows you to search for specific analyses and collections.
-    The query parameter follows a non standard formatting using key-pair comma seperated values.
-    he base query is formatted as follows: /search?search=sha_256_hash:<hash>,binary_name:<binary_name>,tags=<tag>,collection_name:<collection_name>.
-    Not all parameters are required, for example /search?search=sha_256_hash:<hash> only searches for binaries and collection with hashes like <hash>.
-
-     */
+    /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
+    ///
+    /// All three analysis scopes are requested explicitly because the endpoint narrows to PRIVATE
+    /// when the parameter is absent.
     @Deprecated
-    public List<LegacyAnalysisResult> search(BinaryHash hash) {
-        Map<String, String> params = new HashMap<>();
-        params.put("sha256_hash", hash.sha256());
-
-        JSONObject json = sendRequest(
-                requestBuilderForEndpoint("analyses", "list",  queryParams(params))
-                        .GET()
-                        .header("Content-Type", "application/json" )
-                        .build());
-
-        return mapJSONArray(json.getJSONObject("data").getJSONArray("results"), LegacyAnalysisResult::fromJSONObject);
-    }
-
-    private V2Response sendVersion2Request(HttpRequest request){
-        return V2Response.fromJSONObject(sendRequest(request));
-    }
-
-    private JSONObject sendRequest(HttpRequest request) throws APIAuthenticationException {
-        Msg.info(this, "Sending request to: " + request.uri());
-        HttpResponse<String> response = null;
-
-        var retryAttempts = 3;
-        while (response == null && retryAttempts > 0) {
-            try {
-                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            } catch (HttpTimeoutException timeout) {
-                // Sometimes the API hangs, and works again shortly after, so we just try again
-                Msg.info(this, "Timed out waiting for response from: " + request.uri());
-                Msg.info(this, "Trying again: " + request.uri());
-                retryAttempts--;
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+    public List<AnalysisRecordBody> search(BinaryHash hash) {
+        List<AnalysisRecordBody> results = new ArrayList<>();
+        String pageToken = null;
+        try {
+            while (true) {
+                ListAnalysesOutputBody page = analysisCoreApi.v3ListAnalyses(
+                        null, ALL_ANALYSIS_SCOPES, null, null, null, hash.sha256(),
+                        ANALYSIS_LIST_PAGE_SIZE, pageToken, null, null);
+                var records = page.getResults();
+                if (records == null || records.isEmpty()) {
+                    break;
+                }
+                results.addAll(records);
+                pageToken = page.getNextPageToken();
+                if (pageToken == null || pageToken.isBlank()) {
+                    break;
+                }
             }
+        } catch (ApiException e) {
+            throw new RuntimeException(describeApiException(e), e);
         }
-
-        switch (response.statusCode()){
-            case 200:
-            case 201:
-                Msg.info(this, "Request to %s succeeded with status code: %s".formatted(request.uri(), response.statusCode()));
-                return new JSONObject(response.body());
-            case 404:
-                return new JSONObject(response.body());
-            case 401:
-                throw new APIAuthenticationException(response.body());
-            case 409:
-                throw new APIConflictException(response.body());
-            default:
-                var errorMsg = "Request to %s failed with status code: %s and message: %s".formatted(request.uri(), response.statusCode(), response.body());
-                Msg.showError(this, null, "Request failed with status code: " + response.statusCode(), errorMsg);
-                throw new RuntimeException(errorMsg);
-        }
+        return results;
     }
 
     @Override
@@ -215,16 +152,6 @@ public class TypedApiImplementation implements TypedApiInterface {
         var analysisRequest = options.toAnalysisCreateRequest();
         var result = this.analysisCoreApi.createAnalysis(analysisRequest, null);
         return new AnalysisID(result.getData().getAnalysisId());
-    }
-
-    @Deprecated
-    @Override
-    public AnalysisStatus status(BinaryID binaryID) throws ApiException {
-        var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
-
-        var status = this.analysisCoreApi.getAnalysisStatus(analysisID.id());
-
-        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
     }
 
     @Override
@@ -279,65 +206,41 @@ public class TypedApiImplementation implements TypedApiInterface {
         return functions;
     }
 
-    private String queryParams(Map<String, String> params){
-        return "?" + params.entrySet().stream()
-                .filter(e -> e.getValue() != null)
-                .map(e -> e.getKey() + "=" + e.getValue())
-                .reduce((a, b) -> a + "&" + b)
-                .orElse("");
-    }
+    /// GET /v3/analyses/{analysis_id}/logs
+    ///
+    /// v3 answers with structured entries where v2 answered with one preformatted blob, so the lines
+    /// are rendered here into the single string the log view and the progress monitor consume.
     @Override
     public String getAnalysisLogs(AnalysisID analysisID) {
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(analysisID.id()), "logs")
-                .build();
-        JSONObject response = sendVersion2Request(request).getJsonData();
-        return response.getString("logs");
-    }
-
-    private HttpRequest.Builder requestBuilderForEndpoint(String... endpointPaths){
-        URI uri;
-        String apiVersionPath = "v2";
-        String endpoint = String.join("/", endpointPaths).replace("/?", "?").replace("?/", "?");
-
+        List<AnalysisLogEntry> entries;
         try {
-            uri = new URI(baseUrl + apiVersionPath + "/" + endpoint);
-        } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            entries = analysisCoreApi.v3GetAnalysisLogs((long) analysisID.id()).getEntries();
+        } catch (ApiException e) {
+            throw new RuntimeException(describeApiException(e), e);
         }
-        var requestBuilder = HttpRequest.newBuilder(uri);
-        headers.forEach(requestBuilder::header);
-        requestBuilder.timeout(Duration.ofSeconds(20));
-        return requestBuilder;
+        if (entries == null || entries.isEmpty()) {
+            return "";
+        }
+        return entries.stream()
+                .map(TypedApiImplementation::renderLogEntry)
+                .collect(Collectors.joining("\n"));
     }
 
-    /**
-     * <a href="https://api.reveng.ai/v2/docs#tag/Analysis-Management/operation/get_analysis_id_v2_analyses_lookup__binary_id__get">...</a>
-     *
-     * The mapping never changes so we can cache it to avoid repeated requests.
-     *
-     * @param binaryID the binary id to look up
-     * @return the analysis id
-     */
-    @Override
-    @Deprecated
-    public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID){
-        // Check cache first
-        AnalysisID cachedResult = binaryToAnalysisCache.get(binaryID);
-        if (cachedResult != null) {
-            return cachedResult;
+    private static String renderLogEntry(AnalysisLogEntry entry) {
+        StringBuilder line = new StringBuilder();
+        if (entry.getTimestamp() != null) {
+            line.append(entry.getTimestamp()).append(' ');
         }
-
-        // If not in cache, make HTTP request
-        JSONObject response = sendRequest(requestBuilderForEndpoint("analyses/lookup/" + binaryID.value())
-                .GET()
-                .build());
-
-        AnalysisID analysisID = new AnalysisID(response.getInt("analysis_id"));
-
-        // Cache the result
-        binaryToAnalysisCache.put(binaryID, analysisID);
-
-        return analysisID;
+        if (entry.getLevel() != null) {
+            line.append(entry.getLevel().getValue()).append(' ');
+        }
+        if (entry.getSource() != null && !entry.getSource().isBlank()) {
+            line.append('[').append(entry.getSource()).append("] ");
+        }
+        if (entry.getText() != null) {
+            line.append(entry.getText());
+        }
+        return line.toString();
     }
 
     /// GET /v3/functions/signatures
@@ -634,36 +537,6 @@ public class TypedApiImplementation implements TypedApiInterface {
             throw new RuntimeException("Server did not rename function " + id.value() + " to " + newName
                     + " (renamed_count: " + renamedCount + ")");
         }
-    }
-
-    @Override
-    public FunctionNameScore getNameScore(FunctionMatch match) {
-        return getNameScores(List.of(match), false).get(0);
-    }
-
-    /**
-     * https://api.reveng.ai/v2/docs#tag/Confidence-Scores/operation/function_threat_score_v2_confidence_functions_threat_score_post
-     */
-    @Override
-    public List<FunctionNameScore> getNameScores(List<FunctionMatch> matches, Boolean isDebug) {
-        JSONObject params = new JSONObject();
-        params.put("is_debug", isDebug);
-        var functions = new ArrayList<JSONObject>();
-        for (var match : matches){
-            functions.add(new JSONObject()
-                    // The id of the original function that matches were searched for
-                    .put("function_id", match.origin_function_id().value())
-                    // The name of the nearest neighbor function for which we want the score
-                    .put("function_name_mangled", match.nearest_neighbor_function_name()));
-        }
-        params.put("functions", functions);
-
-        HttpRequest request = requestBuilderForEndpoint("confidence", "functions", "name_score")
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-        JSONArray responseData = (JSONArray) sendVersion2Request(request).data();
-        return mapJSONArray(responseData, FunctionNameScore::fromJSONObject);
     }
 
     @Override

@@ -1,12 +1,13 @@
 package ai.reveng.toolkit.ghidra.core.services.api.mocks;
 
+import ai.reveng.model.AnalysisRecordBody;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
 import org.json.JSONObject;
 
 import java.io.FileNotFoundException;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,27 +20,21 @@ public class MockApi implements TypedApiInterface {
 
     @Override
     @Deprecated
-    public List<LegacyAnalysisResult> search(BinaryHash hash) {
+    public List<AnalysisRecordBody> search(BinaryHash hash) {
         if (hash.equals(new BinaryHash("b04c1259718dd16c0ffbd0931aeecf07746775cc2f1cda76e46d51af165f3ba6"))) {
-            return List.of(new LegacyAnalysisResult(
-                    new AnalysisID(1234),
-                    new BinaryID(17920),
-                    "true",
-                    "no creation date",
-                    1,
-                    "model name",
-                    hash,
-                    AnalysisStatus.Complete,
-                    123456,
-                    "b48f61e85bcbc7866d78a8f0b72acd8c0c177ebd15cea466d1edb67409fca269"
-            ));
+            return List.of(new AnalysisRecordBody()
+                    .analysisId(1234L)
+                    .binaryId(17920L)
+                    .binaryName("true")
+                    .creation(OffsetDateTime.parse("2024-04-19T08:57:18Z"))
+                    .modelId(1L)
+                    .modelName("model name")
+                    .sha256Hash(hash.sha256())
+                    .status(AnalysisStatus.Complete.name())
+                    .baseAddress(123456L)
+                    .functionBoundariesHash("b48f61e85bcbc7866d78a8f0b72acd8c0c177ebd15cea466d1edb67409fca269"));
         }
         return List.of();
-    }
-
-    @Override
-    public AnalysisStatus status(BinaryID binID) {
-        return AnalysisStatus.Complete;
     }
 
     @Override

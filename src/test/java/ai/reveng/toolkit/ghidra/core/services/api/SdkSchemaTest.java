@@ -36,7 +36,8 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
                 "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
-                "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
+                "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches",
+                "v3GetAnalysisLogs", "v3ListAnalyses"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
                 "listAnalysisFunctions",
@@ -143,6 +144,19 @@ public class SdkSchemaTest {
 
         requireMethods(missing, "ai.reveng.model.AnalysisBasicInfoOutputBody",
                 "getBinaryName", "getSha256Hash", "getModelName");
+
+        // The v3 analysis log. Every entry field is rendered into the log view's single string.
+        requireMethods(missing, "ai.reveng.model.GetAnalysisLogsOutputBody", "getEntries");
+        requireMethods(missing, "ai.reveng.model.AnalysisLogEntry",
+                "getTimestamp", "getLevel", "getSource", "getText");
+
+        // The v3 analysis list. next_page_token drives paging; AnalysisRecordBody is the row type
+        // the Recent Analyses table is built on.
+        requireMethods(missing, "ai.reveng.model.ListAnalysesOutputBody",
+                "getResults", "getNextPageToken");
+        requireMethods(missing, "ai.reveng.model.AnalysisRecordBody",
+                "getAnalysisId", "getBinaryId", "getBinaryName", "getCreation", "getStatus",
+                "getBaseAddress");
 
         requireMethods(missing, "ai.reveng.model.FunctionDetailsOutputBody",
                 "getFunctionId", "getMangledName", "getFunctionVaddr", "getFunctionSize",
