@@ -132,8 +132,6 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                         0x4000L,
                         0x100L,
                         new AnalysisID(1),
-                        "binary_name",
-                        new BinaryHash("dummyhash"),
                         "portal_name_demangled"
                 );
             }

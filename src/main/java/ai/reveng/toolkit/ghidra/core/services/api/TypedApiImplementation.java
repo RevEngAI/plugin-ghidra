@@ -675,21 +675,13 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
     }
 
-    /**
-     * https://api.reveng.ai/redoc#tag/Functions-overview/operation/function_detail_v2_functions__function_id__get
-     * @param id
-     * @return
-     */
     @Override
     public FunctionDetails getFunctionDetails(FunctionID id) {
-        BaseResponseFunctionsDetailResponse dets = null;
         try {
-            dets = functionsCoreApi.getFunctionDetails((int) id.value());
+            return FunctionDetails.fromServerResponse(functionsCoreApi.getFunctionDetails_0(id.value()));
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
-        return FunctionDetails.fromServerResponse(dets.getData());
-
     }
 
     @Override

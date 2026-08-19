@@ -749,7 +749,6 @@ public class GhidraRevengService {
             }
 
             // Get the current name on  the server side
-//            FunctionDetails details = api.getFunctionDetails(fID.get().functionID);
             FunctionInfo details = functionInfoMap.get(fID.get().functionID);
 
             // Extract the mangled name from Ghidra
