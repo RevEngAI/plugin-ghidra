@@ -40,7 +40,9 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
-                "getFunctionBlocks", "getFunctionDetails"});
+                // The v3 blocks endpoint, which the generator names off the deprecated v2 one it
+                // collides with. Renaming it would silently drop the plugin back onto v2.
+                "getFunctionBlocks_0", "getFunctionDetails"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
                 "renameFunctionId", "batchRenameFunctions"});
         apis.put("ai.reveng.api.DataTypesApi", new String[]{
@@ -128,6 +130,10 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.BatchRenameItem",
                 "setFunctionId", "setNewName", "setNewMangledName");
         requireMethods(missing, "ai.reveng.model.FunctionRename", "getNewName", "getNewMangledName");
+
+        // The v3 blocks body. Only the untyped basic_blocks value is read, by DisassemblyBlocksReader;
+        // the spec gives it no schema, so this pins the one accessor that carries the disassembly.
+        requireMethods(missing, "ai.reveng.model.DisassemblyOutputBody", "getBasicBlocks");
 
         // Resolving a double-clicked identifier back to the token to override reads the tokenised
         // source and both name maps, which arrive unmerged.

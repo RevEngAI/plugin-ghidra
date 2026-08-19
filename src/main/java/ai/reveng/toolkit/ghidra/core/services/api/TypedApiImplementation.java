@@ -787,23 +787,21 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsRenamingHistoryApi.batchRenameFunctions(request);
     }
 
+    /// GET /v3/functions/{function_id}/blocks
+    ///
+    /// Returns the function's assembly in address order, or an empty list when the function carries
+    /// no stored disassembly: v3 reports that as a 200 whose block fields are simply absent, where
+    /// the deprecated v2 endpoint answered 404. A 404 from v3 means the function itself could not be
+    /// reached, and a 409 that the analysis is not ready yet; both stay on the {@link ApiException}
+    /// so the caller can tell them apart by status code.
     @Override
     public List<String> getAssembly(FunctionID id) {
-
-        FunctionBlocksResponse blocks;
-        List<String> result =  new ArrayList<>();
         try {
-            blocks = this.functionsCoreApi.getFunctionBlocks(id.asInteger()).getData();
+            DisassemblyOutputBody disassembly = this.functionsCoreApi.getFunctionBlocks_0(id.value());
+            return DisassemblyBlocksReader.readAssembly(disassembly.getBasicBlocks());
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
-        blocks.getBlocks().stream()
-                .sorted( (b1, b2) -> b1.getMinAddr().compareTo(b2.getMinAddr()) )
-                .forEach(block -> {
-                    result.addAll(block.getAsm());
-                });
-
-        return result;
     }
 
     @Override

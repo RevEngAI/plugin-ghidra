@@ -289,6 +289,10 @@ public class AssemblyDiffPanel extends JPanel {
                 localError = assemblyErrorMessage(e);
                 Msg.error(this, "Failed to fetch local function assembly", e);
             }
+            if (localAssembly != null && localAssembly.isEmpty()) {
+                localAssembly = null;
+                localError = NO_DISASSEMBLY;
+            }
 
             // Fetch matched function assembly
             try {
@@ -296,6 +300,10 @@ public class AssemblyDiffPanel extends JPanel {
             } catch (Exception e) {
                 matchedError = assemblyErrorMessage(e);
                 Msg.error(this, "Failed to fetch matched function assembly", e);
+            }
+            if (matchedAssembly != null && matchedAssembly.isEmpty()) {
+                matchedAssembly = null;
+                matchedError = NO_DISASSEMBLY;
             }
 
             // Compute diff if both assemblies were fetched successfully
@@ -322,12 +330,20 @@ public class AssemblyDiffPanel extends JPanel {
         }
     }
 
-    /// A 404 here just means the function has no stored disassembly (common for symbol-only matches),
-    /// so surface a short note rather than the raw API error; the full error is still logged.
+    /// Shown when the function has no stored disassembly, which is common for symbol-only matches.
+    /// The v3 blocks endpoint reports that as a 200 carrying no blocks — hence the empty-assembly
+    /// check above — but a 404 still lands here when the function itself cannot be reached.
+    private static final String NO_DISASSEMBLY = "Disassembly is not available for this function.";
+
+    /// Surface a short note rather than the raw API error for the two outcomes that are not really
+    /// failures; the full error is still logged.
     private static String assemblyErrorMessage(Exception e) {
         Throwable cause = (e.getCause() != null) ? e.getCause() : e;
         if (cause instanceof ApiException ae && ae.getCode() == 404) {
-            return "Disassembly is not available for this function.";
+            return NO_DISASSEMBLY;
+        }
+        if (cause instanceof ApiException ae && ae.getCode() == 409) {
+            return "Disassembly is not ready yet; the analysis is still processing.";
         }
         return "Failed to fetch disassembly: " + cause.getMessage();
     }
