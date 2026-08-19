@@ -94,7 +94,7 @@ When you load the plugin for the first time, or by selecting `RevEng.AI -> Confi
 You are now ready to analyse a binary.
 
 Import `src/test/resources/fdupes` into Ghidra and then create a new RevEng analysis, by going to `RevEng.AI -> Analysis -> Create New`.
-Usually it's enough to use the default options, but you can also select specific platforms or architectures if you want to.
+Usually it's enough to use the default options, but you can also select a specific architecture if you want to.
 
 ![Upload Dialog](screenshots/upload-dialog-v2.png)
 

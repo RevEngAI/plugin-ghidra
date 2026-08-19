@@ -34,16 +34,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider {
-    private JCheckBox advancedAnalysisCheckBox;
-    private JCheckBox dynamicExecutionCheckBox;
     private final Program program;
     private final GhidraRevengService service;
     private JRadioButton privateScope;
     private JRadioButton publicScope;
     private JPanel privateScopePanel;
     private JTextField tagsTextBox;
-    private JCheckBox scrapeExternalTagsBox;
-    private JCheckBox identifyCapabilitiesCheckBox;
     private JComboBox<String> architectureComboBox;
     private boolean okPressed = false;
 
@@ -90,19 +86,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         fileSizeWarningLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         workPanel.add(fileSizeWarningLabel);
 
-        // Add Platform Drop Down
-        var platformComboBox = new JComboBox<>(new String[]{
-                "Auto", "windows", "linux",
-        });
-        platformComboBox.setEditable(false);
-        // Center the text
-        platformComboBox.setAlignmentX(Component.CENTER_ALIGNMENT);
-        platformComboBox.setMaximumSize(platformComboBox.getPreferredSize());
-        var platformLabel = new JLabel("Select Platform");
-        platformLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        workPanel.add(platformLabel);
-        workPanel.add(platformComboBox);
-
         // Add Drop down for AnalysisScope
         // Currently just public and private, but in the future this will include teams
         var scopePanel = new JPanel();
@@ -146,30 +129,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         workPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
 
-        // Add Two Check boxes for Dynamic Execution and Advanced Analysis next to each other (horizantally)
-        var checkBoxPanel = new JPanel();
-        checkBoxPanel.setLayout(new GridLayout(0, 2));
-        dynamicExecutionCheckBox = new JCheckBox("Dynamic Execution");
-        dynamicExecutionCheckBox.setToolTipText("Include Dynamic Execution inside a Sandbox Environment with the Analysis");
-
-        advancedAnalysisCheckBox = new JCheckBox("Advanced Analysis");
-        advancedAnalysisCheckBox.setToolTipText("Run dataflow analysis for advanced analysis. Can increase analysis cost by 500%");
-
-
-        // Add a check box for quick mode
-        scrapeExternalTagsBox = new JCheckBox("Get External Tags");
-        scrapeExternalTagsBox.setToolTipText("Scrape external tags from VirusTotal (requires configured API key)");
-
-        // Add check box for identifiying capabilities
-        identifyCapabilitiesCheckBox = new JCheckBox("Identify Capabilities");
-        identifyCapabilitiesCheckBox.setToolTipText("Identify capabilities of the binary");
-
-//        checkBoxPanel.add(dynamicExecutionCheckBox);
-//        checkBoxPanel.add(advancedAnalysisCheckBox);
-//        checkBoxPanel.add(scrapeExternalTagsBox);
-//        checkBoxPanel.add(identifyCapabilitiesCheckBox);
-//        workPanel.add(checkBoxPanel);
-
         // Add custom tags field
         tagsTextBox = new JTextField();
         tagsTextBox.setToolTipText("Custom tags for the analysis, as comma separated list");
@@ -210,11 +169,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         var options = AnalysisOptionsBuilder.forProgram(program,
                 function -> includedEntryPoints.contains(function.getEntryPoint()));
 
-        options.skipScraping(!scrapeExternalTagsBox.isSelected());
-        options.skipCapabilities(!identifyCapabilitiesCheckBox.isSelected());
-
-        options.advancedAnalysis(advancedAnalysisCheckBox.isSelected());
-        options.dynamicExecution(dynamicExecutionCheckBox.isSelected());
+        // Capability generation and advanced analysis are not offered by this dialog and are
+        // always off for analyses the plugin creates.
+        options.skipCapabilities(true);
+        options.advancedAnalysis(false);
 
         if (privateScope.isSelected() && privateScope.isEnabled()) {
             options.scope(AnalysisScope.PRIVATE);

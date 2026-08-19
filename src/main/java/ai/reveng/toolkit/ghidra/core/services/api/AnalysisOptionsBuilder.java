@@ -20,7 +20,6 @@ public class AnalysisOptionsBuilder {
     // Package-private constructor for testing
     AnalysisOptionsBuilder() {
         options = new JSONObject();
-        options.put("size_in_bytes", 0);
         options.put("tags", new JSONArray());
     }
 
@@ -51,15 +50,6 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
-    public AnalysisOptionsBuilder size(long size) {
-        options.put("size_in_bytes", size);
-        return this;
-    }
-
-    public long getSize() {
-        return options.optLong("size_in_bytes", 0);
-    }
-
     public AnalysisOptionsBuilder scope(AnalysisScope scope){
         options.put("binary_scope", scope.scope);
         return this;
@@ -84,16 +74,6 @@ public class AnalysisOptionsBuilder {
                         program.getImageBase().getOffset(),
                         GhidraRevengService.exportFunctionBoundaries(program, includePredicate)
                 );
-    }
-
-    public AnalysisOptionsBuilder skipScraping(boolean b) {
-        options.put("skip_scraping", b);
-        return this;
-    }
-
-    public AnalysisOptionsBuilder dynamicExecution(boolean b) {
-        options.put("dynamic_execution", b);
-        return this;
     }
 
     public AnalysisOptionsBuilder skipCapabilities(boolean b) {
