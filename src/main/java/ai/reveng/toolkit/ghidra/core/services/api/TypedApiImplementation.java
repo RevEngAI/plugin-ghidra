@@ -59,7 +59,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     Map<String, String> headers;
 
     private final AnalysesCoreApi analysisCoreApi;
-    private final AnalysesResultsMetadataApi analysesResultsMetadataApi;
     private final ConfigApi configApi;
     private final SearchApi searchApi;
     private final CollectionsApi collectionsApi;
@@ -110,7 +109,6 @@ public class TypedApiImplementation implements TypedApiInterface {
         APIKey.setApiKey(apiKey);
 
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
-        this.analysesResultsMetadataApi = new AnalysesResultsMetadataApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
         this.collectionsApi = new CollectionsApi(apiClient);
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
@@ -236,36 +234,47 @@ public class TypedApiImplementation implements TypedApiInterface {
         return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
     }
 
+    /**
+     * The endpoint is paginated by offset and limit, and reports the unpaginated population size as
+     * {@code total_count}, so paging walks the offset forward until that many entries have arrived.
+     * The offset advances by the number of entries actually returned rather than by the requested
+     * limit, so a server-side cap below {@code limit} neither skips nor repeats entries.
+     */
     @Override
     public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
-        // The server caps page_size at 1000, so paginate until every function is retrieved.
-        int pageSize = 1000;
+        long limit = 1000;
         List<FunctionInfo> functions = new ArrayList<>();
-        int page = 1;
+        long offset = 0;
         while (true) {
-            BaseResponseAnalysisFunctions response;
+            ListAnalysisFunctionsOutputBody response;
             try {
-                response = this.analysesResultsMetadataApi.getFunctionsList(
-                        analysisID.id(), null, null, null, false, page, pageSize);
+                response = this.functionsCoreApi.listAnalysisFunctions((long) analysisID.id(), offset, limit);
             } catch (ApiException e) {
                 throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
             }
 
-            response.getData().getFunctions().stream().map(f -> (
+            var page = response.getFunctions();
+            if (page == null || page.isEmpty()) {
+                break;
+            }
+
+            page.stream().map(f -> (
                     new FunctionInfo(
                             new FunctionID(f.getFunctionId()),
                             f.getFunctionName(),
-                            f.getFunctionMangledName(),
+                            // The mangled name is optional here; an unmangled symbol carries none,
+                            // and callers rely on this field being populated.
+                            f.getMangledName() != null ? f.getMangledName() : f.getFunctionName(),
                             f.getFunctionVaddr(),
-                            f.getFunctionSize()
+                            Math.toIntExact(f.getFunctionSize())
                     )
             )).forEach(functions::add);
 
-            var pagination = response.getMeta() != null ? response.getMeta().getPagination() : null;
-            if (pagination == null || !Boolean.TRUE.equals(pagination.getHasNextPage())) {
+            offset += page.size();
+            Long totalCount = response.getTotalCount();
+            if (totalCount == null || offset >= totalCount) {
                 break;
             }
-            page++;
         }
 
         return functions;

@@ -17,20 +17,23 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 /**
- * The v2 functions list endpoint caps page_size at 1000, so {@link TypedApiImplementation#getFunctionInfo}
- * must page through every result. This stubs the endpoint with a two-page response and checks that all
- * functions come back and that paging stops once the server reports no next page.
+ * The v3 functions list endpoint is paginated by offset and limit and reports the unpaginated
+ * population size as {@code total_count}, so {@link TypedApiImplementation#getFunctionInfo} must
+ * walk the offset forward until that many entries have arrived. These stubs serve a server that
+ * caps a page below the requested limit, which is also what forces the offset to advance by the
+ * number of entries actually returned.
  */
 public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegrationTest {
 
     private static final int ANALYSIS_ID = 123;
+    private static final int SERVER_PAGE_CAP = 2;
 
     private HttpServer server;
     private ApiClient originalApiClient;
     private final List<String> requestedQueries = new CopyOnWriteArrayList<>();
+    private volatile List<Long> allFunctionIds = List.of();
 
     @Before
     public void startStubServer() throws Exception {
@@ -40,13 +43,17 @@ public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegra
         Configuration.setDefaultApiClient(new ApiClient());
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/v2/analyses/" + ANALYSIS_ID + "/functions/list", exchange -> {
+        server.createContext("/v3/analyses/" + ANALYSIS_ID + "/functions", exchange -> {
             String query = exchange.getRequestURI().getQuery();
             requestedQueries.add(query);
-            int page = pageParam(query);
-            String body = page <= 1 ? pageResponse(List.of(10L, 11L), 1, true)
-                                    : pageResponse(List.of(12L), 2, false);
-            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            int offset = Math.toIntExact(longParam(query, "offset", 0));
+            int limit = Math.toIntExact(longParam(query, "limit", 100));
+
+            List<Long> ids = allFunctionIds;
+            int from = Math.min(offset, ids.size());
+            int to = Math.min(from + Math.min(limit, SERVER_PAGE_CAP), ids.size());
+            byte[] bytes = pageResponse(ids.subList(from, to), ids.size()).getBytes(StandardCharsets.UTF_8);
+
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
@@ -66,49 +73,98 @@ public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegra
         }
     }
 
+    /** A trailing partial page: the last request comes back short of the server's own cap. */
     @Test
     public void getFunctionInfo_walksEveryPage() {
-        var api = new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
+        allFunctionIds = List.of(10L, 11L, 12L);
 
-        List<FunctionInfo> functions = api.getFunctionInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+        List<FunctionInfo> functions = fetch();
 
-        List<Long> ids = functions.stream().map(f -> f.functionID().value()).collect(Collectors.toList());
-        assertEquals("both pages should be combined", List.of(10L, 11L, 12L), ids);
-
-        assertEquals("should stop after the page with has_next_page=false", 2, requestedQueries.size());
-        assertTrue("first request should ask for page 1", requestedQueries.get(0).contains("page=1"));
-        assertTrue("second request should ask for page 2", requestedQueries.get(1).contains("page=2"));
-        assertTrue("should request the server's max page size", requestedQueries.get(0).contains("page_size=1000"));
+        assertEquals("every page should be combined, in order",
+                List.of(10L, 11L, 12L), idsOf(functions));
+        assertEquals("offset should advance by the entries actually returned",
+                List.of("offset=0&limit=1000", "offset=2&limit=1000"), requestedQueries);
     }
 
-    private static int pageParam(String query) {
+    /**
+     * A final page that exactly reaches total_count. Paging has to stop on the count rather than
+     * on a short page, otherwise it issues one more request than it needs.
+     */
+    @Test
+    public void getFunctionInfo_stopsOnceTotalCountIsReached() {
+        allFunctionIds = List.of(10L, 11L, 12L, 13L);
+
+        List<FunctionInfo> functions = fetch();
+
+        assertEquals("every page should be combined, in order",
+                List.of(10L, 11L, 12L, 13L), idsOf(functions));
+        assertEquals("a full final page should not trigger another request",
+                List.of("offset=0&limit=1000", "offset=2&limit=1000"), requestedQueries);
+    }
+
+    /** An analysis with no functions still answers 200, with an empty list and a zero count. */
+    @Test
+    public void getFunctionInfo_handlesAnEmptyAnalysis() {
+        allFunctionIds = List.of();
+
+        List<FunctionInfo> functions = fetch();
+
+        assertEquals(List.of(), idsOf(functions));
+        assertEquals("a single request is enough to learn the analysis is empty",
+                List.of("offset=0&limit=1000"), requestedQueries);
+    }
+
+    /** mangled_name is optional on the v3 entry; callers rely on the plugin type carrying one. */
+    @Test
+    public void getFunctionInfo_fallsBackToTheFunctionNameWhenUnmangled() {
+        allFunctionIds = List.of(10L, UNMANGLED_ID);
+
+        List<FunctionInfo> functions = fetch();
+
+        assertEquals(List.of("mangled_10", "func_" + UNMANGLED_ID),
+                functions.stream().map(FunctionInfo::functionMangledName).collect(Collectors.toList()));
+    }
+
+    private List<FunctionInfo> fetch() {
+        var api = new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
+        return api.getFunctionInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+    }
+
+    private static List<Long> idsOf(List<FunctionInfo> functions) {
+        return functions.stream().map(f -> f.functionID().value()).collect(Collectors.toList());
+    }
+
+    private static long longParam(String query, String name, long fallback) {
         if (query == null) {
-            return 1;
+            return fallback;
         }
         for (String pair : query.split("&")) {
             int eq = pair.indexOf('=');
-            if (eq > 0 && pair.substring(0, eq).equals("page")) {
-                return Integer.parseInt(pair.substring(eq + 1));
+            if (eq > 0 && pair.substring(0, eq).equals(name)) {
+                return Long.parseLong(pair.substring(eq + 1));
             }
         }
-        return 1;
+        return fallback;
     }
 
-    private static String pageResponse(List<Long> functionIds, int pageNumber, boolean hasNextPage) {
+    private static String pageResponse(List<Long> functionIds, int totalCount) {
         String functions = functionIds.stream()
                 .map(GetFunctionInfoPaginationTest::functionJson)
                 .collect(Collectors.joining(","));
         return """
-                {"status":true,"message":"ok","errors":[],\
-                "data":{"functions":[%s]},\
-                "meta":{"pagination":{"page_size":1000,"page_number":%d,"has_next_page":%b}}}\
-                """.formatted(functions, pageNumber, hasNextPage);
+                {"functions":[%s],"total_count":%d}\
+                """.formatted(functions, totalCount);
     }
 
+    /** The id whose entry the stub serves without a mangled_name. */
+    private static final long UNMANGLED_ID = 99L;
+
     private static String functionJson(long id) {
+        String mangledName = id == UNMANGLED_ID ? "" : "\"mangled_name\":\"mangled_%d\",".formatted(id);
         return """
-                {"function_id":%d,"function_name":"func_%d","function_mangled_name":"mangled_%d",\
-                "function_vaddr":%d,"function_size":32,"debug":false}\
-                """.formatted(id, id, id, 0x400000L + id);
+                {"function_id":%d,"function_name":"func_%d",%s\
+                "function_vaddr":%d,"function_size":32,"binary_id":7,"debug":false,\
+                "source_type":"analysis"}\
+                """.formatted(id, id, mangledName, 0x400000L + id);
     }
 }

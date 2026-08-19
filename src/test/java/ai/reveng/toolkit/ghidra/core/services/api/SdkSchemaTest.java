@@ -37,9 +37,9 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
                 "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
-        apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
+                "listAnalysisFunctions",
                 // v3 endpoints; the generator suffixes _0 where the deprecated v2 name collides.
                 "getFunctionBlocks_0", "getFunctionDetails_0"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{"batchRenameFunctions"});
@@ -132,6 +132,14 @@ public class SdkSchemaTest {
         // The v3 blocks body. Only the untyped basic_blocks value is read, by DisassemblyBlocksReader;
         // the spec gives it no schema, so this pins the one accessor that carries the disassembly.
         requireMethods(missing, "ai.reveng.model.DisassemblyOutputBody", "getBasicBlocks");
+
+        // The v3 function list. total_count drives paging termination, and the entry accessors are
+        // what FunctionInfo is built from.
+        requireMethods(missing, "ai.reveng.model.ListAnalysisFunctionsOutputBody",
+                "getFunctions", "getTotalCount");
+        requireMethods(missing, "ai.reveng.model.AnalysisFunctionEntry",
+                "getFunctionId", "getFunctionName", "getMangledName", "getFunctionVaddr",
+                "getFunctionSize");
 
         requireMethods(missing, "ai.reveng.model.FunctionDetailsOutputBody",
                 "getFunctionId", "getMangledName", "getFunctionVaddr", "getFunctionSize",
