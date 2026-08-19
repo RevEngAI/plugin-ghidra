@@ -604,22 +604,27 @@ public class TypedApiImplementation implements TypedApiInterface {
         return "HTTP " + e.getCode() + " — " + (e.getResponseBody() != null ? e.getResponseBody() : e.getMessage());
     }
 
-    /**
-     * https://api.reveng.ai/v2/docs#tag/Functions-overview/operation/rename_function_id_v2_functions_rename__function_id__post
-     *
-     * @param id
-     * @param newName
-     * @param newNameMangled
-     */
+    /// POST /v3/functions/rename, with a one-item body: v3 has no per-function rename route.
+    /// The endpoint answers 200 with the number of functions it renamed, so a count of zero is
+    /// raised rather than passed off to the caller as a successful rename.
     @Override
     public void renameFunction(FunctionID id, String newName, String newNameMangled) {
-        var fn = new FunctionRename();
-        fn.setNewName(newName);
-        fn.setNewMangledName(newNameMangled);
+        var item = new BatchRenameItem();
+        item.setFunctionId(id.value());
+        item.setNewName(newName);
+        item.setNewMangledName(newNameMangled);
+        var request = new BatchRenameInputBody();
+        request.setFunctions(List.of(item));
+        BatchRenameOutputBody response;
         try {
-            functionsRenamingHistoryApi.renameFunctionId((int) id.value(), fn);
+            response = functionsRenamingHistoryApi.batchRenameFunctions(request);
         } catch (ApiException e) {
             throw new RuntimeException(e);
+        }
+        Long renamedCount = response == null ? null : response.getRenamedCount();
+        if (renamedCount == null || renamedCount < 1) {
+            throw new RuntimeException("Server did not rename function " + id.value() + " to " + newName
+                    + " (renamed_count: " + renamedCount + ")");
         }
     }
 
