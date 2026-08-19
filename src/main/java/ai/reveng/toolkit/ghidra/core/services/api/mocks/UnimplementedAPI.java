@@ -22,10 +22,12 @@ public class UnimplementedAPI implements TypedApiInterface {
     protected AnalysisStatus getNextStatus(AnalysisStatus previousStatus) {
         Objects.requireNonNull(previousStatus);
         return switch (previousStatus) {
+            case Uploaded -> AnalysisStatus.Queued;
             case Queued -> AnalysisStatus.Processing;
             case Processing -> AnalysisStatus.Complete;
             case Complete ->  AnalysisStatus.Complete;
             case Error -> AnalysisStatus.Error;
+            case Unknown -> AnalysisStatus.Unknown;
         };
     }
 

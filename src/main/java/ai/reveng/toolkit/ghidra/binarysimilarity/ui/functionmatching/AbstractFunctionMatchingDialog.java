@@ -269,18 +269,16 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         updateResultsTable();
     }
 
-    protected void updateResultsTable() {
-        // Determine which results to show based on whether we have an active filter
+    /// The results that back the table model, in model-row order: all results when no function filter
+    /// is active, otherwise the filtered subset (which may be empty).
+    protected List<GhidraFunctionMatchWithSignature> displayedResults() {
         String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
-        List<GhidraFunctionMatchWithSignature> resultsToShow;
+        return filterText.isEmpty() ? functionMatchResults : filteredFunctionMatchResults;
+    }
 
-        if (filterText.isEmpty()) {
-            // No filter text, show all results
-            resultsToShow = functionMatchResults;
-        } else {
-            // Filter text exists, show filtered results (even if empty)
-            resultsToShow = filteredFunctionMatchResults;
-        }
+    protected void updateResultsTable() {
+        String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
 
         DefaultTableModel model = new DefaultTableModel(getTableColumnNames(), 0) {
             @Override
@@ -636,10 +634,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         // Convert view index to model index (in case table is sorted)
         int modelRow = resultsTable.convertRowIndexToModel(selectedRow);
 
-        // Get the appropriate results list
-        String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
-        List<GhidraFunctionMatchWithSignature> resultsToShow = filterText.isEmpty() ?
-                functionMatchResults : filteredFunctionMatchResults;
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
 
         if (modelRow >= resultsToShow.size()) {
             return;
@@ -899,26 +894,31 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         renameInBackground(functionMatchResults);
     }
 
-    protected void onRenameSelectedButtonClicked() {
-        int[] selectedRows = resultsTable.getSelectedRows();
-        if (selectedRows.length == 0) {
-            showError("Please select one or more rows to rename.");
-            return;
-        } else {
-            hideError();
-        }
-
-        List<GhidraFunctionMatchWithSignature> resultsToShow = filteredFunctionMatchResults.isEmpty() ?
-            functionMatchResults : filteredFunctionMatchResults;
-
+    /// The results behind the currently selected table rows.
+    ///
+    /// The table is sortable, so the view row order need not match the order of the list backing the
+    /// table model. Every selected view index is therefore converted to a model index before it is
+    /// used to look up a result.
+    protected List<GhidraFunctionMatchWithSignature> getSelectedMatches() {
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
         List<GhidraFunctionMatchWithSignature> selectedMatches = new ArrayList<>();
-        for (int row : selectedRows) {
-            if (row < resultsToShow.size()) {
-                selectedMatches.add(resultsToShow.get(row));
+        for (int viewRow : resultsTable.getSelectedRows()) {
+            int modelRow = resultsTable.convertRowIndexToModel(viewRow);
+            if (modelRow >= 0 && modelRow < resultsToShow.size()) {
+                selectedMatches.add(resultsToShow.get(modelRow));
             }
         }
+        return selectedMatches;
+    }
 
-        renameInBackground(selectedMatches);
+    protected void onRenameSelectedButtonClicked() {
+        if (resultsTable.getSelectedRowCount() == 0) {
+            showError("Please select one or more rows to rename.");
+            return;
+        }
+        hideError();
+
+        renameInBackground(getSelectedMatches());
     }
 
     private void renameInBackground(List<GhidraFunctionMatchWithSignature> matches) {

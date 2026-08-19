@@ -1076,7 +1076,7 @@ public class GhidraRevengService {
         AnalysisStatus lastStatus = null;
         while (true) {
             AnalysisStatus currentStatus = this.status(programWithID);
-            if (currentStatus != AnalysisStatus.Queued) {
+            if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
                 // Analysis log endpoint only starts to return data after the analysis is processing
                 String logs = this.getAnalysisLog(programWithID.analysisID());
                 if (logger != null) {

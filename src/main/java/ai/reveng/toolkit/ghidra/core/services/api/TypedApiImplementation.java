@@ -157,7 +157,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     @Override
     public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
         var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
-        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
+        return AnalysisStatus.fromApiValue(status.getData().getAnalysisStatus());
     }
 
     /**
