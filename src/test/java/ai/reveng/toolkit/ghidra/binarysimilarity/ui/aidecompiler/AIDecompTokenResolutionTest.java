@@ -1,8 +1,11 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
-import ai.reveng.model.TokenValuesData;
+import ai.reveng.model.GetTokensResponse;
+import ai.reveng.model.RenderedToken;
+import ai.reveng.model.Token;
 import org.junit.Test;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
@@ -45,14 +48,28 @@ public class AIDecompTokenResolutionTest {
     }
 
     @Test
+    public void effectiveValues_unwrapsARenderedTokenToItsValue() {
+        var data = new GetTokensResponse();
+        data.setAiDecomp("int TOKEN_A = 1;");
+        data.setPlaceholderToRenderedToken(Map.of("TOKEN_A", new RenderedToken()
+                .value("result")
+                .kind(RenderedToken.KindEnum.LOCAL)
+                .dataTypeId(42L)
+                .vaddr(0x1000L)));
+
+        // Only the rendered value is taken; the kind and ids the token also carries are not used.
+        assertEquals(Map.of("TOKEN_A", "result"), AIDecompilationdWindow.effectiveValues(data));
+    }
+
+    @Test
     public void effectiveValues_toleratesTheNullMapsReturnedBeforeARunSucceeds() {
-        var tokenValues = new TokenValuesData();
+        var tokenValues = new GetTokensResponse();
         tokenValues.setAiDecomp("");
         assertTrue(AIDecompilationdWindow.effectiveValues(tokenValues).isEmpty());
     }
 
     @Test
-    public void effectiveValues_keepsAnOverrideForATokenMissingFromTokenToValue() {
+    public void effectiveValues_keepsAnOverrideForATokenMissingFromTheRenderedMap() {
         var tokenValues = tokenValues("int TOKEN_A = 1;", Map.of(), Map.of("TOKEN_A", "myResult"));
 
         assertEquals(Map.of("TOKEN_A", "myResult"), AIDecompilationdWindow.effectiveValues(tokenValues));
@@ -126,18 +143,24 @@ public class AIDecompTokenResolutionTest {
 
     @Test
     public void resolveToken_noTokenValuesReturnsNull() {
-        var tokenValues = new TokenValuesData();
+        var tokenValues = new GetTokensResponse();
         tokenValues.setAiDecomp("int TOKEN_A = 1;");
         assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
     }
 
-    private static TokenValuesData tokenValues(String aiDecomp,
-                                               Map<String, String> tokenToValue,
-                                               Map<String, String> userOverrides) {
-        var data = new TokenValuesData();
+    private static GetTokensResponse tokenValues(String aiDecomp,
+                                                 Map<String, String> renderedValues,
+                                                 Map<String, String> userOverrides) {
+        var data = new GetTokensResponse();
         data.setAiDecomp(aiDecomp);
-        data.setTokenToValue(tokenToValue);
-        data.setTokenToValueUserOverrides(userOverrides);
+        var rendered = new LinkedHashMap<String, RenderedToken>();
+        renderedValues.forEach((placeholder, value) ->
+                rendered.put(placeholder, new RenderedToken().value(value)));
+        data.setPlaceholderToRenderedToken(rendered);
+        var overrides = new LinkedHashMap<String, Token>();
+        userOverrides.forEach((placeholder, value) ->
+                overrides.put(placeholder, new Token().value(value)));
+        data.setPlaceholderToUserOverride(overrides);
         return data;
     }
 }

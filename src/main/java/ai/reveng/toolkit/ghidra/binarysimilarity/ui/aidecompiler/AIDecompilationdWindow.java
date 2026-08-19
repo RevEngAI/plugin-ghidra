@@ -2,8 +2,8 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.DecompilationData;
+import ai.reveng.model.GetTokensResponse;
 import ai.reveng.model.ProgressMessage;
-import ai.reveng.model.TokenValuesData;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -585,7 +585,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             @Override
             public void run(TaskMonitor monitor) {
                 try {
-                    TokenValuesData tokenValues = service.getApi().getAIDecompilationTokenValues(functionID);
+                    GetTokensResponse tokenValues = service.getApi().getAIDecompilationTokens(functionID);
                     String token = resolveToken(tokenValues, sourceIndex, identIndex, word);
                     if (token == null) {
                         SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
@@ -726,7 +726,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
      * {@code resolve_token}: prefer the token at the same identifier position in the tokenised line,
      * and fall back to a unique match by effective value across every token the server rendered.
      */
-    static String resolveToken(TokenValuesData tokenValues, int sourceIndex, int identIndex, String oldIdent) {
+    static String resolveToken(GetTokensResponse tokenValues, int sourceIndex, int identIndex, String oldIdent) {
         if (tokenValues == null) {
             return null;
         }
@@ -760,14 +760,19 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
      * Each token mapped to the name currently rendered for it: the caller's own override where one
      * exists, otherwise the value the server predicted. The two maps arrive unmerged, so overrides
      * are layered on top here.
+     *
+     * <p>Only the rendered value is taken. TODO: a rendered token also carries its kind and the
+     * data-type/function id behind it, which could drive navigation rather than just renaming.
      */
-    static Map<String, String> effectiveValues(TokenValuesData tokenValues) {
+    static Map<String, String> effectiveValues(GetTokensResponse tokenValues) {
         var result = new LinkedHashMap<String, String>();
-        if (tokenValues.getTokenToValue() != null) {
-            result.putAll(tokenValues.getTokenToValue());
+        if (tokenValues.getPlaceholderToRenderedToken() != null) {
+            tokenValues.getPlaceholderToRenderedToken()
+                    .forEach((placeholder, token) -> result.put(placeholder, token.getValue()));
         }
-        if (tokenValues.getTokenToValueUserOverrides() != null) {
-            result.putAll(tokenValues.getTokenToValueUserOverrides());
+        if (tokenValues.getPlaceholderToUserOverride() != null) {
+            tokenValues.getPlaceholderToUserOverride()
+                    .forEach((placeholder, token) -> result.put(placeholder, token.getValue()));
         }
         return result;
     }

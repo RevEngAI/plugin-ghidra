@@ -571,16 +571,18 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public TokenValuesData getAIDecompilationTokenValues(FunctionID functionID) throws ApiException {
-        // GET /v3/functions/{function_id}/ai-decompilation/token-values
-        return functionsAiDecompilationApi.v3GetAiDecompilationTokenValues(functionID.value());
+    public GetTokensResponse getAIDecompilationTokens(FunctionID functionID) throws ApiException {
+        // GET /v3/functions/{function_id}/ai-decompilation/tokens
+        return functionsAiDecompilationApi.v3GetAiDecompilationTokens(functionID.value());
     }
 
     @Override
     public UpsertOverridesData applyAIDecompilationOverrides(FunctionID functionID, java.util.Map<String, String> overrides) throws ApiException {
         // PUT /v3/functions/{function_id}/ai-decompilation/overrides
-        var body = new UpsertOverridesInputBody().overrides(overrides);
-        return functionsAiDecompilationApi.upsertAiDecompilationOverrides(functionID.value(), body);
+        var wrapped = new java.util.LinkedHashMap<String, Token>();
+        overrides.forEach((token, value) -> wrapped.put(token, new Token().value(value)));
+        var body = new UpsertOverridesInputBody().overrides(wrapped);
+        return functionsAiDecompilationApi.v3UpsertAiDecompilationOverrides(functionID.value(), body);
     }
 
     @Override

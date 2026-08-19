@@ -140,8 +140,8 @@ public interface TypedApiInterface {
      * value each token renders as, plus the caller's own overrides as a separate map, which is
      * how a displayed name is resolved back to the token to override.
      */
-    default TokenValuesData getAIDecompilationTokenValues(FunctionID functionID) throws ApiException {
-        throw new UnsupportedOperationException("getAIDecompilationTokenValues not implemented yet");
+    default GetTokensResponse getAIDecompilationTokens(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAIDecompilationTokens not implemented yet");
     }
 
     /**

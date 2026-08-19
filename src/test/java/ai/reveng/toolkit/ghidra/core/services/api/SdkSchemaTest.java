@@ -52,7 +52,8 @@ public class SdkSchemaTest {
                 "v3CreateAnalysisDataTypesCall", "v3UpdateAnalysisDataTypesCall",
                 "v3UpdateFunctionSignature"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
-                "createAiDecompilation", "getAiDecompilation", "v3GetAiDecompilationTokenValues",
+                "createAiDecompilation", "getAiDecompilation", "v3GetAiDecompilationTokens",
+                "v3UpsertAiDecompilationOverrides",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
                 "regenerateAiDecompilationSummary", "regenerateAiDecompilationInlineComments",
@@ -130,8 +131,12 @@ public class SdkSchemaTest {
 
         // Resolving a double-clicked identifier back to the token to override reads the tokenised
         // source and both name maps, which arrive unmerged.
-        requireMethods(missing, "ai.reveng.model.TokenValuesData",
-                "getAiDecomp", "getTokenToValue", "getTokenToValueUserOverrides");
+        requireMethods(missing, "ai.reveng.model.GetTokensResponse",
+                "getAiDecomp", "getPlaceholderToRenderedToken", "getPlaceholderToUserOverride");
+        // Both maps hold different types, and only the rendered value is read out of either.
+        requireMethods(missing, "ai.reveng.model.RenderedToken", "getValue");
+        requireMethods(missing, "ai.reveng.model.Token", "getValue");
+        requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
 
         assertTrue("SDK model surface drifted: " + missing, missing.isEmpty());
     }
