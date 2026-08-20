@@ -14,8 +14,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
-import com.google.common.collect.BiMap;
-import com.google.common.collect.HashBiMap;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
 import ghidra.app.cmd.function.SetFunctionNameCmd;
 import ghidra.framework.plugintool.PluginTool;
@@ -1333,10 +1331,10 @@ public class GhidraRevengService {
         /// Warning: Using this map means having to verify that the function ID has an associated function
         ///
         /// `getFunctionMap.get(functionID)` can return `null`
-        public BiMap<TypedApiInterface.FunctionID, Function> getFunctionMap(){
+        public Map<TypedApiInterface.FunctionID, Function> getFunctionMap(){
             var propMap = getFunctionIDPropertyMap(this);
 
-            BiMap<TypedApiInterface.FunctionID, Function> functionMap = HashBiMap.create();
+            Map<TypedApiInterface.FunctionID, Function> functionMap = new HashMap<>();
             propMap.getPropertyIterator().forEachRemaining(
                     addr -> {
                         var func = program.getFunctionManager().getFunctionAt(addr);

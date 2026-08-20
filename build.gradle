@@ -66,13 +66,14 @@ dependencies {
 	// this extension is built.
 	implementation 'io.github.java-diff-utils:java-diff-utils:4.12'
   	implementation 'org.json:json:20250107'
-	implementation "com.google.guava:guava:33.2.0-jre"
 	implementation group: 'com.fifesoft', name: 'rsyntaxtextarea', version: '3.5.2'
 	implementation 'org.commonmark:commonmark:0.24.0'
 	implementation 'org.commonmark:commonmark-ext-gfm-tables:0.24.0'
     implementation('ai.reveng:sdk:3.123.0')
 	testImplementation('junit:junit:4.13.1')
 	testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.8.2")
+	// Version comes from the junit-bom pulled in by junit-vintage-engine.
+	testRuntimeOnly('org.junit.platform:junit-platform-launcher')
 
 	// https://mvnrepository.com/artifact/org.jetbrains/annotations
 	implementation group: 'org.jetbrains', name: 'annotations', version: '26.0.2'
@@ -93,20 +94,18 @@ if (project.hasProperty('revengSdkVersion')) {
 }
 
 // Ghidra's copyDependencies task copies runtime jars into lib/ but never prunes, and everything
-// in lib/ ends up on the compile classpath and in the extension zip. Without this, changing the
-// SDK version leaves the old jar behind and two versions get shipped. Deleting unconditionally
-// keeps this correct without duplicating the version literal; copyDependencies puts back whichever
-// jar actually resolved.
-tasks.register('pruneStaleSdkJars', Delete) {
-	delete fileTree(dir: 'lib', include: 'sdk-*.jar')
+// in lib/ ends up on the compile classpath and in the extension zip, and copyDependencies never
+// removes anything. Without this, dropping or bumping a dependency leaves the old jar behind and
+// it keeps shipping. copyDependencies puts back exactly the jars that resolved.
+tasks.register('pruneStaleJars', Delete) {
+	delete fileTree(dir: 'lib', include: '*.jar')
 }
-copyDependencies.dependsOn pruneStaleSdkJars
+copyDependencies.dependsOn pruneStaleJars
 
 test {
 	maxParallelForks = 3
 	useJUnitPlatform()
     jvmArgs '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
-//    systemProperty 'java.awt.headless', 'true'
     systemProperty "ghidra.test.property.batch.mode", 'true'
 
     // Ghidra 12.1+ installs a serial filter factory during application initialization. The JVM
@@ -125,8 +124,16 @@ test {
         systemProperty 'jdk.serialFilterFactory', filterFactoryClass
     }
 }
-// Exclude additional files from the built extension
-// Ex: buildExtension.exclude '.idea/**'
+// Ghidra's buildExtension zips the whole project directory, excluding only build output, IDE
+// dotfiles and src/. These paths are development-only and nothing reads them at runtime.
+buildExtension.exclude 'screenshots/**'
+buildExtension.exclude '.github/**'
+buildExtension.exclude 'docs/**'
+buildExtension.exclude 'scripts/**'
+buildExtension.exclude '.revengai/**'
+buildExtension.exclude 'CLAUDE.md'
+buildExtension.exclude '.worktreeinclude'
+buildExtension.exclude '.java-version'
 
 
 tasks.register('updateReadmeScreenshots', Copy) {

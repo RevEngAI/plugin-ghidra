@@ -11,7 +11,6 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
-import com.google.common.collect.BiMap;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
@@ -25,6 +24,7 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -205,7 +205,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     /// touch Swing, and those are marshalled back onto the EDT.
     protected void processFunctionMatchingResults(List<MatchedFunctionResult> response) {
         List<GhidraFunctionMatch> matches = new ArrayList<>();
-        final BiMap<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
+        final Map<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
 
         response.forEach(matchResult -> {
             // Retrieve the local function name
