@@ -1,16 +1,8 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import com.sun.net.httpserver.HttpServer;
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -21,41 +13,19 @@ import static org.junit.Assert.assertTrue;
  * {@link TypedApiImplementation#getAnalysisBasicInfo} memoises per analysis id and its ids are
  * 64-bit on the wire, so this covers the cache and a binary id above 2^31.
  */
-public class GetAnalysisBasicInfoTest extends AbstractGhidraHeadlessIntegrationTest {
+public class GetAnalysisBasicInfoTest extends AbstractStubServerTest {
 
     private static final int ANALYSIS_ID = 4321;
     private static final long BINARY_ID = 5_000_000_000L;
 
-    private HttpServer server;
-    private ApiClient originalApiClient;
     private final List<String> requestPaths = new CopyOnWriteArrayList<>();
 
-    @Before
-    public void startStubServer() throws Exception {
-        originalApiClient = Configuration.getDefaultApiClient();
-        Configuration.setDefaultApiClient(new ApiClient());
-
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    @Override
+    protected void configureStubs(HttpServer server) {
         server.createContext("/v3/analyses", exchange -> {
             requestPaths.add(exchange.getRequestURI().getPath());
-            byte[] bytes = body().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
+            respondJson(exchange, body());
         });
-        server.start();
-    }
-
-    @After
-    public void stopStubServer() {
-        if (server != null) {
-            server.stop(0);
-        }
-        if (originalApiClient != null) {
-            Configuration.setDefaultApiClient(originalApiClient);
-        }
     }
 
     @Test
@@ -120,9 +90,5 @@ public class GetAnalysisBasicInfoTest extends AbstractGhidraHeadlessIntegrationT
                   "team_id": 3
                 }
                 """.formatted(BINARY_ID, "0".repeat(64));
-    }
-
-    private TypedApiImplementation api() {
-        return new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
     }
 }

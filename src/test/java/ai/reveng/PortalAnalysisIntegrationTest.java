@@ -16,7 +16,6 @@ import com.google.gson.JsonParser;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ghidra.framework.Application;
 import ghidra.framework.ApplicationVersion;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
@@ -141,7 +140,7 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                 return new AnalysisID(1);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         // Add an example function
         var exampleFunc = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
         /// Tell Ghidra that the function signature source is just default,
@@ -153,9 +152,9 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         // We need to also create the memory where the function lives, `getFunctions` doesn't find it otherwise
         builder.createMemory("test", "0x4000", 0x100);
         Assert.assertNotNull(builder.getProgram().getFunctionManager().getFunctionAt(exampleFunc.getEntryPoint()));
-        assert builder.getProgram().getFunctionManager().getFunctionCount() == 1;
-        assert builder.getProgram().getFunctionManager().getFunctionAt(exampleFunc.getEntryPoint()) != null;
-        assert builder.getProgram().getFunctionManager().getFunctions(true).hasNext();
+        assertEquals(1, builder.getProgram().getFunctionManager().getFunctionCount());
+        assertTrue("the created function should be reachable by iteration",
+                builder.getProgram().getFunctionManager().getFunctions(true).hasNext());
         var program = builder.getProgram();
 
         var defaultTool = env.showTool(program);
@@ -168,8 +167,10 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         // We start an analysis to get an Analysis ID associated with the program
         var id  = service.startAnalysis(program, null);
 
-        assert service.getKnownProgram(program).isPresent();
-        assert service.getAnalysedProgram(program).isEmpty();
+        assertTrue("starting an analysis should associate it with the program",
+                service.getKnownProgram(program).isPresent());
+        assertTrue("results should not be available before the analysis completes",
+                service.getAnalysedProgram(program).isEmpty());
 
         // Register a listener for the results loaded event, to verify that has been fired later
         AtomicBoolean receivedResultsLoadedEvent = new AtomicBoolean(false);
@@ -194,7 +195,8 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
         assertTrue(receivedResultsLoadedEvent.get());
 
         // Check that an analysed program is now known
-        assert service.getAnalysedProgram(program).isPresent();
+        assertTrue("results should be available once the analysis completes",
+                service.getAnalysedProgram(program).isPresent());
         var analyzedProgram = service.getAnalysedProgram(program).get();
 
         // Check that the function names have been updated to the one returned by the portal

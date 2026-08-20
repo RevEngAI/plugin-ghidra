@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.AutoUnstripSyncService;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -78,7 +77,7 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "recovered_name", "recovered_name", 0x4000L, 0x100));
         var service = new GhidraRevengService(api);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         builder.createMemory("mem", "0x4000", 0x100);
         Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
         var program = builder.getProgram();

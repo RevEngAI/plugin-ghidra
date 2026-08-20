@@ -11,7 +11,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.StructureDataType;
@@ -109,7 +108,7 @@ public class PushFunctionTypesTest extends RevEngMockableHeadedIntegrationTest {
         var api = new RecordingApi();
         var service = new GhidraRevengService(api);
 
-        var builder = new ProgramBuilder("push", ProgramBuilder._X64, this);
+        var builder = newX64Program("push");
         builder.createMemory("code", "0x4000", 0x400);
         var program = builder.getProgram();
 

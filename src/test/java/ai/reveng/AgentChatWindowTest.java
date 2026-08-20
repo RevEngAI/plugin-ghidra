@@ -12,7 +12,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.AgentChatPlugin;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -59,7 +58,7 @@ public class AgentChatWindowTest extends RevEngMockableHeadedIntegrationTest {
         });
 
         env.addPlugin(AgentChatPlugin.class);
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
         env.showTool(programWithID.program());
@@ -140,7 +139,7 @@ public class AgentChatWindowTest extends RevEngMockableHeadedIntegrationTest {
         var service = addMockedService(tool, api);
         env.addPlugin(AgentChatPlugin.class);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
         Program program = programWithID.program();

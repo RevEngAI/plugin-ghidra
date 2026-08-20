@@ -32,7 +32,6 @@ import docking.DockingWindowManager;
 import ghidra.framework.main.FrontEndTool;
 import org.junit.*;
 
-import ghidra.program.database.ProgramBuilder;
 import ghidra.test.TestEnv;
 
 public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTest {
@@ -48,7 +47,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testBasicOptionsDialog() throws Exception {
 
         var reService = new GhidraRevengService( new MockApi() {});
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -78,7 +77,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     @Test
     public void testSubmittedAnalysisConfig() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {});
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -118,7 +117,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new User().tier(User.TierEnum.ENTHUSIAST);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -156,7 +155,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new User().tier(User.TierEnum.REVERSER);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -190,7 +189,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 throw new RuntimeException("tier lookup failed");
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -236,7 +235,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new User().tier(User.TierEnum.REVERSER);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -273,7 +272,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new User().tier(User.TierEnum.ENTHUSIAST);
             }
         });
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {

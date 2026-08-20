@@ -8,7 +8,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
@@ -26,7 +25,7 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
         var mock = new OfflineAfterSetupAPI();
         var service = addMockedService(tool, mock);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
         var program = programWithID.program();

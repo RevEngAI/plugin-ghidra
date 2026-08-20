@@ -5,7 +5,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import org.junit.Test;
@@ -45,7 +44,7 @@ public class SyncMarkingTest extends RevEngMockableHeadedIntegrationTest {
             }
         });
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         builder.createMemory("matched", "0x4000", 0x100);
         builder.createMemory("unmatched", "0x5000", 0x100);
         Function matchedFunc = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));

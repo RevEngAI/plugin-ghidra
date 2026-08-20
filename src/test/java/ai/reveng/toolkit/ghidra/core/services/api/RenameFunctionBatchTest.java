@@ -1,15 +1,8 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import com.sun.net.httpserver.HttpServer;
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
@@ -24,41 +17,19 @@ import static org.junit.Assert.fail;
  * which answers 200 with a renamed count instead of failing per item. This checks that the request
  * carries the full 64-bit function id and that a count of zero reaches the caller as a failure.
  */
-public class RenameFunctionBatchTest extends AbstractGhidraHeadlessIntegrationTest {
+public class RenameFunctionBatchTest extends AbstractStubServerTest {
 
     private static final long FUNCTION_ID = 5_000_000_000L;
 
-    private HttpServer server;
-    private ApiClient originalApiClient;
     private final List<String> requestBodies = new CopyOnWriteArrayList<>();
     private final AtomicLong renamedCount = new AtomicLong(1);
 
-    @Before
-    public void startStubServer() throws Exception {
-        originalApiClient = Configuration.getDefaultApiClient();
-        Configuration.setDefaultApiClient(new ApiClient());
-
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    @Override
+    protected void configureStubs(HttpServer server) {
         server.createContext("/v3/functions/rename", exchange -> {
             requestBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            byte[] bytes = "{\"renamed_count\":%d}".formatted(renamedCount.get()).getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
+            respondJson(exchange, "{\"renamed_count\":%d}".formatted(renamedCount.get()));
         });
-        server.start();
-    }
-
-    @After
-    public void stopStubServer() {
-        if (server != null) {
-            server.stop(0);
-        }
-        if (originalApiClient != null) {
-            Configuration.setDefaultApiClient(originalApiClient);
-        }
     }
 
     @Test
@@ -83,9 +54,5 @@ public class RenameFunctionBatchTest extends AbstractGhidraHeadlessIntegrationTe
         } catch (RuntimeException e) {
             assertTrue(e.getMessage(), e.getMessage().contains(String.valueOf(FUNCTION_ID)));
         }
-    }
-
-    private TypedApiImplementation api() {
-        return new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
     }
 }

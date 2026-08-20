@@ -6,6 +6,7 @@ import ai.reveng.toolkit.ghidra.plugins.LoggingPlugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.mgr.ServiceManager;
 import ghidra.framework.plugintool.util.PluginException;
+import ghidra.program.database.ProgramBuilder;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.test.TestEnv;
 import org.junit.After;
@@ -31,6 +32,16 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
     @After
     public void tearDown() throws Exception {
         env.dispose();
+    }
+
+    /// An empty x86-64 program owned by this test, for tests that don't care what it is called.
+    protected ProgramBuilder newX64Program() throws Exception {
+        return newX64Program("mock");
+    }
+
+    /// An empty x86-64 program owned by this test, for tests whose program name is load bearing.
+    protected ProgramBuilder newX64Program(String name) throws Exception {
+        return new ProgramBuilder(name, ProgramBuilder._X64, this);
     }
 
 

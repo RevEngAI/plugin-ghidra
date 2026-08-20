@@ -7,7 +7,6 @@ import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.listing.Program;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitorComponent;
@@ -22,7 +21,7 @@ import static org.junit.Assert.*;
 public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTest {
 
     private GhidraRevengService.ProgramWithID getPlaceHolderID() throws Exception{
-        var builder = new ghidra.program.database.ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         // Add an example function
         var program = builder.getProgram();
         return new GhidraRevengService.ProgramWithID(

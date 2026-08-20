@@ -1,16 +1,8 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import com.sun.net.httpserver.HttpServer;
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -22,44 +14,21 @@ import static org.junit.Assert.assertTrue;
  * so this covers the query it sends, the multi-page walk and the empty "no analyses for this hash"
  * answer.
  */
-public class ListAnalysesForHashTest extends AbstractGhidraHeadlessIntegrationTest {
+public class ListAnalysesForHashTest extends AbstractStubServerTest {
 
     private static final String HASH = "b04c1259718dd16c0ffbd0931aeecf07746775cc2f1cda76e46d51af165f3ba6";
 
-    private HttpServer server;
-    private ApiClient originalApiClient;
     private final List<String> requestQueries = new CopyOnWriteArrayList<>();
     private volatile String firstPage = emptyPage();
     private volatile String secondPage = emptyPage();
 
-    @Before
-    public void startStubServer() throws Exception {
-        originalApiClient = Configuration.getDefaultApiClient();
-        Configuration.setDefaultApiClient(new ApiClient());
-
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    @Override
+    protected void configureStubs(HttpServer server) {
         server.createContext("/v3/analyses", exchange -> {
             String query = exchange.getRequestURI().getQuery();
             requestQueries.add(query);
-            String page = query != null && query.contains("next_page_token=") ? secondPage : firstPage;
-            byte[] bytes = page.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
+            respondJson(exchange, query != null && query.contains("next_page_token=") ? secondPage : firstPage);
         });
-        server.start();
-    }
-
-    @After
-    public void stopStubServer() {
-        if (server != null) {
-            server.stop(0);
-        }
-        if (originalApiClient != null) {
-            Configuration.setDefaultApiClient(originalApiClient);
-        }
     }
 
     @Test
@@ -175,9 +144,5 @@ public class ListAnalysesForHashTest extends AbstractGhidraHeadlessIntegrationTe
                   "username": "tester"
                 }
                 """.formatted(analysisId, binaryId, HASH);
-    }
-
-    private TypedApiImplementation api() {
-        return new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
     }
 }

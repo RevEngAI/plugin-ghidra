@@ -8,7 +8,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.model.AnalysisRecordBody;
 import docking.DockingWindowManager;
-import ghidra.program.database.ProgramBuilder;
 import org.junit.Test;
 
 import javax.swing.*;
@@ -33,7 +32,7 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         var service = addMockedService(tool, mockApi);
 
         // Create a test program with matching hash
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         builder.createMemory("test", "0x1000", 100);
         var program = builder.getProgram();
 
@@ -115,7 +114,7 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         var mockApi = new RecentAnalysesMockApi();
         addMockedService(tool, mockApi);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         builder.createMemory("test", "0x1000", 100);
         var program = builder.getProgram();
 

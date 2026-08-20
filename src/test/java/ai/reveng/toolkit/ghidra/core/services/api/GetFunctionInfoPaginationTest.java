@@ -1,17 +1,9 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import com.sun.net.httpserver.HttpServer;
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
@@ -25,24 +17,16 @@ import static org.junit.Assert.assertEquals;
  * caps a page below the requested limit, which is also what forces the offset to advance by the
  * number of entries actually returned.
  */
-public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegrationTest {
+public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
 
     private static final int ANALYSIS_ID = 123;
     private static final int SERVER_PAGE_CAP = 2;
 
-    private HttpServer server;
-    private ApiClient originalApiClient;
     private final List<String> requestedQueries = new CopyOnWriteArrayList<>();
     private volatile List<Long> allFunctionIds = List.of();
 
-    @Before
-    public void startStubServer() throws Exception {
-        // TypedApiImplementation mutates the shared default ApiClient (base path, stacked interceptors).
-        // Isolate this test from whatever ran before it in the same fork, and restore it afterwards.
-        originalApiClient = Configuration.getDefaultApiClient();
-        Configuration.setDefaultApiClient(new ApiClient());
-
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    @Override
+    protected void configureStubs(HttpServer server) {
         server.createContext("/v3/analyses/" + ANALYSIS_ID + "/functions", exchange -> {
             String query = exchange.getRequestURI().getQuery();
             requestedQueries.add(query);
@@ -52,25 +36,8 @@ public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegra
             List<Long> ids = allFunctionIds;
             int from = Math.min(offset, ids.size());
             int to = Math.min(from + Math.min(limit, SERVER_PAGE_CAP), ids.size());
-            byte[] bytes = pageResponse(ids.subList(from, to), ids.size()).getBytes(StandardCharsets.UTF_8);
-
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
+            respondJson(exchange, pageResponse(ids.subList(from, to), ids.size()));
         });
-        server.start();
-    }
-
-    @After
-    public void stopStubServer() {
-        if (server != null) {
-            server.stop(0);
-        }
-        if (originalApiClient != null) {
-            Configuration.setDefaultApiClient(originalApiClient);
-        }
     }
 
     /** A trailing partial page: the last request comes back short of the server's own cap. */
@@ -126,8 +93,7 @@ public class GetFunctionInfoPaginationTest extends AbstractGhidraHeadlessIntegra
     }
 
     private List<FunctionInfo> fetch() {
-        var api = new TypedApiImplementation("http://127.0.0.1:" + server.getAddress().getPort(), "test-key");
-        return api.getFunctionInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
+        return api().getFunctionInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
     }
 
     private static List<Long> idsOf(List<FunctionInfo> functions) {
