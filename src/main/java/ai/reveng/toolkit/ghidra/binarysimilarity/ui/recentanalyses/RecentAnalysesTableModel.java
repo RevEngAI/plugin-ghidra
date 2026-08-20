@@ -4,7 +4,6 @@ import ai.reveng.model.AnalysisRecordBody;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import docking.widgets.table.AbstractDynamicTableColumn;
 import docking.widgets.table.TableColumnDescriptor;
@@ -32,7 +31,6 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
     @Override
     protected void doLoad(Accumulator<AnalysisRecordBody> accumulator, TaskMonitor monitor) throws CancelledException {
         var revEngAIService = serviceProvider.getService(GhidraRevengService.class);
-        var functionBoundariesService = serviceProvider.getService(ExportFunctionBoundariesService.class);
         var loggingService = serviceProvider.getService(ReaiLoggingService.class);
 
         // The search endpoint only returns analyses we have access to so there is no need to filter them.

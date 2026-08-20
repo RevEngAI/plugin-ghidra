@@ -31,7 +31,6 @@ public class ChatControllerTest {
         @Override public void info(String message) {}
         @Override public void warn(String message) {}
         @Override public void error(String message) {}
-        @Override public void export(String targetDirectoryPath, String exportedFileName) {}
     };
 
     private static ChatEvent event(String type, Map<String, Object> data) {

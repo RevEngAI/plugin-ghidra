@@ -35,7 +35,6 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         @Override public void info(String message) {}
         @Override public void warn(String message) {}
         @Override public void error(String message) {}
-        @Override public void export(String targetDirectoryPath, String exportedFileName) {}
     };
 
     /// Mock API that scripts auto-unstrip status responses and records rename calls.

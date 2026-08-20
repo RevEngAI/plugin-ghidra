@@ -20,7 +20,10 @@ EXTRA = {
     "fs_collection_filter": {"status": "yes"},
     "fs_binary_filter": {"status": "yes"},
     "fs_debug_filter": {"status": "yes"},
-    "fs_nns_filter": {"status": "partial"},
+    "fs_nns_filter": {
+        "status": "absent",
+        "note": "Results per function is fixed: 1 for binary-level matching, 25 for function-level. Not user configurable.",
+    },
     "fs_similarity_filter": {"status": "yes"},
     "upload_function_names": {"status": "yes"},
     "data_types_sync": {"status": "yes"},

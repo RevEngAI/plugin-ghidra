@@ -25,8 +25,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 
 import ai.reveng.toolkit.ghidra.core.services.sync.AutoUnstripSyncService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesServiceImpl;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
 import docking.action.DockingAction;
@@ -72,7 +70,6 @@ import java.util.Objects;
 	shortDescription = "Toolkit for using the RevEng.AI API",
 	description = "Toolkit for using RevEng.AI API",
 	servicesRequired = { OptionsService.class, ReaiLoggingService.class, GhidraRevengService.class},
-	servicesProvided = { ExportFunctionBoundariesService.class },
 	eventsConsumed = { RevEngAIAnalysisStatusChangedEvent.class}
 )
 //@formatter:on
@@ -89,7 +86,6 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     private DockingAction viewInPortalAction;
 
     private GhidraRevengService revengService;
-	private ExportFunctionBoundariesService exportFunctionBoundariesService;
 	private AnalysisLogComponent analysisLogComponent;
 	private LocalEditSyncService localEditSyncService;
 	private AutoUnstripSyncService autoUnstripSyncService;
@@ -101,11 +97,6 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 		super(tool);
 
 		this.tool = tool;
-
-
-        exportFunctionBoundariesService = new ExportFunctionBoundariesServiceImpl(tool);
-        registerServiceProvided(ExportFunctionBoundariesService.class, exportFunctionBoundariesService);
-
     }
 
     @Override
