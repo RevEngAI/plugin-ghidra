@@ -244,18 +244,10 @@ public class SimpleAutocompleteField extends JPanel {
         listenerList.add(ActionListener.class, listener);
     }
 
-    public void removeActionListener(ActionListener listener) {
-        listenerList.remove(ActionListener.class, listener);
-    }
-
     protected void fireActionPerformed() {
         ActionEvent event = new ActionEvent(this, ActionEvent.ACTION_PERFORMED, getText());
         for (ActionListener listener : listenerList.getListeners(ActionListener.class)) {
             listener.actionPerformed(event);
         }
-    }
-
-    public JTextField getTextField() {
-        return textField;
     }
 }

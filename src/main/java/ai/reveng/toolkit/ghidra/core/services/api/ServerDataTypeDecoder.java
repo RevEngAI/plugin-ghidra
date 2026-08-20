@@ -79,10 +79,6 @@ public final class ServerDataTypeDecoder {
         return decoder;
     }
 
-    public DataTypeManager dataTypeManager() {
-        return dtm;
-    }
-
     /// The Ghidra type for a `data_type_id`, or an undefined filler of `fallbackSize` bytes when the
     /// id is absent or names a type the server never defined.
     public DataType typeFor(@Nullable Long dataTypeId, long fallbackSize) {

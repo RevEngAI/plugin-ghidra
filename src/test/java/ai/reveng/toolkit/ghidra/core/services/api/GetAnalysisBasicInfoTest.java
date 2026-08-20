@@ -91,18 +91,6 @@ public class GetAnalysisBasicInfoTest extends AbstractGhidraHeadlessIntegrationT
         assertEquals("/v3/analyses/" + (ANALYSIS_ID + 1) + "/basic", requestPaths.get(1));
     }
 
-    @Test
-    public void getInfoForAnalysis_readsTheV3EndpointUncached() {
-        var api = api();
-        api.getInfoForAnalysis(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
-        var result = api.getInfoForAnalysis(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
-
-        assertEquals(2, requestPaths.size());
-        assertEquals("/v3/analyses/" + ANALYSIS_ID + "/basic", requestPaths.get(0));
-        assertEquals("test_binary", result.binary_name());
-        assertEquals("0".repeat(64), result.sha_256_hash().sha256());
-    }
-
     private static String body() {
         return """
                 {

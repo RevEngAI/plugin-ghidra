@@ -540,22 +540,6 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        try {
-            var data = analysisCoreApi.getAnalysisBasicInfo_0((long) id.id());
-            if (data == null) {
-                throw new RuntimeException("Unexpected null data for analysis ID: " + id.id());
-            }
-            return new AnalysisResult(
-                    id,
-                    data
-            );
-        } catch (ApiException e) {
-            throw new IllegalArgumentException("Could not find analysis with ID: " + id.id());
-        }
-    }
-
-    @Override
     public FunctionDetails getFunctionDetails(FunctionID id) {
         try {
             return FunctionDetails.fromServerResponse(functionsCoreApi.getFunctionDetails_0(id.value()));

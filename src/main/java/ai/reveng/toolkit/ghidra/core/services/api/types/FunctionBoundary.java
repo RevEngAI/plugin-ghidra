@@ -21,13 +21,4 @@ public record FunctionBoundary(
         obj.put("include_in_analysis", includeInAnalysis);
         return obj;
     }
-
-    public static FunctionBoundary fromJSON(JSONObject json) {
-        return new FunctionBoundary(
-                json.getString("mangled_name"),
-                json.getLong("start_addr"),
-                json.getLong("end_addr"),
-                json.optBoolean("include_in_analysis", true)
-        );
-    }
 }

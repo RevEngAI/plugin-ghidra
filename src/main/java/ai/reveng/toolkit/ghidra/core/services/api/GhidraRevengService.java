@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
-import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
@@ -286,9 +285,6 @@ public class GhidraRevengService {
 
 
     public record RenameResult(Function func, String originalName, String newName) {
-        public String virtualAddress() {
-            return func.getEntryPoint().toString();
-        }
     }
 
     /// Push a local function rename back to the portal. Returns the namespace-qualified name that was
@@ -765,20 +761,6 @@ public class GhidraRevengService {
     }
 
     /**
-     * Get the FunctionID for a Ghidra Function, if there is one
-     * There are two cases where a function ID is missing:
-     * 1. Either the whole program has not been analyzed
-     * (because its bounds were not included when the analysis was triggered)
-     *
-     * @deprecated Use {@link AnalysedProgram#getIDForFunction(Function)} instead. It forces the caller to prove that they know that the {@link Program} is indeed known on the server and associated by having to provide a {@link AnalysedProgram} instance.
-     */
-    @Deprecated
-    public Optional<TypedApiInterface.FunctionID> getFunctionIDFor(Function function){
-        return getAnalysedProgram(function.getProgram())
-                .flatMap(knownProgram -> knownProgram.getIDForFunction(function).map(fidWithStatus -> fidWithStatus.functionID));
-    }
-
-    /**
      * Get the Ghidra Function for a given FunctionInfo if there is one
      */
     private Optional<Function> getFunctionFor(FunctionInfo functionInfo, Program program){
@@ -887,11 +869,6 @@ public class GhidraRevengService {
         }
     }
 
-    ///  Use this method if you just have an AnalysisID and it is not clear yet if it can be accessed
-    public AnalysisStatus pollStatus(TypedApiInterface.AnalysisID id) throws ApiException {
-        return api.status(id);
-    }
-
     /// Current status of the server-side auto-unstrip pass, which runs after the analysis is complete.
     public TypedApiInterface.AutoUnstripStatus getAutoUnstripStatus(TypedApiInterface.AnalysisID id) throws ApiException {
         return api.getAutoUnstripStatus(id);
@@ -907,45 +884,6 @@ public class GhidraRevengService {
     }
 
 
-
-    public String decompileFunctionViaAI(FunctionWithID functionWithID, TaskMonitor monitor, AIDecompilationdWindow window) {
-        monitor.setMaximum(100 * 50);
-        // Check if there is an existing process already, because the trigger API will fail with 400 if there is
-        var fID = functionWithID.functionID;
-        var function = functionWithID.function;
-        if (api.pollAIDecompileStatus(fID).status() == DecompilationData.StatusEnum.UNINITIALISED){
-            // Trigger the decompilation
-            api.triggerAIDecompilationForFunctionID(fID);
-        }
-
-        while (true) {
-            if (monitor.isCancelled()) {
-                return "Decompilation cancelled";
-            }
-            var status = api.pollAIDecompileStatus(fID);
-            window.setDisplayedValuesBasedOnStatus(function, status);
-
-            switch (status.status()) {
-                case PENDING:
-                case RUNNING:
-                case UNINITIALISED:
-                    try {
-                        Thread.sleep(100);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
-                    break;
-                case COMPLETED:
-                    monitor.setProgress(monitor.getMaximum());
-                    window.setDisplayedValuesBasedOnStatus(function, status);
-                    return status.decompilation();
-                case FAILED:
-                    return "Decompilation failed: %s".formatted(status.status());
-                default:
-                    throw new RuntimeException("Unknown status: %s".formatted(status.status()));
-            }
-        }
-    }
 
     ///  This method analyses a program by uploading it (if necessary), triggering an analysis, and _blocking_
     /// until the analysis is complete. This is for scripts and tests, and must not be used on the UI thread
@@ -1015,10 +953,6 @@ public class GhidraRevengService {
 
     public void openPortalFor(TypedApiInterface.FunctionID f){
         openFunctionInPortal(f);
-    }
-
-    public void openPortalFor(AnalysisResult analysisResult) {
-        openPortalFor(analysisResult.analysisID());
     }
 
     public void openPortalFor(ProgramWithID programWithID) {
@@ -1234,13 +1168,6 @@ public class GhidraRevengService {
                 .map(GhidraFunctionMatchWithSignature::functionMatch)
                 .toList());
 
-    }
-
-    public void batchRenameGhidraMatches(List<GhidraFunctionMatch> functionsList) throws ApiException {
-        var matches = functionsList.stream()
-                .map(GhidraFunctionMatch::functionMatch)
-                .toList();
-        batchRenameMatches(matches);
     }
 
     public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {

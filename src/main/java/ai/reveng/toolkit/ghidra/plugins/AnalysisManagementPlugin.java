@@ -27,7 +27,6 @@ import ai.reveng.toolkit.ghidra.core.services.sync.AutoUnstripSyncService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.tasks.StartAnalysisTask;
-import docking.action.DockingAction;
 import docking.action.builder.ActionBuilder;
 import docking.widgets.OptionDialog;
 import ghidra.app.plugin.PluginCategoryNames;
@@ -75,15 +74,7 @@ import java.util.Objects;
 //@formatter:on
 public class AnalysisManagementPlugin extends ProgramPlugin {
 	private static final String REAI_ANALYSIS_MANAGEMENT_MENU_GROUP = "RevEng.AI Analysis Management";
-	private static final String REAI_PLUGIN_PORTAL_MENU_GROUP = "RevEng.AI Portal";
     private static final Logger log = LoggerFactory.getLogger(AnalysisManagementPlugin.class);
-
-    // Store references to actions that need to be refreshed
-    private DockingAction createNewAction;
-    private DockingAction attachToExistingAction;
-    private DockingAction detachAction;
-    private DockingAction checkStatusAction;
-    private DockingAction viewInPortalAction;
 
     private GhidraRevengService revengService;
 	private AnalysisLogComponent analysisLogComponent;
@@ -123,7 +114,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
 
 
-        createNewAction = new ActionBuilder("Create new", this.getName())
+        new ActionBuilder("Create new", this.getName())
                 .enabledWhen(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (currentProgram == null) {
@@ -169,7 +160,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)
                 .buildAndInstall(tool);
 
-		attachToExistingAction = new ActionBuilder("Attach to existing", this.toString())
+		new ActionBuilder("Attach to existing", this.toString())
 				.enabledWhen(c -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (currentProgram == null) {
@@ -190,7 +181,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.popupMenuIcon(ReaiPluginPackage.REVENG_16)
 				.buildAndInstall(tool);
 
-		detachAction = new ActionBuilder("Detach", this.toString())
+		new ActionBuilder("Detach", this.toString())
 				.enabledWhen(c -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (currentProgram == null) {
@@ -225,7 +216,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "300")
 				.buildAndInstall(tool);
 
-		checkStatusAction = new ActionBuilder("Check status", this.getName())
+		new ActionBuilder("Check status", this.getName())
 				.enabledWhen(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (currentProgram == null) {
@@ -259,7 +250,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
 				.buildAndInstall(tool);
 
-        viewInPortalAction = new ActionBuilder("View in portal", this.getName())
+        new ActionBuilder("View in portal", this.getName())
                 .enabledWhen(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     if (currentProgram == null) {

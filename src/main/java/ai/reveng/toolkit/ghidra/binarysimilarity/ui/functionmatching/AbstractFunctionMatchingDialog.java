@@ -714,13 +714,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         thresholdValueLabel = new JLabel("70%", SwingConstants.CENTER);
         thresholdValueLabel.setFont(thresholdValueLabel.getFont().deriveFont(Font.BOLD, 14f));
 
-        thresholdSlider.addChangeListener(e -> {
-            int value = thresholdSlider.getValue();
-            thresholdValueLabel.setText(value + "%");
-            if (!thresholdSlider.getValueIsAdjusting()) {
-                onThresholdChanged(value);
-            }
-        });
+        thresholdSlider.addChangeListener(e -> thresholdValueLabel.setText(thresholdSlider.getValue() + "%"));
 
         JPanel sliderPanel = new JPanel(new BorderLayout());
         sliderPanel.add(thresholdSlider, BorderLayout.CENTER);
@@ -742,16 +736,12 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         debugSymbolsCheckBox = new JCheckBox("Only include functions with debug symbols", false);
         debugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        debugSymbolsCheckBox.addActionListener(e -> {
-            boolean selected = debugSymbolsCheckBox.isSelected();
-            userSubmittedDebugSymbolsCheckBox.setVisible(selected);
-            onDebugSymbolsChanged(selected);
-        });
+        debugSymbolsCheckBox.addActionListener(
+                e -> userSubmittedDebugSymbolsCheckBox.setVisible(debugSymbolsCheckBox.isSelected()));
 
         userSubmittedDebugSymbolsCheckBox = new JCheckBox("Include user submitted debug symbols", false);
         userSubmittedDebugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         userSubmittedDebugSymbolsCheckBox.setVisible(false);
-        userSubmittedDebugSymbolsCheckBox.addActionListener(e -> onUserSubmittedDebugSymbolsChanged(userSubmittedDebugSymbolsCheckBox.isSelected()));
 
         JPanel indentedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         indentedPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -815,18 +805,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 .collect(Collectors.toSet());
 
         Msg.info(this, "Selected binaries: " + binaryNames + " (IDs: " + binaryIds + ")");
-    }
-
-    protected void onThresholdChanged(int threshold) {
-        Msg.info(this, "Threshold changed to: " + threshold);
-    }
-
-    protected void onDebugSymbolsChanged(boolean includeDebugSymbols) {
-        Msg.info(this, "Debug symbols filter changed to: " + includeDebugSymbols);
-    }
-
-    protected void onUserSubmittedDebugSymbolsChanged(boolean includeUserSubmittedDebugSymbols) {
-        Msg.info(this, "User submitted debug symbols filter changed to: " + includeUserSubmittedDebugSymbols);
     }
 
     protected void onFunctionFilterChanged() {

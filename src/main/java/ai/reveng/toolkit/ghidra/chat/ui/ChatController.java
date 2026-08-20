@@ -62,10 +62,6 @@ public class ChatController {
         this.callbacks = callbacks;
     }
 
-    public ChatState state() {
-        return state;
-    }
-
     public void send(String text) {
         String content = text == null ? "" : text.strip();
         if (content.isEmpty() || "running".equals(state.runStatus())) {

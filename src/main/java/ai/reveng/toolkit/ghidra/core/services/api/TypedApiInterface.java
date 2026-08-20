@@ -92,11 +92,6 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionSignatureHistory not implemented yet");
     }
 
-    default AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        throw new UnsupportedOperationException("getInfoForAnalysis not implemented yet");
-    }
-
-
     default boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         throw new UnsupportedOperationException("triggerAIDecompilationForFunctionID not implemented yet");
     }

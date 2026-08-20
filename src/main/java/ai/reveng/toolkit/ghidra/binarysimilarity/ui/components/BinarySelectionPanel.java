@@ -24,13 +24,6 @@ public class BinarySelectionPanel extends ItemSelectionPanel {
     }
 
     /**
-     * Gets the currently selected binaries
-     */
-    public Set<SelectableItem> getSelectedBinaries() {
-        return getSelectedItems();
-    }
-
-    /**
      * Gets the IDs of currently selected binaries
      */
     public Set<Integer> getSelectedBinaryIds() {
@@ -42,13 +35,6 @@ public class BinarySelectionPanel extends ItemSelectionPanel {
      */
     public Set<String> getSelectedBinaryNames() {
         return getSelectedItemNames();
-    }
-
-    /**
-     * Sets the selected binaries
-     */
-    public void setSelectedBinaries(Set<SelectableItem> binaries) {
-        setSelectedItems(binaries);
     }
 
     /**

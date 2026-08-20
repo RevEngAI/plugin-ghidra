@@ -258,14 +258,6 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
     }
 
     /**
-     * Called when the program is not analyzed with RevEng.AI
-     */
-    public void onNoAnalyzedProgram() {
-        clear();
-        statusLabel.setText("Binary not analyzed with RevEng.AI");
-    }
-
-    /**
      * Called when the cursor is not within a function
      */
     public void onNoFunction() {

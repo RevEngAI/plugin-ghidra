@@ -82,10 +82,6 @@ public final class AnalysisDataTypesService {
             return Optional.ofNullable(byId.get(dataTypeId));
         }
 
-        public Collection<ServerDataType> all() {
-            return byId.values();
-        }
-
         public int size() {
             return byId.size();
         }
