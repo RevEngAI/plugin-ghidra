@@ -10,4 +10,6 @@ If a generated SDK model rejects a live response (e.g. strict validation throwin
 
 ## Dependencies in the built extension
 
-Runtime dependencies are copied into `lib/` and bundled into the extension zip. `lib/` is gitignored. The copy step does not prune old versions, so after bumping a dependency delete the previous jar from `lib/` before rebuilding — otherwise the zip ships two versions and the classloader may load the stale one.
+Runtime dependencies are copied into `lib/` by Ghidra's `copyDependencies` task, put on the compile classpath, and bundled into the extension zip. The jars themselves are gitignored.
+
+`copyDependencies` never removes anything, so `build.gradle` registers a `pruneStaleJars` task that deletes `lib/*.jar` and runs before it. Every build therefore starts from an empty `lib/` and ships exactly the jars that resolved; bumping or dropping a dependency needs no manual cleanup.
