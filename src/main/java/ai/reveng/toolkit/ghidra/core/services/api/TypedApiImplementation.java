@@ -43,6 +43,9 @@ public class TypedApiImplementation implements TypedApiInterface {
     /// /v3/analyses caps page_size at 50 and pages forward with an opaque token.
     private static final long ANALYSIS_LIST_PAGE_SIZE = 50;
 
+    /// The maximum the v3 function-list endpoint accepts; a larger value is rejected with a 422.
+    private static final long FUNCTION_LIST_PAGE_SIZE = 500;
+
     /// Omitting analysis_scope makes the server default to PRIVATE only.
     private static final List<String> ALL_ANALYSIS_SCOPES = List.of("PRIVATE", "TEAM", "PUBLIC");
 
@@ -168,7 +171,7 @@ public class TypedApiImplementation implements TypedApiInterface {
      */
     @Override
     public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
-        long limit = 1000;
+        long limit = FUNCTION_LIST_PAGE_SIZE;
         List<FunctionInfo> functions = new ArrayList<>();
         long offset = 0;
         while (true) {
@@ -176,7 +179,8 @@ public class TypedApiImplementation implements TypedApiInterface {
             try {
                 response = this.functionsCoreApi.listAnalysisFunctions((long) analysisID.id(), offset, limit);
             } catch (ApiException e) {
-                throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+                throw new RuntimeException(
+                        "Could not list functions for analysis " + analysisID.id() + ": " + describeApiException(e), e);
             }
 
             var page = response.getFunctions();

@@ -50,7 +50,7 @@ public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
         assertEquals("every page should be combined, in order",
                 List.of(10L, 11L, 12L), idsOf(functions));
         assertEquals("offset should advance by the entries actually returned",
-                List.of("offset=0&limit=1000", "offset=2&limit=1000"), requestedQueries);
+                List.of("offset=0&limit=500", "offset=2&limit=500"), requestedQueries);
     }
 
     /**
@@ -66,7 +66,7 @@ public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
         assertEquals("every page should be combined, in order",
                 List.of(10L, 11L, 12L, 13L), idsOf(functions));
         assertEquals("a full final page should not trigger another request",
-                List.of("offset=0&limit=1000", "offset=2&limit=1000"), requestedQueries);
+                List.of("offset=0&limit=500", "offset=2&limit=500"), requestedQueries);
     }
 
     /** An analysis with no functions still answers 200, with an empty list and a zero count. */
@@ -78,7 +78,7 @@ public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
 
         assertEquals(List.of(), idsOf(functions));
         assertEquals("a single request is enough to learn the analysis is empty",
-                List.of("offset=0&limit=1000"), requestedQueries);
+                List.of("offset=0&limit=500"), requestedQueries);
     }
 
     /** mangled_name is optional on the v3 entry; callers rely on the plugin type carrying one. */
