@@ -284,10 +284,11 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	private static String formatSyncSummary(GhidraRevengService.SyncSummary summary) {
 		return ("Synced %d matched function(s) with the portal.\n" +
-				"Applied %d remote name(s); canonicalized %d and de-duplicated %d.\n" +
+				"Applied %d remote name(s) and %d remote signature(s); canonicalized %d and de-duplicated %d.\n" +
 				"Pushed %d name(s) and %d type set(s) back to the portal.").formatted(
 				summary.matchedFunctions(),
 				summary.namesModifiedRemotely(),
+				summary.appliedSignatures(),
 				summary.canonicalizedNames(),
 				summary.dedupedNames(),
 				summary.pushedNames(),

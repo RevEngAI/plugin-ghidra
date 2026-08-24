@@ -231,9 +231,20 @@ public class LocalEditSyncService {
     private void pushTypes(Program program, Address entryPoint) {
         withAnalysedFunction(program, entryPoint, (analysedProgram, function) -> {
             try {
-                if (revengService.pushFunctionTypes(analysedProgram, function)) {
-                    loggingService.info("Pushed types for function \"%s\" at %s to the RevEng.AI portal"
-                            .formatted(function.getName(), entryPoint));
+                switch (revengService.pushFunctionTypes(analysedProgram, function)) {
+                    case SIGNATURE_WRITTEN -> loggingService.info(
+                            "Pushed types for function \"%s\" at %s to the RevEng.AI portal"
+                                    .formatted(function.getName(), entryPoint));
+                    // The data types did reach the portal; only the signature had nothing to update.
+                    // Saying so matters, because otherwise editing a type on a function the portal
+                    // never extracted a signature for looks like it did nothing at all.
+                    case TYPES_ONLY -> loggingService.info(
+                            ("Pushed the data types for function \"%s\" at %s; the portal holds no extracted "
+                                    + "signature for it, so its signature was left unchanged")
+                                    .formatted(function.getName(), entryPoint));
+                    case NOT_MATCHED -> {
+                        // Not part of the analysis, so there was nothing to push.
+                    }
                 }
             } catch (ApiException e) {
                 Msg.warn(this, "Failed to push types for %s to portal".formatted(function.getName()), e);

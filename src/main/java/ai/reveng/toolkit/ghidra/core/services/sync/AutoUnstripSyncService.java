@@ -121,8 +121,10 @@ public class AutoUnstripSyncService {
         announce("RevEng.AI: auto-unstrip finished; syncing recovered function names and data types…", false);
         try {
             var summary = revengService.syncAnalysisUpdates(analysedProgram, TaskMonitor.DUMMY, loggingService);
-            announce("RevEng.AI: auto-unstrip sync applied %d recovered names and pushed %d local type sets."
-                    .formatted(summary.namesModifiedRemotely(), summary.pushedTypeSets()), false);
+            announce(("RevEng.AI: auto-unstrip sync applied %d recovered name(s) and %d signature(s), "
+                    + "and pushed %d local type set(s).")
+                    .formatted(summary.namesModifiedRemotely(), summary.appliedSignatures(),
+                            summary.pushedTypeSets()), false);
         } catch (Exception e) {
             Msg.warn(this, "Failed to sync analysis after auto-unstrip", e);
             announce("RevEng.AI: failed to sync analysis after auto-unstrip: " + e.getMessage(), true);

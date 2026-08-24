@@ -14,6 +14,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
+import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.cmd.function.SetFunctionNameCmd;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
@@ -320,9 +321,31 @@ public class GhidraRevengService {
         return String.join(Namespace.DELIMITER, parts);
     }
 
+    /// What a push achieved for one function.
+    ///
+    /// The data types and the signature go up in separate requests, and the second one legitimately
+    /// does nothing: the portal answers a signature write for a function it never extracted a
+    /// signature for with a 404. Collapsing that into a boolean reported the whole push as failed
+    /// and hid the types that *were* written, which makes a local type edit look like a no-op.
+    public enum TypePushOutcome {
+        /// The function is not part of the analysis, so nothing was sent.
+        NOT_MATCHED,
+        /// The data types were written; the portal holds no extracted signature to update.
+        TYPES_ONLY,
+        /// The data types and the function's signature were both written.
+        SIGNATURE_WRITTEN
+    }
+
     /// Push the local signature and variables of a function back to the portal.
-    public boolean pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
-        return pushFunctionTypes(analysedProgram, List.of(function)) > 0;
+    public TypePushOutcome pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
+        if (analysedProgram.getIDForFunction(function).isEmpty()) {
+            return TypePushOutcome.NOT_MATCHED;
+        }
+        // The function is known to the analysis, so the type pass below ran for it; only the
+        // signature write can still decline.
+        return pushFunctionTypes(analysedProgram, List.of(function)) > 0
+                ? TypePushOutcome.SIGNATURE_WRITTEN
+                : TypePushOutcome.TYPES_ONLY;
     }
 
     /// Push the local signatures of several functions, and answer with how many the server took.
@@ -360,6 +383,7 @@ public class GhidraRevengService {
     public record SyncSummary(
             int matchedFunctions,
             int namesModifiedRemotely,
+            int appliedSignatures,
             int canonicalizedNames,
             int dedupedNames,
             int pushedNames,
@@ -373,9 +397,11 @@ public class GhidraRevengService {
     ///
     /// Names: applies remote names locally where the local name is not user-defined, canonicalising
     /// names Ghidra rejects (via the portal canonify endpoint) and de-duplicating names already used
-    /// this run; corrected names are pushed back to the portal. Types: pushes local types for matched
-    /// functions whose remote types are absent or could not be applied. Mirrors the IDA plugin's
-    /// {@code analysis_sync.py}.
+    /// this run; corrected names are pushed back to the portal. Signatures: applies the portal's
+    /// signature, and the data types it names, to every matched function whose local signature the
+    /// analyst did not write by hand — see {@link #applyRemoteSignatures}. Types: pushes local types
+    /// for matched functions whose remote types are absent or could not be applied. Mirrors the IDA
+    /// plugin's {@code analysis_sync.py}.
     public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         pushbackSuppressed.set(true);
         try {
@@ -483,12 +509,105 @@ public class GhidraRevengService {
         if (pushedNames > 0) {
             log.info("Pushed %d corrected function name(s) back to the RevEng.AI portal".formatted(pushedNames));
         }
+        // Pull before pushing, so the back-fill below sees the signatures this sync just applied and
+        // does not send the local placeholder back up for a function the portal already described.
+        int appliedSignatures = applyRemoteSignatures(analysedProgram, monitor, log);
         int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor, log);
 
-        log.info(("Sync complete: %d matched, %d name(s) applied, %d canonicalized, %d de-duplicated, "
-                + "%d name(s) and %d type set(s) pushed back")
-                .formatted(matched, namesModifiedRemotely, canonicalizedNames, deduped, pushedNames, pushedTypeSets));
-        return new SyncSummary(matched, namesModifiedRemotely, canonicalizedNames, deduped, pushedNames, pushedTypeSets);
+        log.info(("Sync complete: %d matched, %d name(s) applied, %d signature(s) applied, %d canonicalized, "
+                + "%d de-duplicated, %d name(s) and %d type set(s) pushed back")
+                .formatted(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
+                        pushedNames, pushedTypeSets));
+        return new SyncSummary(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
+                pushedNames, pushedTypeSets);
+    }
+
+    /// Apply the signatures — and with them the data types they name — that the portal holds for this
+    /// analysis' functions, and answer with how many landed.
+    ///
+    /// Names are deliberately left alone. {@link #syncAnalysisUpdatesInternal} owns that decision,
+    /// including canonicalising names Ghidra rejects and de-duplicating the ones it has already
+    /// applied this run, so the command is given {@link FunctionRenameOption#NO_CHANGE} and nothing
+    /// here competes with it.
+    ///
+    /// A signature is applied unless the analyst wrote the local one by hand; anything Ghidra's own
+    /// analysis inferred is fair game. That is also what makes a second sync useful: an earlier pull
+    /// stamps {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the
+    /// first into a no-op.
+    private int applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) {
+        var functionMap = analysedProgram.getFunctionMap();
+        if (functionMap.isEmpty()) {
+            return 0;
+        }
+        var batch = signatures().getMany(List.copyOf(functionMap.keySet()));
+        Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
+        var program = analysedProgram.program();
+        int applied = 0;
+        var transactionId = program.startTransaction("RevEng.AI: Apply Portal Signatures");
+        try {
+            for (BatchFunctionSignatureEntry entry : batch.items()) {
+                if (monitor.isCancelled()) {
+                    break;
+                }
+                if (!Boolean.TRUE.equals(entry.getHasSignature())) {
+                    continue;
+                }
+                var function = functionMap.get(new TypedApiInterface.FunctionID(entry.getFunctionId()));
+                if (function == null || function.isExternal() || function.isThunk()
+                        || function.getSignatureSource() == SourceType.USER_DEFINED) {
+                    continue;
+                }
+                var signature = getFunctionSignature(entry, decoderFor(decoders, batch, entry));
+                // The portal derives a signature for every function when the analysis completes, so
+                // most of them match what is already on the function. Applying those regardless would
+                // churn the type manager and fill the undo history on every sync.
+                if (function.getSignature().isEquivalentSignature(signature)) {
+                    continue;
+                }
+                var application = applyRemoteSignature(program, function, signature, monitor,
+                        FunctionRenameOption.NO_CHANGE);
+                if (application.success()) {
+                    applied++;
+                    log.info("Applied the portal's signature for \"%s\" at %s"
+                            .formatted(function.getName(), function.getEntryPoint()));
+                } else {
+                    Msg.warn(this, "Failed to apply the portal's signature for %s: %s"
+                            .formatted(function.getName(), application.status()));
+                }
+            }
+        } finally {
+            program.endTransaction(transactionId, applied > 0 && !monitor.isCancelled());
+        }
+        return applied;
+    }
+
+    /// Apply one server-sourced signature to a function.
+    ///
+    /// The conflict handler is the load-bearing argument. Ghidra's default keeps the local type and
+    /// files the incoming one beside it as `<name>.conflict`, so a type edited in the portal would
+    /// gather a fresh copy locally on every pull; {@link DataTypeConflictHandler#REPLACE_HANDLER}
+    /// updates the local type in place instead. The calling convention is preserved because a server
+    /// signature carries none — see {@link ServerDataTypeDecoder#signature} — and applying an absent
+    /// convention would discard whatever Ghidra had worked out.
+    /// @param success whether the signature landed
+    /// @param status  the command's own account of why it did not, for the log
+    private record SignatureApplication(boolean success, String status) {}
+
+    private static SignatureApplication applyRemoteSignature(Program program, Function function,
+                                                             FunctionDefinitionDataType signature,
+                                                             TaskMonitor monitor,
+                                                             FunctionRenameOption renameOption) {
+        var command = new ApplyFunctionSignatureCmd(
+                function.getEntryPoint(),
+                signature,
+                SourceType.ANALYSIS,
+                true,
+                false,
+                DataTypeConflictHandler.REPLACE_HANDLER,
+                renameOption
+        );
+        boolean success = command.applyTo(program, monitor);
+        return new SignatureApplication(success, success ? "" : String.valueOf(command.getStatusMsg()));
     }
 
     private int pushNameBacks(List<PendingNamePush> namePushbacks) throws ApiException {
@@ -689,61 +808,52 @@ public class GhidraRevengService {
             /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
             /// USER_DEFINED: A name or signature explicitly set by the analyst.
             /// See {@link ghidra.program.model.symbol.SourceType} for more details
-            if (function.getSymbol().getSource() == SourceType.DEFAULT) {
-                if (functionSignatureMessageOpt.isEmpty()) {
-                    // We don't have signature information for this function, so we can only try renaming it.
-                    // Skip server-side default names — Ghidra's own "FUN_" and IDA's "sub_" — so we never
-                    // overwrite Ghidra's default placeholder with an IDA-style one.
-                    if (function.getSymbol().getSource() == SourceType.DEFAULT
-                            && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")) {
-                        // The local function has the default name, so we can rename it
-                        // The following check should never fail because it is a default name,
-                        // and we checked above that the server name is not a default name
-                        // but just to be safe and make that assumption explicit we check it explicitly
-                        if (!function.getSymbol().getName(false).equals(revEngDemangledName)) {
-                            Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                            try {
-                                function.setParentNamespace(revEngNamespace);
-                            } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
-                                throw new RuntimeException(e);
-                            }
-                            var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
-                                    .applyTo(analysedProgram.program());
-                            if (success) {
-                                renameResults.add(new RenameResult(
-                                        function,
-                                        ghidraMangledName,
-                                        revEngDemangledName
-                                ));
-                            } else {
-                                failedRenames++;
-                                Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                            }
-                        }
+            // The name and the signature are separate decisions. Gating the signature on the name
+            // source hid every type the portal held for a function that was already named — by the
+            // analyst, or by an earlier run of this same pull — and the signature apply is what
+            // carries the data types down.
+            if (functionSignatureMessageOpt.isEmpty()) {
+                // No signature to apply, so a rename is all that is left. Skip server-side default
+                // names — Ghidra's own "FUN_" and IDA's "sub_" — so we never overwrite Ghidra's
+                // default placeholder with an IDA-style one.
+                if (function.getSymbol().getSource() == SourceType.DEFAULT
+                        && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")
+                        && !function.getSymbol().getName(false).equals(revEngDemangledName)) {
+                    Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                    try {
+                        function.setParentNamespace(revEngNamespace);
+                    } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+                        throw new RuntimeException(e);
                     }
-
+                    var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
+                            .applyTo(analysedProgram.program());
+                    if (success) {
+                        renameResults.add(new RenameResult(
+                                function,
+                                ghidraMangledName,
+                                revEngDemangledName
+                        ));
+                    } else {
+                        failedRenames++;
+                        Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                    }
+                }
+            } else if (function.getSignatureSource() != SourceType.USER_DEFINED) {
+                // RENAME_IF_DEFAULT preserves the long-standing behaviour that applying a signature
+                // also names a function still carrying Ghidra's placeholder, and leaves every other
+                // name alone.
+                var application = applyRemoteSignature(analysedProgram.program(), function,
+                        functionSignatureMessageOpt.get(), monitor, FunctionRenameOption.RENAME_IF_DEFAULT);
+                // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
+                if (application.success()) {
+                    renameResults.add(new RenameResult(
+                            function,
+                            ghidraMangledName,
+                            revEngDemangledName
+                    ));
                 } else {
-                    /// We could use {@link ghidra.program.model.listing.FunctionSignature#isEquivalentSignature(FunctionSignature)}
-                    /// if we expect the server to have changing signatures at any point in time.
-                    /// For now, we only apply signatures to functions that have the default signature
-                    if (function.getSignatureSource() == SourceType.DEFAULT) {
-                        var success = new ApplyFunctionSignatureCmd(
-                                function.getEntryPoint(),
-                                functionSignatureMessageOpt.get(),
-                                SourceType.ANALYSIS
-                        ).applyTo(analysedProgram.program(), monitor);
-                        // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
-                        if (success) {
-                            renameResults.add(new RenameResult(
-                                    function,
-                                    ghidraMangledName,
-                                    revEngDemangledName
-                            ));
-                        } else {
-                            Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
-                            failedRenames++;
-                        }
-                    }
+                    Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
+                    failedRenames++;
                 }
             }
 

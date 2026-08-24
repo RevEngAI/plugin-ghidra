@@ -37,7 +37,7 @@ and use it for Binary Code Similarity to help you Reverse Engineer stripped bina
 * A Similar Functions window that follows the cursor and diffs the selected function against each match
 * AI Decompilation, with a natural language explanation of what the function does
 * Agent Chat: ask the RevEng.AI agent about the current binary and let it rename and re-type functions
-* Sync With Portal: push local renames and type edits up to the portal and pull remote changes back down
+* Sync With Portal: apply the names, function signatures and data types the portal holds for your analysis, and push local renames back up. Local type and signature edits go up on their own as you make them
 * Automatic sync of the names and data types recovered by the server-side auto-unstrip pass
 
 ## Installation
