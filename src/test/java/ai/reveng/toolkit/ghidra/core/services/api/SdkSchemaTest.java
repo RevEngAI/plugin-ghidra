@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 
 public class SdkSchemaTest {
 
-    private static final int[] PINNED = {3, 123, 0};
+    private static final int[] PINNED = {4, 4, 0};
 
     @Test
     public void installedSdkIsAtLeastPinned() {

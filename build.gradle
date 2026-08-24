@@ -69,7 +69,7 @@ dependencies {
 	implementation group: 'com.fifesoft', name: 'rsyntaxtextarea', version: '3.5.2'
 	implementation 'org.commonmark:commonmark:0.24.0'
 	implementation 'org.commonmark:commonmark-ext-gfm-tables:0.24.0'
-    implementation('ai.reveng:sdk:3.123.0')
+    implementation('ai.reveng:sdk:4.4.0')
 	testImplementation('junit:junit:4.13.1')
 	testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.8.2")
 	// Version comes from the junit-bom pulled in by junit-vintage-engine.
