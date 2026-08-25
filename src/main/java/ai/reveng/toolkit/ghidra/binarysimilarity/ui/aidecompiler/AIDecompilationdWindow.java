@@ -30,7 +30,6 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
 import javax.swing.text.BadLocationException;
-import javax.swing.text.Utilities;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -541,10 +540,32 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     private String wordAtOffset(int offset) throws BadLocationException {
-        int start = Utilities.getWordStart(textArea, offset);
-        int end = Utilities.getWordEnd(textArea, offset);
-        String word = textArea.getText(start, end - start);
-        return IDENTIFIER.matcher(word).matches() ? word : null;
+        int line = textArea.getLineOfOffset(offset);
+        int lineStart = textArea.getLineStartOffset(line);
+        String text = textArea.getText(lineStart, textArea.getLineEndOffset(line) - lineStart);
+        return identifierAt(text, offset - lineStart);
+    }
+
+    /**
+     * The identifier in {@code line} spanning {@code index}, or null when that position is not inside
+     * one.
+     *
+     * <p>Scanned with the same pattern the tokenised text is split into identifiers with, rather than
+     * through {@code Utilities.getWordStart}/{@code getWordEnd}. Swing breaks a word at an underscore,
+     * so double-clicking {@code param_1} yielded {@code param} — a word that appears on no line of the
+     * decompilation, so the rename declined and every name carrying an underscore was unreachable.
+     */
+    static String identifierAt(String line, int index) {
+        if (line == null || index < 0) {
+            return null;
+        }
+        Matcher matcher = IDENTIFIER.matcher(line);
+        while (matcher.find()) {
+            if (index >= matcher.start() && index <= matcher.end()) {
+                return matcher.group();
+            }
+        }
+        return null;
     }
 
     /// Say why a rename is not on offer, in the log and to the analyst. The reason is worth writing

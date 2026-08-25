@@ -19,6 +19,45 @@ import static org.junit.Assert.assertTrue;
  */
 public class AIDecompTokenResolutionTest {
 
+    /// A double-click has to yield the whole identifier. Swing's word iterator breaks at an
+    /// underscore, so it answered "param" for "param_1" — a word on no line of the decompilation, so
+    /// the rename declined and every name carrying an underscore was unreachable.
+    @Test
+    public void identifierAt_takesTheWholeIdentifierIncludingUnderscores() {
+        String line = "    int param_1,";
+
+        assertEquals("param_1", AIDecompilationdWindow.identifierAt(line, 8));  // first character
+        assertEquals("param_1", AIDecompilationdWindow.identifierAt(line, 11)); // inside
+        assertEquals("param_1", AIDecompilationdWindow.identifierAt(line, 13)); // the underscore
+        assertEquals("param_1", AIDecompilationdWindow.identifierAt(line, 14)); // the digit
+        assertEquals("int", AIDecompilationdWindow.identifierAt(line, 5));
+    }
+
+    @Test
+    public void identifierAt_handlesALeadingUnderscoreRun() {
+        String line = "    return f(__rustc_debug_gdb_scripts_section__, 0);";
+
+        assertEquals("__rustc_debug_gdb_scripts_section__",
+                AIDecompilationdWindow.identifierAt(line, 20));
+    }
+
+    /// The identifier stops where the rendered name's punctuation begins, which is what makes
+    /// "lang_start<()>" reachable by its identifier alone.
+    @Test
+    public void identifierAt_stopsAtPunctuation() {
+        String line = "    return lang_start<()>(main, 0);";
+
+        assertEquals("lang_start", AIDecompilationdWindow.identifierAt(line, 13));
+        assertEquals("main", AIDecompilationdWindow.identifierAt(line, 26));
+    }
+
+    @Test
+    public void identifierAt_returnsNullOffAnIdentifier() {
+        assertNull(AIDecompilationdWindow.identifierAt("        ", 3));
+        assertNull(AIDecompilationdWindow.identifierAt("    int x;", -1));
+        assertNull(AIDecompilationdWindow.identifierAt(null, 0));
+    }
+
     @Test
     public void indexOfIdentifier_returnsPositionAmongIdentifiers() {
         String line = "int result = compute(value);";
