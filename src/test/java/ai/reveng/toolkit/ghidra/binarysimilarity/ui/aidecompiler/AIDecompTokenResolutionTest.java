@@ -149,6 +149,79 @@ public class AIDecompTokenResolutionTest {
         assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
     }
 
+    /// A real document from the tokens endpoint: a Rust `main`, with two parameters, an invented type
+    /// name, the function itself, and two called functions. Every identifier the analyst can
+    /// double-click in it is accounted for here.
+    private static GetTokensResponse rustMainTokens() {
+        var data = new GetTokensResponse();
+        data.setAiDecomp("int\n_FUNC0_(\n    int _PARAM0_,\n    _TYPE0_ *_PARAM1_\n)\n{\n"
+                + "    return _FCN0_(_FCN1_, __rustc_debug_gdb_scripts_section__, _PARAM0_, _PARAM1_, 0);\n}");
+        var rendered = new LinkedHashMap<String, RenderedToken>();
+        rendered.put("_FCN0_", new RenderedToken().value("lang_start<()>").functionId(1380166L));
+        rendered.put("_FCN1_", new RenderedToken().value("main").functionId(1380659L));
+        rendered.put("_FUNC0_", new RenderedToken().value("main").functionId(1380664L));
+        rendered.put("_PARAM0_", new RenderedToken().value("param_1"));
+        rendered.put("_PARAM1_", new RenderedToken().value("param_2"));
+        rendered.put("_TYPE0_", new RenderedToken().value("Type_1"));
+        data.setPlaceholderToRenderedToken(rendered);
+        return data;
+    }
+
+    /// The parameter is the case that has to work: "    int param_1," is the third line of the
+    /// decompilation, and "param_1" is the second identifier on it.
+    @Test
+    public void realDocument_resolvesAndAllowsAParameter() {
+        var tokens = rustMainTokens();
+
+        assertEquals("_PARAM0_", AIDecompilationdWindow.resolveToken(tokens, 2, 1, "param_1"));
+        assertTrue("a parameter carries no id, so the override owns its name",
+                AIDecompilationdWindow.isRenameable(tokens, "_PARAM0_"));
+
+        // And from the body: "return" is an identifier too, so on
+        // "return lang_start<()>(main, __rustc..., param_1, param_2, 0)" param_1 is the fifth.
+        assertEquals("_PARAM0_", AIDecompilationdWindow.resolveToken(tokens, 6, 4, "param_1"));
+    }
+
+    /// The type name the decompilation invented has no data_type_id, so it is renameable too.
+    @Test
+    public void realDocument_resolvesAndAllowsAnInventedTypeName() {
+        var tokens = rustMainTokens();
+
+        assertEquals("_TYPE0_", AIDecompilationdWindow.resolveToken(tokens, 3, 0, "Type_1"));
+        assertTrue(AIDecompilationdWindow.isRenameable(tokens, "_TYPE0_"));
+    }
+
+    /// A called function resolves, and is then refused: this is the token that produced the 400.
+    @Test
+    public void realDocument_refusesACalledFunction() {
+        var tokens = rustMainTokens();
+
+        assertEquals("_FCN0_", AIDecompilationdWindow.resolveToken(tokens, 6, 1, "lang_start"));
+        assertFalse("it carries a function_id, so it is renamed on the function",
+                AIDecompilationdWindow.isRenameable(tokens, "_FCN0_"));
+    }
+
+    /// Two tokens render as "main" — the function itself and a call to it — so the position on the
+    /// line is what tells them apart, and it is consulted before the ambiguity check. Either way the
+    /// gate then refuses both, because a function is renamed on the function.
+    @Test
+    public void realDocument_distinguishesTheFunctionFromTheCallToItByPosition() {
+        var tokens = rustMainTokens();
+
+        assertEquals("the signature line names the function itself",
+                "_FUNC0_", AIDecompilationdWindow.resolveToken(tokens, 1, 0, "main"));
+        assertEquals("the call in the body names the callee",
+                "_FCN1_", AIDecompilationdWindow.resolveToken(tokens, 6, 2, "main"));
+        assertFalse(AIDecompilationdWindow.isRenameable(tokens, "_FUNC0_"));
+        assertFalse(AIDecompilationdWindow.isRenameable(tokens, "_FCN1_"));
+    }
+
+    /// A keyword is no token at all, and nothing is invented for it.
+    @Test
+    public void realDocument_declinesAKeyword() {
+        assertNull(AIDecompilationdWindow.resolveToken(rustMainTokens(), 2, 0, "int"));
+    }
+
     /// A token with no id is a name the decompilation invented — a parameter, a local — and the
     /// override endpoint is the only place it exists.
     @Test

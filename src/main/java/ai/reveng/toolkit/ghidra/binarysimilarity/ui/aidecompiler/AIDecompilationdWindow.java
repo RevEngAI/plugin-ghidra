@@ -547,26 +547,51 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         return IDENTIFIER.matcher(word).matches() ? word : null;
     }
 
+    /// Say why a rename is not on offer, in the log and to the analyst. The reason is worth writing
+    /// down: it names which step declined, which is otherwise invisible.
+    private void declineRename(String word, String reason) {
+        String message = "'%s' cannot be renamed here: %s.".formatted(word, reason);
+        var logger = tool.getService(ReaiLoggingService.class);
+        if (logger != null) {
+            logger.info(message);
+        }
+        SwingUtilities.invokeLater(() ->
+                Msg.showInfo(AIDecompilationdWindow.this, component, "Rename", message));
+    }
+
     private void handleRename(int displayLine, String word) {
         RenderModel model = currentRenderModel;
         Function target = this.function;
-        if (model == null || target == null || word == null || word.isBlank()) {
+        if (word == null || word.isBlank()) {
+            // Not an identifier — a double-click on whitespace or punctuation. Nothing to say.
+            return;
+        }
+        // Every exit below used to be silent, so double-clicking a name that the render model could
+        // not place did nothing at all: no dialog, no message, no log. That is indistinguishable
+        // from the feature being broken, which is how it was reported.
+        if (model == null || target == null) {
+            declineRename(word, "there is no decompilation on screen to rename in");
             return;
         }
         if (!model.isCodeLine(displayLine)) {
+            declineRename(word, "line %d is a comment, not code".formatted(displayLine + 1));
             return;
         }
         Integer sourceLine = model.sourceLine(displayLine);
-        if (sourceLine == null) {
+        if (sourceLine == null || sourceLine < 1 || sourceLine > model.codeLines.size()) {
+            declineRename(word, "display line %d does not map onto the decompilation"
+                    .formatted(displayLine + 1));
             return;
         }
         String codeLine = model.codeLines.get(sourceLine - 1);
         int identIndex = indexOfIdentifier(codeLine, word);
         if (identIndex < 0) {
+            declineRename(word, "it is not on source line %d (\"%s\")".formatted(sourceLine, codeLine));
             return;
         }
         FunctionID functionID = resolveFunctionId(target);
         if (functionID == null) {
+            declineRename(word, "%s is not a function RevEng.AI knows".formatted(target.getName()));
             return;
         }
 
@@ -589,15 +614,12 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                     GetTokensResponse tokenValues = service.getApi().getAIDecompilationTokens(functionID);
                     String token = resolveToken(tokenValues, sourceIndex, identIndex, word);
                     if (token == null) {
-                        SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
-                                "Rename", "'%s' is not a renameable variable or type.".formatted(word)));
+                        declineRename(word, "the decompilation carries no token for it");
                         return;
                     }
                     if (!isRenameable(tokenValues, token)) {
-                        SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
-                                "Rename", ("'%s' is a data type or a function, not a name this decompilation "
-                                        + "owns. Rename it on the type or the function itself and the new "
-                                        + "name comes back here.").formatted(word)));
+                        declineRename(word, "it is a data type or a function, which is renamed on the type "
+                                + "or the function itself rather than here");
                         return;
                     }
                     service.getApi().applyAIDecompilationOverrides(functionID, Map.of(token, newName));
@@ -746,7 +768,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             var tokenIdentifiers = identifiers(tokenisedLines[sourceIndex]);
             if (identIndex >= 0 && identIndex < tokenIdentifiers.size()) {
                 String candidate = tokenIdentifiers.get(identIndex);
-                if (oldIdent.equals(effectiveValues.get(candidate))) {
+                if (namesToken(oldIdent, effectiveValues.get(candidate))) {
                     return candidate;
                 }
             }
@@ -754,7 +776,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
         String uniqueMatch = null;
         for (var entry : effectiveValues.entrySet()) {
-            if (oldIdent.equals(entry.getValue())) {
+            if (namesToken(oldIdent, entry.getValue())) {
                 if (uniqueMatch != null) {
                     return null;
                 }
@@ -762,6 +784,19 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             }
         }
         return uniqueMatch;
+    }
+
+    /**
+     * Whether a double-clicked identifier names the token rendered as {@code renderedValue}.
+     *
+     * <p>A rendered value is not always a bare identifier: a Rust generic renders as
+     * {@code lang_start<()>} and a C++ method as {@code Foo::bar}, while a double-click yields only
+     * the identifier under the cursor. Comparing the two directly never matched, which put every such
+     * token permanently out of reach of a rename, so the identifiers within the value count too.
+     */
+    private static boolean namesToken(String oldIdent, String renderedValue) {
+        return renderedValue != null
+                && (oldIdent.equals(renderedValue) || identifiers(renderedValue).contains(oldIdent));
     }
 
     /**
