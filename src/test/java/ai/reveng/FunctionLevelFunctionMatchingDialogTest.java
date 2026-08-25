@@ -12,6 +12,7 @@ import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
@@ -235,6 +236,17 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         // Verify the API was actually called
         assertTrue("Function matching API should have been called", mockApi.functionMatchingCalled);
+
+        // Once the results are in, the status must say so. Nothing used to write to the label after
+        // "Loading type information...", so a completed match looked exactly like a stuck one.
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        waitForCondition(() -> !statusLabel.getText().contains("Loading"),
+                "Status label should stop saying it is loading once matching has finished");
+        assertTrue("The finished status should report the matches, was: " + statusLabel.getText(),
+                statusLabel.getText().contains("Matching complete"));
+        TaskMonitorComponent monitor =
+                (TaskMonitorComponent) getInstanceField("taskMonitorComponent", foundDialog);
+        assertFalse("The progress bar should not be left spinning", monitor.isVisible());
 
         // Close the dialog
         close(foundDialog);

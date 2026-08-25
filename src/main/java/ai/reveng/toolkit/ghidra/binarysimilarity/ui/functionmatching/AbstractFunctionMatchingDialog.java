@@ -132,7 +132,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                             ? progress.errorMessage()
                             : "Function matching returned an error status";
                     SwingUtilities.invokeLater(() -> {
-                        taskMonitorComponent.setVisible(false);
+                        statusLabel.setText("Function matching failed");
                         handleError(errorMsg);
                     });
                     return;
@@ -155,15 +155,27 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             var matches = fetchMatches();
             if (matchingCancelled) return;
             processFunctionMatchingResults(matches);
-            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
+            // The status label is the only thing that says what this dialog is doing, and nothing
+            // used to write to it again after the "Loading type information..." above. The work
+            // finished, the bar went away, and the label sat there claiming to still be loading —
+            // indistinguishable from a request that never returned.
+            SwingUtilities.invokeLater(() -> statusLabel.setText(
+                    "Matching complete: %d match(es)".formatted(functionMatchResults.size())));
         } catch (InterruptedException e) {
             // matching was cancelled, nothing to report
-        } catch (Exception e) {
+        } catch (Throwable t) {
+            // Throwable rather than Exception: an Error thrown in here — a clash between a bundled
+            // jar and Ghidra's own, or a large binary's type closure exhausting the heap — killed
+            // this thread without a word and left the progress message up for ever. Whatever it is,
+            // the user is told.
             SwingUtilities.invokeLater(() -> {
-                Msg.error(this, "Failed to poll function matching status: " + e.getMessage(), e);
-                handleError("Failed to poll function matching status: " + e.getMessage());
-                taskMonitorComponent.setVisible(false);
+                Msg.error(this, "Function matching failed: " + t, t);
+                handleError("Function matching failed: " + t);
+                statusLabel.setText("Function matching failed");
             });
+        } finally {
+            // No path out of here may leave the progress bar spinning.
+            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
         }
     }
 
