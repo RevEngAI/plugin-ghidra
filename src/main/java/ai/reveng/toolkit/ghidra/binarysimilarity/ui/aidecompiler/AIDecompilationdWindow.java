@@ -4,6 +4,7 @@ import ai.reveng.invoker.ApiException;
 import ai.reveng.model.DecompilationData;
 import ai.reveng.model.GetTokensResponse;
 import ai.reveng.model.ProgressMessage;
+import ai.reveng.model.RenderedToken;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -36,10 +37,12 @@ import java.awt.event.MouseEvent;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -592,6 +595,13 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                                 "Rename", "'%s' is not a renameable variable or type.".formatted(word)));
                         return;
                     }
+                    if (!isRenameable(tokenValues, token)) {
+                        SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
+                                "Rename", ("'%s' cannot be renamed here. Variables, parameters, types and "
+                                        + "fields can; a function is renamed on the function itself, in the "
+                                        + "listing or decompiler.").formatted(word)));
+                        return;
+                    }
                     service.getApi().applyAIDecompilationOverrides(functionID, Map.of(token, newName));
                     newStatusForFunction(target, service.getApi().pollAIDecompileStatus(functionID));
                 } catch (Exception e) {
@@ -757,12 +767,44 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     /**
+     * The token kinds the overrides endpoint accepts a new name for: everything the server tokenises
+     * that is the name of a variable, a type or a member.
+     *
+     * <p>The kinds left out are left out for two different reasons. A function — {@code OWN_FUNCTION},
+     * {@code FUNCTION}, {@code FUNCPTR} — is renamed on the function itself, and the endpoint answers
+     * an override for one with {@code 400 BAD_REQUEST}. {@code STRING} and {@code FLOAT} are literals
+     * rather than names, so there is nothing to rename. An unrecognised kind is treated as
+     * not renameable rather than sent hopefully.
+     */
+    /// An {@link EnumSet} rather than {@link Set#of}, whose `contains` throws on the null kind a
+    /// token without one has.
+    private static final Set<RenderedToken.KindEnum> RENAMEABLE_KINDS = EnumSet.of(
+            RenderedToken.KindEnum.PARAM,
+            RenderedToken.KindEnum.LOCAL,
+            RenderedToken.KindEnum.GLOBAL,
+            RenderedToken.KindEnum.TYPE,
+            RenderedToken.KindEnum.FIELD,
+            RenderedToken.KindEnum.ENUM,
+            RenderedToken.KindEnum.LABEL);
+
+    /**
+     * Whether the token the double-click resolved to can be renamed through the overrides endpoint.
+     */
+    static boolean isRenameable(GetTokensResponse tokenValues, String token) {
+        if (tokenValues == null || tokenValues.getPlaceholderToRenderedToken() == null) {
+            return false;
+        }
+        RenderedToken rendered = tokenValues.getPlaceholderToRenderedToken().get(token);
+        return rendered != null && RENAMEABLE_KINDS.contains(rendered.getKind());
+    }
+
+    /**
      * Each token mapped to the name currently rendered for it: the caller's own override where one
      * exists, otherwise the value the server predicted. The two maps arrive unmerged, so overrides
      * are layered on top here.
      *
-     * <p>Only the rendered value is taken. TODO: a rendered token also carries its kind and the
-     * data-type/function id behind it, which could drive navigation rather than just renaming.
+     * <p>Only the rendered value is taken; {@link #isRenameable} reads the kind. TODO: a rendered
+     * token also carries the data-type/function id behind it, which could drive navigation.
      */
     static Map<String, String> effectiveValues(GetTokensResponse tokenValues) {
         var result = new LinkedHashMap<String, String>();
