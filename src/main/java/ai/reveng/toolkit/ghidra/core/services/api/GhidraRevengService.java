@@ -561,15 +561,18 @@ public class GhidraRevengService {
                 // The portal derives a signature for every function when the analysis completes, so
                 // most of them match what is already on the function. Applying those regardless would
                 // churn the type manager and fill the undo history on every sync.
-                if (function.getSignature().isEquivalentSignature(signature)) {
+                if (matchesLocalSignature(function, signature)) {
                     continue;
                 }
                 var application = applyRemoteSignature(program, function, signature, monitor,
                         FunctionRenameOption.NO_CHANGE);
                 if (application.success()) {
                     applied++;
-                    log.info("Applied the portal's signature for \"%s\" at %s"
-                            .formatted(function.getName(), function.getEntryPoint()));
+                    // The prototype is logged because it is the only place the analyst can see what
+                    // the portal actually sent, as against what they edited there.
+                    log.info("Applied the portal's signature for \"%s\" at %s: %s"
+                            .formatted(function.getName(), function.getEntryPoint(),
+                                    signature.getPrototypeString()));
                 } else {
                     Msg.warn(this, "Failed to apply the portal's signature for %s: %s"
                             .formatted(function.getName(), application.status()));
@@ -589,6 +592,48 @@ public class GhidraRevengService {
     /// updates the local type in place instead. The calling convention is preserved because a server
     /// signature carries none — see {@link ServerDataTypeDecoder#signature} — and applying an absent
     /// convention would discard whatever Ghidra had worked out.
+    /// Whether the portal's signature is, in every respect this pull applies, what the function
+    /// already has.
+    ///
+    /// {@link FunctionSignature#isEquivalentSignature} cannot answer that. It compares the function
+    /// name and the calling convention as well, and this pull applies neither: the name belongs to
+    /// the name reconciliation ({@link FunctionRenameOption#NO_CHANGE}) and a server signature
+    /// carries no convention. Every function therefore differed on every sync, was re-applied, and
+    /// was reported as applied for ever.
+    ///
+    /// A parameter the server does not name is not a difference. Ghidra names an unnamed parameter
+    /// `param_N` when the signature is applied, so treating a missing server name as a difference
+    /// would make the comparison oscillate and bring the same re-apply loop back.
+    static boolean matchesLocalSignature(Function function, FunctionDefinitionDataType incoming) {
+        if (!sameType(function.getReturnType(), incoming.getReturnType())) {
+            return false;
+        }
+        var local = function.getParameters();
+        var remote = incoming.getArguments();
+        if (local.length != remote.length) {
+            return false;
+        }
+        for (int i = 0; i < local.length; i++) {
+            String remoteName = remote[i].getName();
+            if (remoteName != null && !remoteName.isBlank() && !remoteName.equals(local[i].getName())) {
+                return false;
+            }
+            if (!sameType(local[i].getDataType(), remote[i].getDataType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Compared through {@link DataType#isEquivalent} rather than `DataTypeUtilities`, whose package
+    /// moved between the Ghidra versions this extension is built against.
+    private static boolean sameType(@Nullable DataType local, @Nullable DataType remote) {
+        if (local == null || remote == null) {
+            return local == remote;
+        }
+        return local.isEquivalent(remote);
+    }
+
     /// @param success whether the signature landed
     /// @param status  the command's own account of why it did not, for the log
     private record SignatureApplication(boolean success, String status) {}

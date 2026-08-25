@@ -2,6 +2,7 @@ package ai.reveng;
 
 import ai.reveng.model.BatchFunctionSignatureEntry;
 import ai.reveng.model.BatchRenameInputBody;
+import ai.reveng.model.SignatureParameterEntry;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
@@ -47,6 +48,10 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
     private static class SignatureApi extends UnimplementedAPI {
         /// The name of the return type the portal reports, or null when it holds no signature.
         String remoteReturnType;
+        /// The function name carried on the signature entry, which need not be the local name.
+        String remoteSignatureName = FUNCTION_NAME;
+        /// The name the portal gives the single parameter, or null for a parameter it does not name.
+        String remoteParameterName = "count";
 
         @Override
         public AnalysisStatus status(AnalysisID analysisID) {
@@ -68,10 +73,15 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
             var entry = new BatchFunctionSignatureEntry();
             entry.setAnalysisId(1L);
             entry.setFunctionId(FUNCTION_ID);
-            entry.setFunctionName(FUNCTION_NAME);
+            entry.setFunctionName(remoteSignatureName);
             entry.setHasSignature(true);
             entry.setReturnDataTypeId(1L);
-            entry.setParameters(List.of());
+            var parameter = new SignatureParameterEntry();
+            parameter.setOrdinal(0L);
+            parameter.setName(remoteParameterName);
+            parameter.setDataTypeId(1L);
+            parameter.setBitLength(32L);
+            entry.setParameters(List.of(parameter));
             var returnType = new ServerDataType(1L, "", remoteReturnType, ServerDataType.Kind.BASE,
                     4L, "AUTO", false, null, null, null);
             return new FunctionSignatureBatch(List.of(entry),
@@ -151,6 +161,39 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
 
         assertEquals("an unchanged signature should not be re-applied", 0, summary.appliedSignatures());
         assertEquals("int", fixture.function().getReturnType().getName());
+    }
+
+    /// The portal names a function that Ghidra still calls `FUN_...`, and sync applies names in a
+    /// separate pass. If the signature comparison counts that name difference, every function differs
+    /// on every sync, is re-applied, and is reported for ever.
+    @Test
+    public void appliesNothingASecondTimeWhenOnlyTheSignaturesFunctionNameDiffers() throws Exception {
+        var api = new SignatureApi();
+        var fixture = attachWithoutRemoteSignature(api);
+
+        api.remoteSignatureName = "a_name_ghidra_does_not_have";
+        api.remoteReturnType = "int";
+        var first = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+        var second = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals("the changed return type is applied once", 1, first.appliedSignatures());
+        assertEquals("and not again, because only the signature's function name differs",
+                0, second.appliedSignatures());
+    }
+
+    /// A parameter the portal does not name must not read as a difference either: Ghidra names an
+    /// unnamed parameter `param_N` on apply, so counting that would reintroduce the same loop.
+    @Test
+    public void appliesNothingASecondTimeWhenThePortalLeavesAParameterUnnamed() throws Exception {
+        var api = new SignatureApi();
+        var fixture = attachWithoutRemoteSignature(api);
+
+        api.remoteReturnType = "int";
+        api.remoteParameterName = null;
+        fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+        var second = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(0, second.appliedSignatures());
     }
 
     @Test
