@@ -149,61 +149,44 @@ public class AIDecompTokenResolutionTest {
         assertNull(AIDecompilationdWindow.resolveToken(tokenValues, 0, 1, "result"));
     }
 
-    /// The overrides endpoint renames the name of a variable, a type or a member, and nothing else.
+    /// A token with no id is a name the decompilation invented — a parameter, a local — and the
+    /// override endpoint is the only place it exists.
     @Test
-    public void isRenameable_allowsTheKindsTheOverridesEndpointAccepts() {
-        for (var kind : new RenderedToken.KindEnum[]{
-                RenderedToken.KindEnum.PARAM, RenderedToken.KindEnum.LOCAL,
-                RenderedToken.KindEnum.GLOBAL, RenderedToken.KindEnum.TYPE,
-                RenderedToken.KindEnum.FIELD, RenderedToken.KindEnum.ENUM,
-                RenderedToken.KindEnum.LABEL}) {
-            assertTrue(kind.toString(),
-                    AIDecompilationdWindow.isRenameable(tokenOfKind(kind), "TOKEN_A"));
-        }
+    public void isRenameable_allowsATokenThatCarriesNoId() {
+        assertTrue(AIDecompilationdWindow.isRenameable(
+                tokenWithIds(null, null, null), "TOKEN_A"));
     }
 
-    /// A function is renamed on the function itself; the endpoint answers an override for one with a
-    /// 400, so the rename must not send it.
+    /// A token that carries an id refers to something named outside this decompilation, and renaming
+    /// it is a different call. The overrides endpoint answers one for a function with a 400.
     @Test
-    public void isRenameable_refusesAFunctionToken() {
-        for (var kind : new RenderedToken.KindEnum[]{
-                RenderedToken.KindEnum.OWN_FUNCTION, RenderedToken.KindEnum.FUNCTION,
-                RenderedToken.KindEnum.FUNCPTR}) {
-            assertFalse(kind.toString(),
-                    AIDecompilationdWindow.isRenameable(tokenOfKind(kind), "TOKEN_A"));
-        }
+    public void isRenameable_refusesATokenThatCarriesAnId() {
+        assertFalse("a data type is renamed on the type",
+                AIDecompilationdWindow.isRenameable(tokenWithIds(42L, null, null), "TOKEN_A"));
+        assertFalse("a function is renamed on the function",
+                AIDecompilationdWindow.isRenameable(tokenWithIds(null, 7L, null), "TOKEN_A"));
+        assertFalse("and so is an imported one",
+                AIDecompilationdWindow.isRenameable(tokenWithIds(null, null, 9L), "TOKEN_A"));
     }
 
-    /// A literal is not a name, so there is nothing to rename.
     @Test
-    public void isRenameable_refusesALiteral() {
+    public void isRenameable_refusesATokenTheResponseNeverMentioned() {
         assertFalse(AIDecompilationdWindow.isRenameable(
-                tokenOfKind(RenderedToken.KindEnum.STRING), "TOKEN_A"));
-        assertFalse(AIDecompilationdWindow.isRenameable(
-                tokenOfKind(RenderedToken.KindEnum.FLOAT), "TOKEN_A"));
-    }
-
-    /// An unrecognised or absent kind is treated as not renameable rather than sent hopefully.
-    @Test
-    public void isRenameable_refusesAnUnknownKindOrToken() {
-        assertFalse("a kind this build does not know",
-                AIDecompilationdWindow.isRenameable(
-                        tokenOfKind(RenderedToken.KindEnum.UNKNOWN_DEFAULT_OPEN_API), "TOKEN_A"));
-        assertFalse("no kind at all",
-                AIDecompilationdWindow.isRenameable(tokenOfKind(null), "TOKEN_A"));
-        assertFalse("a token the response never mentioned",
-                AIDecompilationdWindow.isRenameable(
-                        tokenOfKind(RenderedToken.KindEnum.PARAM), "TOKEN_MISSING"));
+                tokenWithIds(null, null, null), "TOKEN_MISSING"));
         assertFalse("no rendered tokens at all",
                 AIDecompilationdWindow.isRenameable(new GetTokensResponse(), "TOKEN_A"));
     }
 
-    /// One rendered token, TOKEN_A, carrying the given kind.
-    private static GetTokensResponse tokenOfKind(RenderedToken.KindEnum kind) {
+    /// One rendered token, TOKEN_A, carrying the given ids.
+    private static GetTokensResponse tokenWithIds(Long dataTypeId, Long functionId, Long importedFunctionId) {
         var data = new GetTokensResponse();
         data.setAiDecomp("TOKEN_A = 1;");
         var rendered = new LinkedHashMap<String, RenderedToken>();
-        rendered.put("TOKEN_A", new RenderedToken().value("name").kind(kind));
+        rendered.put("TOKEN_A", new RenderedToken()
+                .value("name")
+                .dataTypeId(dataTypeId)
+                .functionId(functionId)
+                .importedFunctionId(importedFunctionId));
         data.setPlaceholderToRenderedToken(rendered);
         return data;
     }

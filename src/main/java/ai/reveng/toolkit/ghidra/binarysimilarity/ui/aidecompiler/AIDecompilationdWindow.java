@@ -37,12 +37,10 @@ import java.awt.event.MouseEvent;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -597,9 +595,9 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                     }
                     if (!isRenameable(tokenValues, token)) {
                         SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
-                                "Rename", ("'%s' cannot be renamed here. Variables, parameters, types and "
-                                        + "fields can; a function is renamed on the function itself, in the "
-                                        + "listing or decompiler.").formatted(word)));
+                                "Rename", ("'%s' is a data type or a function, not a name this decompilation "
+                                        + "owns. Rename it on the type or the function itself and the new "
+                                        + "name comes back here.").formatted(word)));
                         return;
                     }
                     service.getApi().applyAIDecompilationOverrides(functionID, Map.of(token, newName));
@@ -767,35 +765,25 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     /**
-     * The token kinds the overrides endpoint accepts a new name for: everything the server tokenises
-     * that is the name of a variable, a type or a member.
-     *
-     * <p>The kinds left out are left out for two different reasons. A function — {@code OWN_FUNCTION},
-     * {@code FUNCTION}, {@code FUNCPTR} — is renamed on the function itself, and the endpoint answers
-     * an override for one with {@code 400 BAD_REQUEST}. {@code STRING} and {@code FLOAT} are literals
-     * rather than names, so there is nothing to rename. An unrecognised kind is treated as
-     * not renameable rather than sent hopefully.
-     */
-    /// An {@link EnumSet} rather than {@link Set#of}, whose `contains` throws on the null kind a
-    /// token without one has.
-    private static final Set<RenderedToken.KindEnum> RENAMEABLE_KINDS = EnumSet.of(
-            RenderedToken.KindEnum.PARAM,
-            RenderedToken.KindEnum.LOCAL,
-            RenderedToken.KindEnum.GLOBAL,
-            RenderedToken.KindEnum.TYPE,
-            RenderedToken.KindEnum.FIELD,
-            RenderedToken.KindEnum.ENUM,
-            RenderedToken.KindEnum.LABEL);
-
-    /**
      * Whether the token the double-click resolved to can be renamed through the overrides endpoint.
+     *
+     * <p>The test is whether the token carries an id. A token with a {@code data_type_id},
+     * {@code function_id} or {@code imported_function_id} is a reference to something that lives
+     * outside this decompilation and is named there — a data type in the analysis' catalogue, a
+     * function in the analysis — and renaming it is a different call. The endpoint says as much for a
+     * function: {@code 400 BAD_REQUEST}, "Functions are renamed on the function itself, not in the
+     * decompilation". A token with no id is a name the decompilation invented, a parameter or a local,
+     * and the override is the only place it exists.
      */
     static boolean isRenameable(GetTokensResponse tokenValues, String token) {
         if (tokenValues == null || tokenValues.getPlaceholderToRenderedToken() == null) {
             return false;
         }
         RenderedToken rendered = tokenValues.getPlaceholderToRenderedToken().get(token);
-        return rendered != null && RENAMEABLE_KINDS.contains(rendered.getKind());
+        return rendered != null
+                && rendered.getDataTypeId() == null
+                && rendered.getFunctionId() == null
+                && rendered.getImportedFunctionId() == null;
     }
 
     /**

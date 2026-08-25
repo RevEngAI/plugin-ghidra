@@ -166,9 +166,11 @@ public class SdkSchemaTest {
         // source and both name maps, which arrive unmerged.
         requireMethods(missing, "ai.reveng.model.GetTokensResponse",
                 "getAiDecomp", "getPlaceholderToRenderedToken", "getPlaceholderToUserOverride");
-        // Both maps hold different types. The rendered value is read out of either; the kind decides
-        // whether a token can be renamed through the overrides endpoint at all.
-        requireMethods(missing, "ai.reveng.model.RenderedToken", "getValue", "getKind");
+        // Both maps hold different types. The rendered value is read out of either; the ids decide
+        // whether a token names something this decompilation owns, and so whether it can be renamed
+        // through the overrides endpoint at all.
+        requireMethods(missing, "ai.reveng.model.RenderedToken",
+                "getValue", "getDataTypeId", "getFunctionId", "getImportedFunctionId");
         requireMethods(missing, "ai.reveng.model.Token", "getValue");
         requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
 
