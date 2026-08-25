@@ -169,25 +169,6 @@ public class ItemSelectionPanel extends JPanel {
     }
 
     /**
-     * Sets the selected items
-     */
-    public void setSelectedItems(Set<SelectableItem> items) {
-        // Clear existing selections
-        selectedItems.clear();
-        selectedItemsPanel.removeAll();
-
-        // Add new selections
-        for (SelectableItem item : items) {
-            selectedItems.add(item);
-            addItemTag(item);
-        }
-
-        selectedItemsPanel.revalidate();
-        selectedItemsPanel.repaint();
-        notifyListeners();
-    }
-
-    /**
      * Adds a listener for item selection changes
      */
     public void addItemSelectionListener(ItemSelectionListener listener) {

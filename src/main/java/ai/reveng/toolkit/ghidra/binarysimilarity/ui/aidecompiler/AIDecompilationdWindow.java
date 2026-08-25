@@ -1,11 +1,10 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler;
 
 import ai.reveng.invoker.ApiException;
-import ai.reveng.model.AIDecompFunctionMapping;
 import ai.reveng.model.DecompilationData;
+import ai.reveng.model.GetTokensResponse;
 import ai.reveng.model.ProgressMessage;
-import ai.reveng.model.ReplacementValue;
-import ai.reveng.model.TokenisedData;
+import ai.reveng.model.RenderedToken;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
@@ -31,13 +30,13 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
 import javax.swing.text.BadLocationException;
-import javax.swing.text.Utilities;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -541,32 +540,79 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     }
 
     private String wordAtOffset(int offset) throws BadLocationException {
-        int start = Utilities.getWordStart(textArea, offset);
-        int end = Utilities.getWordEnd(textArea, offset);
-        String word = textArea.getText(start, end - start);
-        return IDENTIFIER.matcher(word).matches() ? word : null;
+        int line = textArea.getLineOfOffset(offset);
+        int lineStart = textArea.getLineStartOffset(line);
+        String text = textArea.getText(lineStart, textArea.getLineEndOffset(line) - lineStart);
+        return identifierAt(text, offset - lineStart);
+    }
+
+    /**
+     * The identifier in {@code line} spanning {@code index}, or null when that position is not inside
+     * one.
+     *
+     * <p>Scanned with the same pattern the tokenised text is split into identifiers with, rather than
+     * through {@code Utilities.getWordStart}/{@code getWordEnd}. Swing breaks a word at an underscore,
+     * so double-clicking {@code param_1} yielded {@code param} — a word that appears on no line of the
+     * decompilation, so the rename declined and every name carrying an underscore was unreachable.
+     */
+    static String identifierAt(String line, int index) {
+        if (line == null || index < 0) {
+            return null;
+        }
+        Matcher matcher = IDENTIFIER.matcher(line);
+        while (matcher.find()) {
+            if (index >= matcher.start() && index <= matcher.end()) {
+                return matcher.group();
+            }
+        }
+        return null;
+    }
+
+    /// Say why a rename is not on offer, in the log and to the analyst. The reason is worth writing
+    /// down: it names which step declined, which is otherwise invisible.
+    private void declineRename(String word, String reason) {
+        String message = "'%s' cannot be renamed here: %s.".formatted(word, reason);
+        var logger = tool.getService(ReaiLoggingService.class);
+        if (logger != null) {
+            logger.info(message);
+        }
+        SwingUtilities.invokeLater(() ->
+                Msg.showInfo(AIDecompilationdWindow.this, component, "Rename", message));
     }
 
     private void handleRename(int displayLine, String word) {
         RenderModel model = currentRenderModel;
         Function target = this.function;
-        if (model == null || target == null || word == null || word.isBlank()) {
+        if (word == null || word.isBlank()) {
+            // Not an identifier — a double-click on whitespace or punctuation. Nothing to say.
+            return;
+        }
+        // Every exit below used to be silent, so double-clicking a name that the render model could
+        // not place did nothing at all: no dialog, no message, no log. That is indistinguishable
+        // from the feature being broken, which is how it was reported.
+        if (model == null || target == null) {
+            declineRename(word, "there is no decompilation on screen to rename in");
             return;
         }
         if (!model.isCodeLine(displayLine)) {
+            declineRename(word, "line %d is a comment, not code".formatted(displayLine + 1));
             return;
         }
         Integer sourceLine = model.sourceLine(displayLine);
-        if (sourceLine == null) {
+        if (sourceLine == null || sourceLine < 1 || sourceLine > model.codeLines.size()) {
+            declineRename(word, "display line %d does not map onto the decompilation"
+                    .formatted(displayLine + 1));
             return;
         }
         String codeLine = model.codeLines.get(sourceLine - 1);
         int identIndex = indexOfIdentifier(codeLine, word);
         if (identIndex < 0) {
+            declineRename(word, "it is not on source line %d (\"%s\")".formatted(sourceLine, codeLine));
             return;
         }
         FunctionID functionID = resolveFunctionId(target);
         if (functionID == null) {
+            declineRename(word, "%s is not a function RevEng.AI knows".formatted(target.getName()));
             return;
         }
 
@@ -586,11 +632,15 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             @Override
             public void run(TaskMonitor monitor) {
                 try {
-                    TokenisedData tokenised = service.getApi().getAIDecompilationTokenised(functionID);
-                    String token = resolveToken(tokenised, sourceIndex, identIndex, word);
+                    GetTokensResponse tokenValues = service.getApi().getAIDecompilationTokens(functionID);
+                    String token = resolveToken(tokenValues, sourceIndex, identIndex, word);
                     if (token == null) {
-                        SwingUtilities.invokeLater(() -> Msg.showInfo(AIDecompilationdWindow.this, component,
-                                "Rename", "'%s' is not a renameable variable or type.".formatted(word)));
+                        declineRename(word, "the decompilation carries no token for it");
+                        return;
+                    }
+                    if (!isRenameable(tokenValues, token)) {
+                        declineRename(word, "it is a data type or a function, which is renamed on the type "
+                                + "or the function itself rather than here");
                         return;
                     }
                     service.getApi().applyAIDecompilationOverrides(functionID, Map.of(token, newName));
@@ -725,71 +775,92 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     /**
      * Resolve a displayed identifier to the token to override, mirroring the IDA plugin's
      * {@code resolve_token}: prefer the token at the same identifier position in the tokenised line,
-     * and fall back to a unique match across the renameable categories by effective value.
+     * and fall back to a unique match by effective value across every token the server rendered.
      */
-    static String resolveToken(TokenisedData tokenised, int sourceIndex, int identIndex, String oldIdent) {
-        if (tokenised == null) {
+    static String resolveToken(GetTokensResponse tokenValues, int sourceIndex, int identIndex, String oldIdent) {
+        if (tokenValues == null) {
             return null;
         }
-        AIDecompFunctionMapping mapping = tokenised.getFunctionMapping();
-        if (mapping == null) {
-            return null;
-        }
+        Map<String, String> effectiveValues = effectiveValues(tokenValues);
 
-        String tokenisedText = tokenised.getTokenisedDecompilation();
+        String tokenisedText = tokenValues.getAiDecomp();
         String[] tokenisedLines = (tokenisedText == null ? "" : tokenisedText).split("\n", -1);
         if (sourceIndex >= 0 && sourceIndex < tokenisedLines.length) {
             var tokenIdentifiers = identifiers(tokenisedLines[sourceIndex]);
             if (identIndex >= 0 && identIndex < tokenIdentifiers.size()) {
                 String candidate = tokenIdentifiers.get(identIndex);
-                for (TokenEntry entry : renameableTokens(mapping)) {
-                    if (entry.token().equals(candidate)
-                            && oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
-                        return candidate;
-                    }
+                if (namesToken(oldIdent, effectiveValues.get(candidate))) {
+                    return candidate;
                 }
             }
         }
 
         String uniqueMatch = null;
-        for (TokenEntry entry : renameableTokens(mapping)) {
-            if (oldIdent.equals(effectiveValue(mapping, entry.token(), entry.replacement()))) {
+        for (var entry : effectiveValues.entrySet()) {
+            if (namesToken(oldIdent, entry.getValue())) {
                 if (uniqueMatch != null) {
                     return null;
                 }
-                uniqueMatch = entry.token();
+                uniqueMatch = entry.getKey();
             }
         }
         return uniqueMatch;
     }
 
-    private record TokenEntry(String token, ReplacementValue replacement) {}
-
-    private static List<TokenEntry> renameableTokens(AIDecompFunctionMapping mapping) {
-        var entries = new ArrayList<TokenEntry>();
-        addTokens(entries, mapping.getUnmatchedVars());
-        addTokens(entries, mapping.getUnmatchedGlobalVars());
-        addTokens(entries, mapping.getUnmatchedExternalVars());
-        addTokens(entries, mapping.getUnmatchedCustomTypes());
-        addTokens(entries, mapping.getUnmatchedEnums());
-        return entries;
+    /**
+     * Whether a double-clicked identifier names the token rendered as {@code renderedValue}.
+     *
+     * <p>A rendered value is not always a bare identifier: a Rust generic renders as
+     * {@code lang_start<()>} and a C++ method as {@code Foo::bar}, while a double-click yields only
+     * the identifier under the cursor. Comparing the two directly never matched, which put every such
+     * token permanently out of reach of a rename, so the identifiers within the value count too.
+     */
+    private static boolean namesToken(String oldIdent, String renderedValue) {
+        return renderedValue != null
+                && (oldIdent.equals(renderedValue) || identifiers(renderedValue).contains(oldIdent));
     }
 
-    private static void addTokens(List<TokenEntry> entries, Map<String, ReplacementValue> category) {
-        if (category == null) {
-            return;
+    /**
+     * Whether the token the double-click resolved to can be renamed through the overrides endpoint.
+     *
+     * <p>The test is whether the token carries an id. A token with a {@code data_type_id},
+     * {@code function_id} or {@code imported_function_id} is a reference to something that lives
+     * outside this decompilation and is named there — a data type in the analysis' catalogue, a
+     * function in the analysis — and renaming it is a different call. The endpoint says as much for a
+     * function: {@code 400 BAD_REQUEST}, "Functions are renamed on the function itself, not in the
+     * decompilation". A token with no id is a name the decompilation invented, a parameter or a local,
+     * and the override is the only place it exists.
+     */
+    static boolean isRenameable(GetTokensResponse tokenValues, String token) {
+        if (tokenValues == null || tokenValues.getPlaceholderToRenderedToken() == null) {
+            return false;
         }
-        for (var e : category.entrySet()) {
-            entries.add(new TokenEntry(e.getKey(), e.getValue()));
-        }
+        RenderedToken rendered = tokenValues.getPlaceholderToRenderedToken().get(token);
+        return rendered != null
+                && rendered.getDataTypeId() == null
+                && rendered.getFunctionId() == null
+                && rendered.getImportedFunctionId() == null;
     }
 
-    private static String effectiveValue(AIDecompFunctionMapping mapping, String token, ReplacementValue replacement) {
-        Map<String, String> overrides = mapping.getUserOverrideMappings();
-        if (overrides != null && overrides.containsKey(token)) {
-            return overrides.get(token);
+    /**
+     * Each token mapped to the name currently rendered for it: the caller's own override where one
+     * exists, otherwise the value the server predicted. The two maps arrive unmerged, so overrides
+     * are layered on top here.
+     *
+     * <p>Only the rendered value is taken; {@link #isRenameable} reads the kind. TODO: a rendered
+     * token also carries the data-type/function id behind it, which could drive navigation.
+     */
+    static Map<String, String> effectiveValues(GetTokensResponse tokenValues) {
+        var result = new LinkedHashMap<String, String>();
+        if (tokenValues.getPlaceholderToRenderedToken() != null) {
+            tokenValues.getPlaceholderToRenderedToken()
+                    .forEach((placeholder, token) -> result.put(placeholder, token.getValue()));
         }
-        return replacement == null ? null : replacement.getValue();
+        if (tokenValues.getPlaceholderToUserOverride() != null) {
+            tokenValues.getPlaceholderToUserOverride()
+                    .forEach((placeholder, token) -> result.put(placeholder, token.getValue()));
+        }
+        return result;
     }
 
 

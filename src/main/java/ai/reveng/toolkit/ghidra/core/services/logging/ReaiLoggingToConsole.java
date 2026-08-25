@@ -43,12 +43,6 @@ public class ReaiLoggingToConsole implements ReaiLoggingService {
         }
     }
 
-    @Override
-    public void export(String targetDirectoryPath, String exportedFileName) {
-        throw new UnsupportedOperationException("Not implemented for console logger");
-
-    }
-
     public void setConsoleService(ConsoleService service) {
         this.consoleService = service;
         for (String message : logBuffer) {

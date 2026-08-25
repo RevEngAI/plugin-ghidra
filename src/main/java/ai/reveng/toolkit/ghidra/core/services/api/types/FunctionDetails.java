@@ -1,6 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api.types;
 
-import ai.reveng.model.FunctionsDetailResponse;
+import ai.reveng.model.FunctionDetailsOutputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 
 /**
@@ -12,21 +12,17 @@ public record FunctionDetails(
         Long functionVaddr,
         Long functionSize,
         TypedApiInterface.AnalysisID analysisId,
-        String binaryName,
-        TypedApiInterface.BinaryHash sha256Hash,
         String demangledName
 
 ) {
 
-    public static FunctionDetails fromServerResponse(FunctionsDetailResponse response) {
+    public static FunctionDetails fromServerResponse(FunctionDetailsOutputBody response) {
         return new FunctionDetails(
                 new TypedApiInterface.FunctionID(response.getFunctionId()),
-                response.getFunctionNameMangled(),
+                response.getMangledName(),
                 response.getFunctionVaddr(),
-                response.getFunctionSize().longValue(),
-                new TypedApiInterface.AnalysisID(response.getAnalysisId()),
-                response.getBinaryName(),
-                new TypedApiInterface.BinaryHash(response.getSha256Hash()),
+                response.getFunctionSize(),
+                new TypedApiInterface.AnalysisID(response.getAnalysisId().intValue()),
                 response.getFunctionName()
         );
     }

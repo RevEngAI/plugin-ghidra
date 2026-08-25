@@ -22,7 +22,6 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.SimilarFunc
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import docking.action.builder.ActionBuilder;
 import ghidra.app.context.ProgramLocationActionContext;
@@ -53,7 +52,7 @@ import ghidra.util.task.TaskMonitor;
 	category = PluginCategoryNames.COMMON,
 	shortDescription = "Support for Binary Similarity Features of RevEng.AI Toolkit.",
 	description = "Enable features that support binary similarity operations, including binary upload, and auto-renaming",
-	servicesRequired = { GhidraRevengService.class, ProgramManager.class, ExportFunctionBoundariesService.class, ReaiLoggingService.class },
+	servicesRequired = { GhidraRevengService.class, ProgramManager.class, ReaiLoggingService.class },
 	eventsConsumed = { RevEngAIAnalysisResultsLoaded.class, }
 )
 //@formatter:on
@@ -285,10 +284,11 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
 	private static String formatSyncSummary(GhidraRevengService.SyncSummary summary) {
 		return ("Synced %d matched function(s) with the portal.\n" +
-				"Applied %d remote name(s); canonicalized %d and de-duplicated %d.\n" +
+				"Applied %d remote name(s) and %d remote signature(s); canonicalized %d and de-duplicated %d.\n" +
 				"Pushed %d name(s) and %d type set(s) back to the portal.").formatted(
 				summary.matchedFunctions(),
 				summary.namesModifiedRemotely(),
+				summary.appliedSignatures(),
 				summary.canonicalizedNames(),
 				summary.dedupedNames(),
 				summary.pushedNames(),

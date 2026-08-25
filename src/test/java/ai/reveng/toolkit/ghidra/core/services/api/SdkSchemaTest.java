@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 
 public class SdkSchemaTest {
 
-    private static final int[] PINNED = {3, 123, 0};
+    private static final int[] PINNED = {4, 4, 0};
 
     @Test
     public void installedSdkIsAtLeastPinned() {
@@ -35,18 +35,26 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
-                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo",
-                "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches"});
-        apis.put("ai.reveng.api.AnalysesResultsMetadataApi", new String[]{"getFunctionsList"});
+                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
+                "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches",
+                "v3GetAnalysisLogs", "v3ListAnalyses"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
-                "getFunctionBlocks", "getFunctionDetails"});
-        apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{
-                "renameFunctionId", "batchRenameFunctions"});
-        apis.put("ai.reveng.api.FunctionsDataTypesApi", new String[]{
-                "listFunctionDataTypesForAnalysis", "listFunctionDataTypesForFunctions"});
+                "listAnalysisFunctions",
+                // v3 endpoints; the generator suffixes _0 where the deprecated v2 name collides.
+                "getFunctionBlocks_0", "getFunctionDetails_0"});
+        apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{"batchRenameFunctions"});
+        apis.put("ai.reveng.api.DataTypesApi", new String[]{
+                "v3ListFunctionSignaturesCall", "v3ListAnalysisDataTypesCall",
+                "v3GetFunctionSignatureHistory",
+                // The write path: the two batch data-type endpoints go through the call form
+                // because their responses embed DataTypeEntry, while the singular signature write
+                // uses the typed form so its status code survives on the ApiException.
+                "v3CreateAnalysisDataTypesCall", "v3UpdateAnalysisDataTypesCall",
+                "v3UpdateFunctionSignature"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
-                "createAiDecompilation", "getAiDecompilation", "getAiDecompilationTokenised",
+                "createAiDecompilation", "getAiDecompilation", "v3GetAiDecompilationTokens",
+                "v3UpsertAiDecompilationOverrides",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
                 "regenerateAiDecompilationSummary", "regenerateAiDecompilationInlineComments",
@@ -63,13 +71,47 @@ public class SdkSchemaTest {
     public void modelTypesExposeAccessorsThePluginReliesOn() {
         List<String> missing = new ArrayList<>();
 
-        requireMethods(missing, "ai.reveng.model.FunctionInfo", "fromJson", "getFuncTypes", "getFuncDeps");
-        requireMethods(missing, "ai.reveng.model.FunctionType", "getName", "getHeader", "getType");
-        requireMethods(missing, "ai.reveng.model.FunctionHeader", "getName", "getArgs");
-        requireMethods(missing, "ai.reveng.model.FunctionDataTypesList", "getItems");
-        requireMethods(missing, "ai.reveng.model.FunctionDataTypesListItem",
-                "getDataTypes", "getCompleted", "getFunctionId");
-        requireClass(missing, "ai.reveng.model.FuncDepsInner");
+        // The data-type read path deserialises DataTypeEntry itself (see ServerDataTypeReader), so
+        // what has to stay stable is the signature surface around it: the entries the plugin reads
+        // out of the /v3/functions/signatures body, and the history models it reads whole.
+        requireMethods(missing, "ai.reveng.model.BatchFunctionSignatureEntry",
+                "getAnalysisId", "getFunctionId", "getFunctionName", "getHasSignature",
+                "getParameters", "getReturnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.SignatureParameterEntry",
+                "getName", "getOrdinal", "getDataTypeId", "getBitLength");
+        requireMethods(missing, "ai.reveng.model.GetFunctionSignatureHistoryBody", "getVersions");
+
+        // The write path builds request bodies out of generated models — serialisation of the
+        // oneOf unions works even though deserialisation does not — so their setters are the
+        // surface that has to stay put.
+        requireMethods(missing, "ai.reveng.model.CreateAnalysisDataTypesInputBody", "setDataTypes");
+        requireMethods(missing, "ai.reveng.model.UpdateAnalysisDataTypesInputBody", "setDataTypes");
+        requireMethods(missing, "ai.reveng.model.CreateDataTypeEntry", "getActualInstance");
+        requireMethods(missing, "ai.reveng.model.UpdateDataTypeEntry", "getActualInstance");
+        requireMethods(missing, "ai.reveng.model.CreateStructDataType",
+                "kind", "name", "namespace", "size", "definition");
+        requireMethods(missing, "ai.reveng.model.UpdateStructDataType",
+                "kind", "dataTypeId", "name", "namespace", "size", "definition");
+        requireMethods(missing, "ai.reveng.model.DataTypeMemberEntry",
+                "name", "offset", "size", "dataTypeId", "isBitfield", "bitOffset", "bitSize");
+        requireMethods(missing, "ai.reveng.model.DataTypeEnumValueEntry", "name", "value");
+        requireMethods(missing, "ai.reveng.model.DataTypeFunctionParameterEntry",
+                "ordinal", "size", "name", "dataTypeId");
+        requireMethods(missing, "ai.reveng.model.StructDefinition", "members");
+        requireMethods(missing, "ai.reveng.model.UnionDefinition", "members");
+        requireMethods(missing, "ai.reveng.model.EnumDefinition", "values");
+        requireMethods(missing, "ai.reveng.model.TypedefDefinition", "targetDataTypeId");
+        requireMethods(missing, "ai.reveng.model.PointerDefinition", "pointeeDataTypeId");
+        requireMethods(missing, "ai.reveng.model.ArrayDefinition", "count", "elementDataTypeId");
+        requireMethods(missing, "ai.reveng.model.FunctionTypeDefinition",
+                "parameters", "returnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.UpdateFunctionSignatureInputBody",
+                "setCallingConvention", "setParameters", "setReturnDataTypeId");
+        requireMethods(missing, "ai.reveng.model.SignatureParameterInput",
+                "ordinal", "name", "dataTypeId", "bitLength", "storage");
+        requireMethods(missing, "ai.reveng.model.SignatureStorageInput", "kind", "location");
+        requireMethods(missing, "ai.reveng.model.FunctionSignatureVersion",
+                "getValue", "getUpdatedAt", "getUpdatedBy");
 
         requireMethods(missing, "ai.reveng.model.AnalysisCreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
@@ -86,7 +128,51 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.BatchRenameInputBody", "setFunctions");
         requireMethods(missing, "ai.reveng.model.BatchRenameItem",
                 "setFunctionId", "setNewName", "setNewMangledName");
-        requireMethods(missing, "ai.reveng.model.FunctionRename", "getNewName", "getNewMangledName");
+        requireMethods(missing, "ai.reveng.model.BatchRenameOutputBody", "getRenamedCount");
+
+        // The v3 blocks body. Only the untyped basic_blocks value is read, by DisassemblyBlocksReader;
+        // the spec gives it no schema, so this pins the one accessor that carries the disassembly.
+        requireMethods(missing, "ai.reveng.model.DisassemblyOutputBody", "getBasicBlocks");
+
+        // The v3 function list. total_count drives paging termination, and the entry accessors are
+        // what FunctionInfo is built from.
+        requireMethods(missing, "ai.reveng.model.ListAnalysisFunctionsOutputBody",
+                "getFunctions", "getTotalCount");
+        requireMethods(missing, "ai.reveng.model.AnalysisFunctionEntry",
+                "getFunctionId", "getFunctionName", "getMangledName", "getFunctionVaddr",
+                "getFunctionSize");
+
+        requireMethods(missing, "ai.reveng.model.AnalysisBasicInfoOutputBody",
+                "getBinaryName", "getSha256Hash", "getModelName");
+
+        // The v3 analysis log. Every entry field is rendered into the log view's single string.
+        requireMethods(missing, "ai.reveng.model.GetAnalysisLogsOutputBody", "getEntries");
+        requireMethods(missing, "ai.reveng.model.AnalysisLogEntry",
+                "getTimestamp", "getLevel", "getSource", "getText");
+
+        // The v3 analysis list. next_page_token drives paging; AnalysisRecordBody is the row type
+        // the Recent Analyses table is built on.
+        requireMethods(missing, "ai.reveng.model.ListAnalysesOutputBody",
+                "getResults", "getNextPageToken");
+        requireMethods(missing, "ai.reveng.model.AnalysisRecordBody",
+                "getAnalysisId", "getBinaryId", "getBinaryName", "getCreation", "getStatus",
+                "getBaseAddress");
+
+        requireMethods(missing, "ai.reveng.model.FunctionDetailsOutputBody",
+                "getFunctionId", "getMangledName", "getFunctionVaddr", "getFunctionSize",
+                "getAnalysisId", "getFunctionName");
+
+        // Resolving a double-clicked identifier back to the token to override reads the tokenised
+        // source and both name maps, which arrive unmerged.
+        requireMethods(missing, "ai.reveng.model.GetTokensResponse",
+                "getAiDecomp", "getPlaceholderToRenderedToken", "getPlaceholderToUserOverride");
+        // Both maps hold different types. The rendered value is read out of either; the ids decide
+        // whether a token names something this decompilation owns, and so whether it can be renamed
+        // through the overrides endpoint at all.
+        requireMethods(missing, "ai.reveng.model.RenderedToken",
+                "getValue", "getDataTypeId", "getFunctionId", "getImportedFunctionId");
+        requireMethods(missing, "ai.reveng.model.Token", "getValue");
+        requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
 
         assertTrue("SDK model surface drifted: " + missing, missing.isEmpty());
     }
@@ -104,7 +190,10 @@ public class SdkSchemaTest {
     }
 
     private static int[] installedSdkVersion() {
-        Class<?> anchor = classOrNull("ai.reveng.model.FunctionInfo");
+        // Anchored on the invoker rather than a model class: models come and go between SDK
+        // releases, and when the anchor disappears this assertion misreports the SDK as absent
+        // from the classpath entirely.
+        Class<?> anchor = classOrNull("ai.reveng.invoker.ApiClient");
         assertNotNull("ai.reveng:sdk is not on the test classpath", anchor);
         CodeSource codeSource = anchor.getProtectionDomain().getCodeSource();
         assertNotNull("Could not locate the ai.reveng:sdk code source", codeSource);
@@ -116,12 +205,6 @@ public class SdkSchemaTest {
                 Integer.parseInt(matcher.group(2)),
                 Integer.parseInt(matcher.group(3))
         };
-    }
-
-    private static void requireClass(List<String> missing, String className) {
-        if (classOrNull(className) == null) {
-            missing.add(className + " (class)");
-        }
     }
 
     private static void requireMethods(List<String> missing, String className, String... methods) {

@@ -10,7 +10,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.TaskMonitor;
@@ -21,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationTest {
 
@@ -34,7 +34,7 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         var binarySimilarityPlugin = env.addPlugin(BinarySimilarityPlugin.class);
 
         // Create a program with two functions
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var func2 = builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
 
@@ -96,7 +96,7 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var func2 = builder.createEmptyFunction(null, "0x2000", 10, Undefined.getUndefinedDataType(4));
 
@@ -141,7 +141,7 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
 
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -203,9 +203,9 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         }
 
         @Override
-        public Basic getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) throws ApiException {
-            var basic = new Basic();
-            basic.setModelId(1);
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) throws ApiException {
+            var basic = new AnalysisBasicInfoOutputBody();
+            basic.setModelId(1L);
             basic.setSha256Hash("abc123");
             basic.setBinaryName("test_binary");
             return basic;
@@ -282,11 +282,10 @@ public class SimilarFunctionsWindowTest extends RevEngMockableHeadedIntegrationT
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForFunctions(List<TypedApiInterface.FunctionID> functionIDs) {
-            // Return empty list - no signatures available in mock
-            var result = new FunctionDataTypesList();
-            result.setItems(List.of());
-            return result;
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            // No signatures available in mock
+            return FunctionSignatureBatch.empty();
         }
     }
 }

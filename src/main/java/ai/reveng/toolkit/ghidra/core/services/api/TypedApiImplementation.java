@@ -3,70 +3,63 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 import ai.reveng.api.*;
 import ai.reveng.model.*;
 import ai.reveng.model.ConfigResponse;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataTypeReader;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIAuthenticationException;
-import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.APIConflictException;
 import ai.reveng.toolkit.ghidra.core.services.api.types.exceptions.InvalidAPIInfoException;
 import ghidra.framework.Application;
 import ghidra.framework.Platform;
 import ghidra.util.Msg;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import resources.ResourceManager;
 
 import javax.annotation.Nullable;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import ai.reveng.invoker.Configuration;
+import ai.reveng.invoker.JSON;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.invoker.ApiException;
 
 import static ai.reveng.toolkit.ghidra.core.services.api.LoggingInterceptor.*;
-import static ai.reveng.toolkit.ghidra.core.services.api.Utils.mapJSONArray;
-import static java.net.http.HttpClient.Version.HTTP_1_1;
 
-/// The main implementation of the RevEng HTTP API
-/// It partially relies on the old manual implementation, but should be migrated to the OpenAPI generated client over time
+/// The main implementation of the RevEng HTTP API, on top of the generated SDK client
 /// Design notes:
 /// - every method should correspond to a single API endpoint
 /// - every method should simply execute the request and return the response
 ///      - i.e. no smart checks relying on other API calls to check if e.g. a binary has already been uploaded
 public class TypedApiImplementation implements TypedApiInterface {
-    private final HttpClient httpClient;
-    private final String baseUrl;
-    Map<String, String> headers;
+    /// /v3/analyses caps page_size at 50 and pages forward with an opaque token.
+    private static final long ANALYSIS_LIST_PAGE_SIZE = 50;
+
+    /// The maximum the v3 function-list endpoint accepts; a larger value is rejected with a 422.
+    private static final long FUNCTION_LIST_PAGE_SIZE = 500;
+
+    /// Omitting analysis_scope makes the server default to PRIVATE only.
+    private static final List<String> ALL_ANALYSIS_SCOPES = List.of("PRIVATE", "TEAM", "PUBLIC");
 
     private final AnalysesCoreApi analysisCoreApi;
-    private final AnalysesResultsMetadataApi analysesResultsMetadataApi;
     private final ConfigApi configApi;
     private final SearchApi searchApi;
     private final CollectionsApi collectionsApi;
     private final FunctionsCoreApi functionsCoreApi;
     private final FunctionsRenamingHistoryApi functionsRenamingHistoryApi;
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
-    private final FunctionsDataTypesApi functionsDataTypesApi;
+    private final DataTypesApi dataTypesApi;
     private final IamUsersApi iamUsersApi;
 
-    // Cache for binary ID to analysis ID mappings
-    @Deprecated
-    private final Map<BinaryID, AnalysisID> binaryToAnalysisCache = new HashMap<>();
-
-    // Cache for analysis basic info to avoid repeated API calls
-    private final Map<AnalysisID, ai.reveng.model.Basic> analysisBasicInfoCache = new HashMap<>();
+    private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
     public TypedApiImplementation(String baseUrl, String apiKey) {
         var apiClient = Configuration.getDefaultApiClient();
@@ -102,28 +95,14 @@ public class TypedApiImplementation implements TypedApiInterface {
         APIKey.setApiKey(apiKey);
 
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
-        this.analysesResultsMetadataApi = new AnalysesResultsMetadataApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
         this.collectionsApi = new CollectionsApi(apiClient);
         this.functionsCoreApi = new FunctionsCoreApi(apiClient);
         this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
         this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
-        this.functionsDataTypesApi = new FunctionsDataTypesApi(apiClient);
+        this.dataTypesApi = new DataTypesApi(apiClient);
         this.configApi = new ConfigApi(apiClient);
         this.iamUsersApi = new IamUsersApi(apiClient);
-
-        this.baseUrl = baseUrl + "/";
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .version(HTTP_1_1) // by default the client would attempt HTTP2.0 which leads to weird issues
-                .build();
-        headers = new HashMap<>();
-        headers.put("Authorization", apiKey);
-        headers.put("User-Agent", userAgent);
-        headers.put("X-RevEng-Application", userAgent);
-
-        // TODO: Actually implement support for some encodings and then accept them
-//        headers.put("Accept-Encoding", "gzip, deflate, br");
     }
 
 
@@ -142,67 +121,33 @@ public class TypedApiImplementation implements TypedApiInterface {
         return new BinaryHash(result.getData().getSha256Hash());
     }
 
-    /*
-    Allows you to search for specific analyses and collections.
-    The query parameter follows a non standard formatting using key-pair comma seperated values.
-    he base query is formatted as follows: /search?search=sha_256_hash:<hash>,binary_name:<binary_name>,tags=<tag>,collection_name:<collection_name>.
-    Not all parameters are required, for example /search?search=sha_256_hash:<hash> only searches for binaries and collection with hashes like <hash>.
-
-     */
+    /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
+    ///
+    /// All three analysis scopes are requested explicitly because the endpoint narrows to PRIVATE
+    /// when the parameter is absent.
     @Deprecated
-    public List<LegacyAnalysisResult> search(BinaryHash hash) {
-        Map<String, String> params = new HashMap<>();
-        params.put("sha256_hash", hash.sha256());
-
-        JSONObject json = sendRequest(
-                requestBuilderForEndpoint("analyses", "list",  queryParams(params))
-                        .GET()
-                        .header("Content-Type", "application/json" )
-                        .build());
-
-        return mapJSONArray(json.getJSONObject("data").getJSONArray("results"), LegacyAnalysisResult::fromJSONObject);
-    }
-
-    private V2Response sendVersion2Request(HttpRequest request){
-        return V2Response.fromJSONObject(sendRequest(request));
-    }
-
-    private JSONObject sendRequest(HttpRequest request) throws APIAuthenticationException {
-        Msg.info(this, "Sending request to: " + request.uri());
-        HttpResponse<String> response = null;
-
-        var retryAttempts = 3;
-        while (response == null && retryAttempts > 0) {
-            try {
-                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            } catch (HttpTimeoutException timeout) {
-                // Sometimes the API hangs, and works again shortly after, so we just try again
-                Msg.info(this, "Timed out waiting for response from: " + request.uri());
-                Msg.info(this, "Trying again: " + request.uri());
-                retryAttempts--;
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+    public List<AnalysisRecordBody> search(BinaryHash hash) {
+        List<AnalysisRecordBody> results = new ArrayList<>();
+        String pageToken = null;
+        try {
+            while (true) {
+                ListAnalysesOutputBody page = analysisCoreApi.v3ListAnalyses(
+                        null, ALL_ANALYSIS_SCOPES, null, null, null, hash.sha256(),
+                        ANALYSIS_LIST_PAGE_SIZE, pageToken, null, null);
+                var records = page.getResults();
+                if (records == null || records.isEmpty()) {
+                    break;
+                }
+                results.addAll(records);
+                pageToken = page.getNextPageToken();
+                if (pageToken == null || pageToken.isBlank()) {
+                    break;
+                }
             }
+        } catch (ApiException e) {
+            throw new RuntimeException(describeApiException(e), e);
         }
-
-        switch (response.statusCode()){
-            case 200:
-            case 201:
-                Msg.info(this, "Request to %s succeeded with status code: %s".formatted(request.uri(), response.statusCode()));
-                return new JSONObject(response.body());
-            case 404:
-                return new JSONObject(response.body());
-            case 401:
-                throw new APIAuthenticationException(response.body());
-            case 409:
-                throw new APIConflictException(response.body());
-            default:
-                var errorMsg = "Request to %s failed with status code: %s and message: %s".formatted(request.uri(), response.statusCode(), response.body());
-                Msg.showError(this, null, "Request failed with status code: " + response.statusCode(), errorMsg);
-                throw new RuntimeException(errorMsg);
-        }
+        return results;
     }
 
     @Override
@@ -212,202 +157,217 @@ public class TypedApiImplementation implements TypedApiInterface {
         return new AnalysisID(result.getData().getAnalysisId());
     }
 
-    @Deprecated
-    @Override
-    public AnalysisStatus status(BinaryID binaryID) throws ApiException {
-        var analysisID = this.getAnalysisIDfromBinaryID(binaryID);
-
-        var status = this.analysisCoreApi.getAnalysisStatus(analysisID.id());
-
-        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
-    }
-
     @Override
     public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
         var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
-        return AnalysisStatus.valueOf(status.getData().getAnalysisStatus());
+        return AnalysisStatus.fromApiValue(status.getData().getAnalysisStatus());
     }
 
+    /**
+     * The endpoint is paginated by offset and limit, and reports the unpaginated population size as
+     * {@code total_count}, so paging walks the offset forward until that many entries have arrived.
+     * The offset advances by the number of entries actually returned rather than by the requested
+     * limit, so a server-side cap below {@code limit} neither skips nor repeats entries.
+     */
     @Override
     public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
-        // The server caps page_size at 1000, so paginate until every function is retrieved.
-        int pageSize = 1000;
+        long limit = FUNCTION_LIST_PAGE_SIZE;
         List<FunctionInfo> functions = new ArrayList<>();
-        int page = 1;
+        long offset = 0;
         while (true) {
-            BaseResponseAnalysisFunctions response;
+            ListAnalysisFunctionsOutputBody response;
             try {
-                response = this.analysesResultsMetadataApi.getFunctionsList(
-                        analysisID.id(), null, null, null, false, page, pageSize);
+                response = this.functionsCoreApi.listAnalysisFunctions((long) analysisID.id(), offset, limit);
             } catch (ApiException e) {
-                throw new RuntimeException("Could not find analysis with ID: " + analysisID.id(), e);
+                throw new RuntimeException(
+                        "Could not list functions for analysis " + analysisID.id() + ": " + describeApiException(e), e);
             }
 
-            response.getData().getFunctions().stream().map(f -> (
+            var page = response.getFunctions();
+            if (page == null || page.isEmpty()) {
+                break;
+            }
+
+            page.stream().map(f -> (
                     new FunctionInfo(
                             new FunctionID(f.getFunctionId()),
                             f.getFunctionName(),
-                            f.getFunctionMangledName(),
+                            // The mangled name is optional here; an unmangled symbol carries none,
+                            // and callers rely on this field being populated.
+                            f.getMangledName() != null ? f.getMangledName() : f.getFunctionName(),
                             f.getFunctionVaddr(),
-                            f.getFunctionSize()
+                            Math.toIntExact(f.getFunctionSize())
                     )
             )).forEach(functions::add);
 
-            var pagination = response.getMeta() != null ? response.getMeta().getPagination() : null;
-            if (pagination == null || !Boolean.TRUE.equals(pagination.getHasNextPage())) {
+            offset += page.size();
+            Long totalCount = response.getTotalCount();
+            if (totalCount == null || offset >= totalCount) {
                 break;
             }
-            page++;
         }
 
         return functions;
     }
 
-    private String queryParams(Map<String, String> params){
-        return "?" + params.entrySet().stream()
-                .filter(e -> e.getValue() != null)
-                .map(e -> e.getKey() + "=" + e.getValue())
-                .reduce((a, b) -> a + "&" + b)
-                .orElse("");
-    }
+    /// GET /v3/analyses/{analysis_id}/logs
+    ///
+    /// v3 answers with structured entries where v2 answered with one preformatted blob, so the lines
+    /// are rendered here into the single string the log view and the progress monitor consume.
     @Override
     public String getAnalysisLogs(AnalysisID analysisID) {
-        var request = requestBuilderForEndpoint("analyses", String.valueOf(analysisID.id()), "logs")
-                .build();
-        JSONObject response = sendVersion2Request(request).getJsonData();
-        return response.getString("logs");
-    }
-
-    private HttpRequest.Builder requestBuilderForEndpoint(String... endpointPaths){
-        URI uri;
-        String apiVersionPath = "v2";
-        String endpoint = String.join("/", endpointPaths).replace("/?", "?").replace("?/", "?");
-
+        List<AnalysisLogEntry> entries;
         try {
-            uri = new URI(baseUrl + apiVersionPath + "/" + endpoint);
-        } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
-        }
-        var requestBuilder = HttpRequest.newBuilder(uri);
-        headers.forEach(requestBuilder::header);
-        requestBuilder.timeout(Duration.ofSeconds(20));
-        return requestBuilder;
-    }
-
-    /**
-     * <a href="https://api.reveng.ai/v2/docs#tag/Analysis-Management/operation/get_analysis_id_v2_analyses_lookup__binary_id__get">...</a>
-     *
-     * The mapping never changes so we can cache it to avoid repeated requests.
-     *
-     * @param binaryID the binary id to look up
-     * @return the analysis id
-     */
-    @Override
-    @Deprecated
-    public AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID){
-        // Check cache first
-        AnalysisID cachedResult = binaryToAnalysisCache.get(binaryID);
-        if (cachedResult != null) {
-            return cachedResult;
-        }
-
-        // If not in cache, make HTTP request
-        JSONObject response = sendRequest(requestBuilderForEndpoint("analyses/lookup/" + binaryID.value())
-                .GET()
-                .build());
-
-        AnalysisID analysisID = new AnalysisID(response.getInt("analysis_id"));
-
-        // Cache the result
-        binaryToAnalysisCache.put(binaryID, analysisID);
-
-        return analysisID;
-    }
-
-    /**
-     * Triggers the generation of function data types for a provided list of functions
-     * <a href="https://api.reveng.ai/v2/docs#tag/Function-Overview/operation/generate_function_datatypes_v2_analyses__analysis_id__info_functions_data_types_post">...</a>
-     * https://api.reveng.ai/v2/analyses/{analysis_id}/info/functions/data_types
-     * @param functionIDS
-     * @return
-     */
-    @Override
-    public DataTypeList generateFunctionDataTypes(AnalysisID analysisID, List<FunctionID> functionIDS) throws APIConflictException{
-        JSONObject params = new JSONObject();
-        params.put("function_ids", functionIDS.stream().map(FunctionID::value).toList());
-
-        var request = requestBuilderForEndpoint("analyses/%s/info/functions/data_types".formatted(analysisID.id()))
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-
-        var response = sendVersion2Request(request);
-        return DataTypeList.fromJson(response.getJsonData().getJSONObject("data_types_list"));
-    }
-
-    @Override
-    public DataTypeList getFunctionDataTypes(List<FunctionID> functionIDS) {
-        String queryString = functionIDS.stream().map( f -> "function_ids=" + f.value() ).reduce((a, b) -> a + "&" + b).orElseThrow();
-        var request = requestBuilderForEndpoint("functions", "data_types?", queryString)
-                .GET()
-                .header("Content-Type", "application/json" )
-                .build();
-        var response = sendVersion2Request(request);
-        return DataTypeList.fromJson(response.getJsonData());
-    }
-
-    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID id, List<FunctionID> ids) {
-        try {
-            List<Integer> functionIds = null;
-            if (ids == null) {
-                functionIds = null;
-            } else {
-                functionIds = ids.stream().map(FunctionID::value).map(Long::intValue).toList();
-            }
-            var r = functionsDataTypesApi.listFunctionDataTypesForAnalysis(id.id(), functionIds);
-            var data = r.getData();
-            return data;
+            entries = analysisCoreApi.v3GetAnalysisLogs((long) analysisID.id()).getEntries();
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
+        if (entries == null || entries.isEmpty()) {
+            return "";
+        }
+        return entries.stream()
+                .map(TypedApiImplementation::renderLogEntry)
+                .collect(Collectors.joining("\n"));
     }
 
-    /// GET /v2/functions/data_types carries the function ids as a query parameter. A whole-binary match
-    /// resolves type info for every matched function at once, so the id list overflows the request URI
-    /// (HTTP 414) unless it is chunked.
-    private static final int DATA_TYPES_BATCH_SIZE = 50;
+    private static String renderLogEntry(AnalysisLogEntry entry) {
+        StringBuilder line = new StringBuilder();
+        if (entry.getTimestamp() != null) {
+            line.append(entry.getTimestamp()).append(' ');
+        }
+        if (entry.getLevel() != null) {
+            line.append(entry.getLevel().getValue()).append(' ');
+        }
+        if (entry.getSource() != null && !entry.getSource().isBlank()) {
+            line.append('[').append(entry.getSource()).append("] ");
+        }
+        if (entry.getText() != null) {
+            line.append(entry.getText());
+        }
+        return line.toString();
+    }
 
+    /// GET /v3/functions/signatures
+    ///
+    /// Read through the generated call rather than the generated response model: the response
+    /// embeds `DataTypeEntry`, whose generated deserialiser picks a variant by counting matching
+    /// fields instead of reading the `kind` discriminator, and every variant carries the same
+    /// required fields. The call still builds the request — path, query, auth — exactly as the SDK
+    /// would; only the body is read by {@link ServerDataTypeReader}.
     @Override
-    public FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
+    public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
         try {
-            List<Integer> ids = functionIDs.stream().map(FunctionID::value).map(Long::intValue).toList();
-            var merged = new FunctionDataTypesList();
-            merged.setItems(new ArrayList<>());
-            for (int i = 0; i < ids.size(); i += DATA_TYPES_BATCH_SIZE) {
-                var batch = ids.subList(i, Math.min(i + DATA_TYPES_BATCH_SIZE, ids.size()));
-                var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(batch).getData();
-                if (data != null && data.getItems() != null) {
-                    merged.getItems().addAll(data.getItems());
+            var call = dataTypesApi.v3ListFunctionSignaturesCall(
+                    functionIDs.stream().map(FunctionID::value).toList(), includeDataTypes, null);
+            JsonObject body = executeForJsonObject(call, "list function signatures");
+
+            List<BatchFunctionSignatureEntry> items = new ArrayList<>();
+            JsonArray rawItems = body.getAsJsonArray("items");
+            if (rawItems != null) {
+                for (JsonElement item : rawItems) {
+                    items.add(JSON.getGson().fromJson(item, BatchFunctionSignatureEntry.class));
                 }
             }
-            return merged;
+
+            Map<AnalysisID, List<ServerDataType>> dataTypes = new LinkedHashMap<>();
+            JsonArray groups = body.getAsJsonArray("data_types");
+            if (groups != null) {
+                for (JsonElement group : groups) {
+                    if (!group.isJsonObject()) {
+                        continue;
+                    }
+                    JsonElement analysisId = group.getAsJsonObject().get("analysis_id");
+                    if (analysisId == null || analysisId.isJsonNull()) {
+                        continue;
+                    }
+                    dataTypes.computeIfAbsent(new AnalysisID(analysisId.getAsInt()), ignored -> new ArrayList<>())
+                            .addAll(ServerDataTypeReader.readEntries(group, "items"));
+                }
+            }
+            return new FunctionSignatureBatch(items, dataTypes);
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
     }
 
+    /// GET /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Read through the generated call for the same reason as
+    /// {@link #listFunctionSignatures(List, boolean)}.
     @Override
-    public Optional<FunctionDataTypeStatus> getFunctionDataTypes(AnalysisID analysisID, FunctionID functionID) {
-        // https://api.reveng.ai/v2/analyses/{analysis_id}/info/functions/{function_id}/data_types
-        var request = requestBuilderForEndpoint("analyses/%s/info/functions/%s/data_types".formatted(analysisID.id(), functionID.value()))
-                .GET()
-                .header("Content-Type", "application/json" )
-                .build();
-        var response = sendVersion2Request(request);
-        if (response.errors() == null){
-            return Optional.of(FunctionDataTypeStatus.fromJson(response.getJsonData()));
-        } else {
-            return Optional.empty();
+    public List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+        try {
+            var call = dataTypesApi.v3ListAnalysisDataTypesCall(
+                    (long) analysisID.id(), offset, limit, null, null, null, null, null, null, null);
+            return ServerDataTypeReader.readEntries(
+                    executeForJsonObject(call, "list analysis data types"), "items");
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /// POST /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Written through the generated call for the same reason the reads are: the 201 body embeds
+    /// `DataTypeEntry`. The request body is a generated model, which serialises correctly — only
+    /// the deserialiser is unusable.
+    @Override
+    public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                        CreateAnalysisDataTypesInputBody request) throws ApiException {
+        var call = dataTypesApi.v3CreateAnalysisDataTypesCall((long) analysisID.id(), request, null);
+        return ServerDataTypeReader.readEntries(
+                executeForJsonObject(call, "create analysis data types"), "data_types");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/data-types
+    @Override
+    public List<ServerDataType> updateAnalysisDataTypes(AnalysisID analysisID,
+                                                        UpdateAnalysisDataTypesInputBody request) throws ApiException {
+        var call = dataTypesApi.v3UpdateAnalysisDataTypesCall((long) analysisID.id(), request, null);
+        return ServerDataTypeReader.readEntries(
+                executeForJsonObject(call, "update analysis data types"), "data_types");
+    }
+
+    /// PUT /v3/analyses/{analysis_id}/functions/{function_id}/signature
+    ///
+    /// The response holds no `DataTypeEntry`, so the generated model reads it fine — and going
+    /// through it keeps the status code on the {@link ApiException}, which is how a function
+    /// without an extracted signature is told apart from a real failure.
+    @Override
+    public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                        UpdateFunctionSignatureInputBody signature) throws ApiException {
+        dataTypesApi.v3UpdateFunctionSignature((long) analysisID.id(), functionID.value(), signature);
+    }
+
+    /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
+    ///
+    /// The history body holds no `DataTypeEntry`, so the generated model reads it fine.
+    @Override
+    public List<FunctionSignatureVersion> getFunctionSignatureHistory(AnalysisID analysisID, FunctionID functionID) {
+        try {
+            var versions = dataTypesApi
+                    .v3GetFunctionSignatureHistory((long) analysisID.id(), functionID.value())
+                    .getVersions();
+            return versions == null ? List.of() : versions;
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static JsonObject executeForJsonObject(okhttp3.Call call, String what) throws ApiException {
+        try (okhttp3.Response response = call.execute()) {
+            okhttp3.ResponseBody responseBody = response.body();
+            String text = responseBody == null ? "" : responseBody.string();
+            if (!response.isSuccessful()) {
+                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+            }
+            JsonElement parsed = JsonParser.parseString(text);
+            if (!parsed.isJsonObject()) {
+                throw new ApiException("Failed to %s: response was not a JSON object".formatted(what));
+            }
+            return parsed.getAsJsonObject();
+        } catch (IOException e) {
+            throw new ApiException(e);
         }
     }
 
@@ -415,7 +375,9 @@ public class TypedApiImplementation implements TypedApiInterface {
     public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         try {
             // POST /v3/functions/{function_id}/ai-decompilation
-            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), false, null);
+            // The context_aware flag was removed from the API with no replacement; temperature is
+            // left null so the server applies its own default.
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null);
             return Boolean.TRUE.equals(result.getStatus());
         } catch (ApiException e) {
             throw new RuntimeException("Failed to trigger AI decompilation", e);
@@ -428,6 +390,10 @@ public class TypedApiImplementation implements TypedApiInterface {
             // GET /v3/functions/{function_id}/ai-decompilation
             DecompilationData data = functionsAiDecompilationApi.getAiDecompilation(functionID.value());
             String summary = null;
+            // TODO: no v3 endpoint currently returns a predicted function name. It used to ride on
+            // the removed /ai-decompilation/tokenised response; neither /token-values nor
+            // /line-attributions carries it, so the predicted-name panel stays hidden until the API
+            // offers it again.
             String predictedFunctionName = null;
             WorkflowProgress.StatusEnum summaryStatus = null;
             WorkflowProgress.StatusEnum inlineCommentsStatus = null;
@@ -456,13 +422,6 @@ public class TypedApiImplementation implements TypedApiInterface {
                     summary = summaryData.getAiSummary() != null ? summaryData.getAiSummary() : summaryData.getSummary();
                 } catch (ApiException e) {
                     Msg.info(this, "Decompilation completed but summary not yet available for function " + functionID.value());
-                }
-                try {
-                    // GET /v3/functions/{function_id}/ai-decompilation/tokenised — carries the predicted name
-                    TokenisedData tokenised = functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
-                    predictedFunctionName = tokenised.getPredictedFunctionName();
-                } catch (ApiException e) {
-                    Msg.info(this, "Could not fetch predicted function name for function " + functionID.value() + ": " + e.getMessage());
                 }
                 try {
                     // GET /v3/functions/{function_id}/ai-decompilation/inline-comments/status
@@ -527,16 +486,18 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
-        // GET /v3/functions/{function_id}/ai-decompilation/tokenised
-        return functionsAiDecompilationApi.getAiDecompilationTokenised(functionID.value());
+    public GetTokensResponse getAIDecompilationTokens(FunctionID functionID) throws ApiException {
+        // GET /v3/functions/{function_id}/ai-decompilation/tokens
+        return functionsAiDecompilationApi.v3GetAiDecompilationTokens(functionID.value());
     }
 
     @Override
     public UpsertOverridesData applyAIDecompilationOverrides(FunctionID functionID, java.util.Map<String, String> overrides) throws ApiException {
         // PUT /v3/functions/{function_id}/ai-decompilation/overrides
-        var body = new UpsertOverridesInputBody().overrides(overrides);
-        return functionsAiDecompilationApi.upsertAiDecompilationOverrides(functionID.value(), body);
+        var wrapped = new java.util.LinkedHashMap<String, Token>();
+        overrides.forEach((token, value) -> wrapped.put(token, new Token().value(value)));
+        var body = new UpsertOverridesInputBody().overrides(wrapped);
+        return functionsAiDecompilationApi.v3UpsertAiDecompilationOverrides(functionID.value(), body);
     }
 
     @Override
@@ -558,92 +519,37 @@ public class TypedApiImplementation implements TypedApiInterface {
         return "HTTP " + e.getCode() + " — " + (e.getResponseBody() != null ? e.getResponseBody() : e.getMessage());
     }
 
-    /**
-     * https://api.reveng.ai/v2/docs#tag/Functions-overview/operation/rename_function_id_v2_functions_rename__function_id__post
-     *
-     * @param id
-     * @param newName
-     * @param newNameMangled
-     */
+    /// POST /v3/functions/rename, with a one-item body: v3 has no per-function rename route.
+    /// The endpoint answers 200 with the number of functions it renamed, so a count of zero is
+    /// raised rather than passed off to the caller as a successful rename.
     @Override
     public void renameFunction(FunctionID id, String newName, String newNameMangled) {
-        var fn = new FunctionRename();
-        fn.setNewName(newName);
-        fn.setNewMangledName(newNameMangled);
+        var item = new BatchRenameItem();
+        item.setFunctionId(id.value());
+        item.setNewName(newName);
+        item.setNewMangledName(newNameMangled);
+        var request = new BatchRenameInputBody();
+        request.setFunctions(List.of(item));
+        BatchRenameOutputBody response;
         try {
-            functionsRenamingHistoryApi.renameFunctionId((int) id.value(), fn);
+            response = functionsRenamingHistoryApi.batchRenameFunctions(request);
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    @Override
-    public FunctionNameScore getNameScore(FunctionMatch match) {
-        return getNameScores(List.of(match), false).get(0);
-    }
-
-    /**
-     * https://api.reveng.ai/v2/docs#tag/Confidence-Scores/operation/function_threat_score_v2_confidence_functions_threat_score_post
-     */
-    @Override
-    public List<FunctionNameScore> getNameScores(List<FunctionMatch> matches, Boolean isDebug) {
-        JSONObject params = new JSONObject();
-        params.put("is_debug", isDebug);
-        var functions = new ArrayList<JSONObject>();
-        for (var match : matches){
-            functions.add(new JSONObject()
-                    // The id of the original function that matches were searched for
-                    .put("function_id", match.origin_function_id().value())
-                    // The name of the nearest neighbor function for which we want the score
-                    .put("function_name_mangled", match.nearest_neighbor_function_name()));
-        }
-        params.put("functions", functions);
-
-        HttpRequest request = requestBuilderForEndpoint("confidence", "functions", "name_score")
-                .POST(HttpRequest.BodyPublishers.ofString(params.toString()))
-                .header("Content-Type", "application/json" )
-                .build();
-        JSONArray responseData = (JSONArray) sendVersion2Request(request).data();
-        return mapJSONArray(responseData, FunctionNameScore::fromJSONObject);
-    }
-
-    /**
-     *
-     * @param id
-     * @return
-     */
-    @Override
-    public AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        try {
-            var response = analysisCoreApi.getAnalysisBasicInfo(id.id());
-            var data = response.getData();
-            if (data == null) {
-                throw new RuntimeException("Unexpected null data for analysis ID: " + id.id());
-            }
-            return new AnalysisResult(
-                    id,
-                    data
-            );
-        } catch (ApiException e) {
-            throw new IllegalArgumentException("Could not find analysis with ID: " + id.id());
+        Long renamedCount = response == null ? null : response.getRenamedCount();
+        if (renamedCount == null || renamedCount < 1) {
+            throw new RuntimeException("Server did not rename function " + id.value() + " to " + newName
+                    + " (renamed_count: " + renamedCount + ")");
         }
     }
 
-    /**
-     * https://api.reveng.ai/redoc#tag/Functions-overview/operation/function_detail_v2_functions__function_id__get
-     * @param id
-     * @return
-     */
     @Override
     public FunctionDetails getFunctionDetails(FunctionID id) {
-        BaseResponseFunctionsDetailResponse dets = null;
         try {
-            dets = functionsCoreApi.getFunctionDetails((int) id.value());
+            return FunctionDetails.fromServerResponse(functionsCoreApi.getFunctionDetails_0(id.value()));
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
-        return FunctionDetails.fromServerResponse(dets.getData());
-
     }
 
     @Override
@@ -684,23 +590,20 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     @Override
     public List<BinarySearchResult> searchBinaries(String partialBinaryName, String modelName) throws ApiException {
-        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null).getData().getResults();
+        return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null, null).getData().getResults();
     }
 
     @Override
-    public ai.reveng.model.Basic getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
-        // Check cache first
-        ai.reveng.model.Basic cachedResult = analysisBasicInfoCache.get(analysisID);
+    public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
+        AnalysisBasicInfoOutputBody cachedResult = analysisBasicInfoCache.get(analysisID);
         if (cachedResult != null) {
             Msg.info(this, "Returning cached analysis basic info for analysis ID: " + analysisID.id());
             return cachedResult;
         }
 
-        // If not in cache, make API call
         Msg.info(this, "Fetching analysis basic info from API for analysis ID: " + analysisID.id());
-        ai.reveng.model.Basic result = this.analysisCoreApi.getAnalysisBasicInfo(analysisID.id()).getData();
+        AnalysisBasicInfoOutputBody result = this.analysisCoreApi.getAnalysisBasicInfo_0((long) analysisID.id());
 
-        // Cache the result for future requests
         analysisBasicInfoCache.put(analysisID, result);
 
         return result;
@@ -741,23 +644,21 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.functionsRenamingHistoryApi.batchRenameFunctions(request);
     }
 
+    /// GET /v3/functions/{function_id}/blocks
+    ///
+    /// Returns the function's assembly in address order, or an empty list when the function carries
+    /// no stored disassembly: v3 reports that as a 200 whose block fields are simply absent, where
+    /// the deprecated v2 endpoint answered 404. A 404 from v3 means the function itself could not be
+    /// reached, and a 409 that the analysis is not ready yet; both stay on the {@link ApiException}
+    /// so the caller can tell them apart by status code.
     @Override
     public List<String> getAssembly(FunctionID id) {
-
-        FunctionBlocksResponse blocks;
-        List<String> result =  new ArrayList<>();
         try {
-            blocks = this.functionsCoreApi.getFunctionBlocks(id.asInteger()).getData();
+            DisassemblyOutputBody disassembly = this.functionsCoreApi.getFunctionBlocks_0(id.value());
+            return DisassemblyBlocksReader.readAssembly(disassembly.getBasicBlocks());
         } catch (ApiException e) {
             throw new RuntimeException(e);
         }
-        blocks.getBlocks().stream()
-                .sorted( (b1, b2) -> b1.getMinAddr().compareTo(b2.getMinAddr()) )
-                .forEach(block -> {
-                    result.addAll(block.getAsm());
-                });
-
-        return result;
     }
 
     @Override
@@ -775,52 +676,12 @@ public class TypedApiImplementation implements TypedApiInterface {
         return mapping;
     }
 
-    @Override
-    public Optional<VersionedFunctionTypes> getFunctionDataTypesWithVersion(FunctionID functionID) throws ApiException {
-        var data = functionsDataTypesApi.listFunctionDataTypesForFunctions(List.of(functionID.asInteger())).getData();
-        if (data == null || data.getItems() == null) {
-            return Optional.empty();
-        }
-        return data.getItems().stream()
-                .filter(item -> item.getFunctionId() != null && item.getFunctionId() == functionID.value())
-                .findFirst()
-                .map(item -> new VersionedFunctionTypes(
-                        item.getDataTypes(),
-                        item.getDataTypesVersion() == null ? 0L : item.getDataTypesVersion().longValue()));
-    }
-
-    @Override
-    public List<DataTypePushResult> pushFunctionDataTypes(AnalysisID analysisID, List<FunctionDataTypeUpdate> updates) throws ApiException {
-        var items = updates.stream()
-                .map(update -> new BatchUpdateDataTypesItem()
-                        .functionId(update.functionID().value())
-                        .dataTypes(update.dataTypes())
-                        .dataTypesVersion(update.version()))
-                .toList();
-        var body = new BatchUpdateDataTypesInputBody().functions(items);
-        var response = functionsDataTypesApi.batchUpdateFunctionDataTypes((long) analysisID.id(), body);
-        if (response.getResults() == null) {
-            return List.of();
-        }
-        return response.getResults().stream()
-                .map(result -> new DataTypePushResult(
-                        new FunctionID(result.getFunctionId()),
-                        mapPushStatus(result.getStatus()),
-                        result.getError()))
-                .toList();
-    }
-
-    private static DataTypePushStatus mapPushStatus(BatchUpdateDataTypesResult.StatusEnum status) {
-        if (status == null) {
-            return DataTypePushStatus.UNKNOWN;
-        }
-        return switch (status) {
-            case UPDATED -> DataTypePushStatus.UPDATED;
-            case VERSION_CONFLICT -> DataTypePushStatus.VERSION_CONFLICT;
-            case ERROR -> DataTypePushStatus.ERROR;
-            default -> DataTypePushStatus.UNKNOWN;
-        };
-    }
+    // TODO: getFunctionDataTypesWithVersion / pushFunctionDataTypes / mapPushStatus were removed
+    // here. They pushed a whole v2 data-type blob per function under optimistic concurrency, and
+    // neither those endpoints nor their models exist in the v3 API. The replacement writes types
+    // and signatures separately — POST/PATCH /v3/analyses/{analysis_id}/data-types to mint or
+    // update a type and get its data_type_id back, then PUT the signature that refers to it — and
+    // lands in a follow-up.
 
     @Override
     public ConfigResponse getConfig() {

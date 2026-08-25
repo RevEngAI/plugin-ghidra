@@ -20,7 +20,6 @@ public class AnalysisOptionsBuilder {
     // Package-private constructor for testing
     AnalysisOptionsBuilder() {
         options = new JSONObject();
-        options.put("size_in_bytes", 0);
         options.put("tags", new JSONArray());
     }
 
@@ -51,15 +50,6 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
-    public AnalysisOptionsBuilder size(long size) {
-        options.put("size_in_bytes", size);
-        return this;
-    }
-
-    public long getSize() {
-        return options.optLong("size_in_bytes", 0);
-    }
-
     public AnalysisOptionsBuilder scope(AnalysisScope scope){
         options.put("binary_scope", scope.scope);
         return this;
@@ -84,26 +74,6 @@ public class AnalysisOptionsBuilder {
                         program.getImageBase().getOffset(),
                         GhidraRevengService.exportFunctionBoundaries(program, includePredicate)
                 );
-    }
-
-    public AnalysisOptionsBuilder skipSBOM(boolean b) {
-        options.put("skip_sbom", b);
-        return this;
-    }
-
-    public AnalysisOptionsBuilder skipScraping(boolean b) {
-        options.put("skip_scraping", b);
-        return this;
-    }
-
-    public AnalysisOptionsBuilder skipCVE(boolean b) {
-        options.put("skip_cves", b);
-        return this;
-    }
-
-    public AnalysisOptionsBuilder dynamicExecution(boolean b) {
-        options.put("dynamic_execution", b);
-        return this;
     }
 
     public AnalysisOptionsBuilder skipCapabilities(boolean b) {
@@ -196,14 +166,6 @@ public class AnalysisOptionsBuilder {
         }
 
         var analysisConfig = new ai.reveng.model.AnalysisConfig();
-
-        if (options.has("skip_sbom")) {
-            analysisConfig.setGenerateSbom(!options.getBoolean("skip_sbom"));
-        }
-
-        if (options.has("skip_cves")) {
-            analysisConfig.setGenerateCves(!options.getBoolean("skip_cves"));
-        }
 
         if (options.has("skip_capabilities")) {
             analysisConfig.setGenerateCapabilities(!options.getBoolean("skip_capabilities"));

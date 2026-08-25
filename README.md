@@ -32,9 +32,13 @@ and use it for Binary Code Similarity to help you Reverse Engineer stripped bina
 
 ## Key features
 
-* Upload the current binary for analysis
-* Automatically rename all functions above a confidence threshold
-* Show similar functions and their names for one selected function
+* Create a RevEng.AI analysis for the open binary, or attach to one that already exists in the portal
+* Match functions against the RevEng.AI dataset and rename them, either one at a time or across the whole binary
+* A Similar Functions window that follows the cursor and diffs the selected function against each match
+* AI Decompilation, with a natural language explanation of what the function does
+* Agent Chat: ask the RevEng.AI agent about the current binary and let it rename and re-type functions
+* Sync With Portal: apply the names, function signatures and data types the portal holds for your analysis, and push local renames back up. Local type and signature edits go up on their own as you make them
+* Automatic sync of the names and data types recovered by the server-side auto-unstrip pass
 
 ## Installation
 
@@ -67,7 +71,9 @@ Once installed, you can enable the plugin via the `Configure` tool.
 1. Navigate to Ghidra's Configure tool
    - `File` -> `Configure`
 2. Click `Configure` under the `RevEng.AI` plugin group
-3. Select the checkbox next to each of the plugins except the `DevPlugin` (unless you are doing development on the plugin itself)
+3. Select the checkbox next to every plugin in the list: `AgentChatPlugin`, `AnalysisManagementPlugin`, `BinarySimilarityPlugin`, `LoggingPlugin` and `ReaiAPIServicePlugin`
+
+`ReaiAPIServicePlugin` and `LoggingPlugin` provide the API and logging services that the three feature plugins require, so all five need to be enabled.
 
 ![Plugins Configuration Window](screenshots/plugins-configuration-window.png)
 
@@ -94,7 +100,7 @@ When you load the plugin for the first time, or by selecting `RevEng.AI -> Confi
 You are now ready to analyse a binary.
 
 Import `src/test/resources/fdupes` into Ghidra and then create a new RevEng analysis, by going to `RevEng.AI -> Analysis -> Create New`.
-Usually it's enough to use the default options, but you can also select specific platforms or architectures if you want to.
+Usually it's enough to use the default options, but you can also select a specific architecture if you want to.
 
 ![Upload Dialog](screenshots/upload-dialog-v2.png)
 
@@ -115,7 +121,7 @@ applying them.
 
 We now have uploaded `fdupes` to our dataset, meaning we can now use it for our binary similarity tasks. Let's see how this works on a stripped version of `fdupes`.
 
-Import `src/test/resourcesfdupes.stripped` using the same steps as before. Once this has been completed, you can move on to the next step.
+Import `src/test/resources/fdupes.stripped` using the same steps as before. Once this has been completed, you can move on to the next step.
 
 With `fdupes.stripped` open in Ghidra, select a function in Ghidra's listing or decompiler view, and `Right-Click -> Match function`.
 This will open the function matching and renaming window.      
@@ -123,7 +129,7 @@ This will open the function matching and renaming window.
 ![Function Matching Action](screenshots/function-matching-action.png)
 ![Function Matching Window](screenshots/function-matching-window-2.png)
 
-Adjust the filters as necessary and when ready click `Match Functions`. This will return up to 10 functions that match
+Adjust the filters as necessary and when ready click `Match Functions`. This will return up to 25 candidate matches for
 the selected function. You can then decide to rename the function to one of the suggested names by clicking `Rename Selected`.
 
 You can always update the filters and click `Match Functions` again to update the returned functions based on updated filters.
@@ -160,11 +166,15 @@ The plugin is still undergoing active development currently, and we are looking 
 
 ### Code Overview
 
-We have tried to decompose the plugin into a series of individual plugins dependent on a **CorePlugin**.
+The extension is decomposed into several Ghidra plugins, all in `src/main/java/ai/reveng/toolkit/ghidra/plugins`.
 
-The **CorePlugin** provides services that are shared across all parts of the toolkit, namely configuration and API Services.
+Two of them exist only to provide shared services: **ReaiAPIServicePlugin** handles the API credentials and
+provides `GhidraRevengService`, the single entry point to the RevEng.AI API, and **LoggingPlugin** provides
+`ReaiLoggingService`. The feature plugins — **AnalysisManagementPlugin**, **BinarySimilarityPlugin** and
+**AgentChatPlugin** — declare those services in their `servicesRequired` and acquire them from the tool.
 
-You should therefore group related features into a Feature Plugin, and then acquire services from the CorePlugin as required. This gives users the flexiblity to enable / disable features based on their use-case and/or preferences.
+You should therefore group related features into a feature plugin, and then acquire services as required.
+This gives users the flexibility to enable / disable features based on their use-case and/or preferences.
 
 ### Building from source
 
@@ -177,10 +187,10 @@ Gradle can be used to build the plugin from its source code.
    git clone https://github.com/RevEngAI/plugin-ghidra.git
    ```
 
-2. Enter the repository and build with gradle.
+2. Enter the repository and build with the Gradle wrapper.
    ```
    cd plugin-ghidra
-   gradle -PGHIDRA_INSTALL_DIR=<ghidra_install_dir>
+   ./gradlew -PGHIDRA_INSTALL_DIR=<ghidra_install_dir> buildExtension
    ```
    * Replace `<ghidra_install_dir>` with the path to your local Ghidra installation path.
 

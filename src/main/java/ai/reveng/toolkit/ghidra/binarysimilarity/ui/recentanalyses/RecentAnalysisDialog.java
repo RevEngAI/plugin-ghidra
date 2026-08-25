@@ -4,7 +4,8 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponent
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
-import ai.reveng.toolkit.ghidra.core.services.api.types.LegacyAnalysisResult;
+import ai.reveng.model.AnalysisRecordBody;
+import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -21,12 +22,12 @@ import java.util.Comparator;
 
 
 /**
- * Shows a dialog with a table of {@link LegacyAnalysisResult} for a given {@link TypedApiInterface.BinaryHash},
+ * Shows a dialog with a table of {@link AnalysisRecordBody} for a given {@link TypedApiInterface.BinaryHash},
  * and fires an event when the user picks an analysis
  */
 public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private final RecentAnalysesTableModel recentAnalysesTableModel;
-    private final GhidraFilterTable<LegacyAnalysisResult> recentAnalysesTable;
+    private final GhidraFilterTable<AnalysisRecordBody> recentAnalysesTable;
     private final PluginTool tool;
     private final Program program;
     private final GhidraRevengService ghidraRevengService;
@@ -65,14 +66,13 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
                         // Check if clicked column is "Analysis ID" (column 0)
                         String columnName = recentAnalysesTable.getTable().getColumnName(col);
                         if ("Analysis ID".equals(columnName)) {
-                            LegacyAnalysisResult result = recentAnalysesTable.getModel().getRowObject(row);
+                            AnalysisRecordBody result = recentAnalysesTable.getModel().getRowObject(row);
                             if (result != null) {
-                                var binaryID = result.binary_id();
+                                var analysisID = new TypedApiInterface.AnalysisID(Math.toIntExact(result.getAnalysisId()));
                                 tool.execute(new Task("Open analysis in portal", false, false, false) {
                                     @Override
                                     public void run(TaskMonitor monitor) {
                                         try {
-                                            var analysisID = ghidraRevengService.getApi().getAnalysisIDfromBinaryID(binaryID);
                                             ghidraRevengService.openPortalFor(analysisID);
                                         } catch (Exception ex) {
                                             Msg.error(RecentAnalysisDialog.this, "Failed to open analysis in portal: " + ex.getMessage(), ex);
@@ -91,7 +91,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         pickMostRecentButton.setName("Pick most recent");
         pickMostRecentButton.addActionListener(e -> {
             var mostRecent = recentAnalysesTable.getModel().getModelData().stream().max(
-                    Comparator.comparing(LegacyAnalysisResult::creation)
+                    Comparator.comparing(AnalysisRecordBody::getCreation)
             ).orElseThrow();
             pickAnalysis(mostRecent);
         });
@@ -108,20 +108,21 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         addWorkPanel(mainPanel);
     }
 
-    private void pickAnalysis(LegacyAnalysisResult result) {
+    private void pickAnalysis(AnalysisRecordBody result) {
         var service = tool.getService(GhidraRevengService.class);
         tool.execute(new Task("Attach to analysis", true, false, false) {
             @Override
             public void run(TaskMonitor monitor) {
                 try {
-                    var analysisID = service.getApi().getAnalysisIDfromBinaryID(result.binary_id());
+                    var analysisID = new TypedApiInterface.AnalysisID(Math.toIntExact(result.getAnalysisId()));
                     var programWithID = service.registerAnalysisForProgram(program, analysisID);
                     SwingUtilities.invokeLater(() -> {
                         tool.firePluginEvent(
                                 new RevEngAIAnalysisStatusChangedEvent(
                                         "Recent Analysis Dialog",
                                         programWithID,
-                                        result.status()
+                                        // The table only holds analyses the model filtered to Complete
+                                        AnalysisStatus.Complete
                                 )
                         );
                         close();

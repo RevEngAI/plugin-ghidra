@@ -1,9 +1,13 @@
 package ai.reveng.toolkit.ghidra.core.services.api.mocks;
 
-import ai.reveng.model.FunctionDataTypesList;
+import ai.reveng.invoker.ApiException;
+import ai.reveng.model.CreateAnalysisDataTypesInputBody;
+import ai.reveng.model.UpdateAnalysisDataTypesInputBody;
+import ai.reveng.model.UpdateFunctionSignatureInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,10 +22,12 @@ public class UnimplementedAPI implements TypedApiInterface {
     protected AnalysisStatus getNextStatus(AnalysisStatus previousStatus) {
         Objects.requireNonNull(previousStatus);
         return switch (previousStatus) {
+            case Uploaded -> AnalysisStatus.Queued;
             case Queued -> AnalysisStatus.Processing;
             case Processing -> AnalysisStatus.Complete;
             case Complete ->  AnalysisStatus.Complete;
             case Error -> AnalysisStatus.Error;
+            case Unknown -> AnalysisStatus.Unknown;
         };
     }
 
@@ -52,7 +58,33 @@ public class UnimplementedAPI implements TypedApiInterface {
     /// This gets called when registering the initial mock analysis
     /// it just pretends that there is no type info available
     @Override
-    public FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
-        return new FunctionDataTypesList();
+    public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
+        return FunctionSignatureBatch.empty();
+    }
+
+    /// The write path is answered rather than refused, so a test exercising a push does not have to
+    /// stub all three endpoints just to get past them. An empty catalogue that accepts everything and
+    /// remembers nothing: the analysis has no types, creating some reports none back, and a signature
+    /// write succeeds silently. Tests that care about what was written override these.
+    @Override
+    public List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+        return List.of();
+    }
+
+    @Override
+    public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                        CreateAnalysisDataTypesInputBody request) {
+        return List.of();
+    }
+
+    @Override
+    public List<ServerDataType> updateAnalysisDataTypes(AnalysisID analysisID,
+                                                        UpdateAnalysisDataTypesInputBody request) {
+        return List.of();
+    }
+
+    @Override
+    public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                        UpdateFunctionSignatureInputBody signature) throws ApiException {
     }
 }

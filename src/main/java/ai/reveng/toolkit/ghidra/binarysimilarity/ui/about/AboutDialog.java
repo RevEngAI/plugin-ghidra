@@ -25,12 +25,15 @@ public class AboutDialog extends RevEngDialogComponentProvider {
     private String getPluginVersion() {
         String pluginVersion = "unknown";
         try {
-            // This file comes from the release.yml running in the CI
+            // This resource is written by the release workflow, so it is absent from a local build
+            // and the stream is then null.
             var inputStream = ResourceManager.getResourceAsStream("reai_ghidra_plugin_version.txt");
-            pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
-            inputStream.close();
+            if (inputStream != null) {
+                pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
+                inputStream.close();
+            }
         } catch (IOException e) {
-
+            // ignore — fall back to "unknown"
         }
 
         return pluginVersion;

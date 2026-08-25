@@ -35,7 +35,8 @@
       "status": "yes"
     },
     "fs_nns_filter": {
-      "status": "partial"
+      "note": "Results per function is fixed: 1 for binary-level matching, 25 for function-level. Not user configurable.",
+      "status": "absent"
     },
     "fs_similarity_filter": {
       "status": "yes"

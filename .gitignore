@@ -6,8 +6,6 @@ dev/
 *.class
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
-!lib/json-20230618.jar
-!lib/toml4j-0.7.2.jar
 *.war
 *.ear
 
@@ -47,7 +45,6 @@ Thumbs.db
 *.kotlin_builtins
 
 # Ignore development config files
-lib/src/test/resources/reai-dev-config.toml
 bin
 .antProperties.xml
 

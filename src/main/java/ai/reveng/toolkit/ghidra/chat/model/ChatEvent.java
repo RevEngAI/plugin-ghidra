@@ -53,8 +53,6 @@ public record ChatEvent(
     public static final Set<String> TERMINAL_EVENTS = Set.of("RUN_FINISHED", "RUN_ERROR", "RUN_CANCELLED");
 
     public static final int ROLE_USER = 2;
-    public static final int ROLE_SYSTEM = 3;
-    public static final int ROLE_TOOL = 4;
 
     /// Resolve a wire {@code type} (string name or integer 1..17) to its canonical name.
     public static String resolveType(Object typeField) {

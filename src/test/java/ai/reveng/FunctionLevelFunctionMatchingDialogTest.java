@@ -7,17 +7,19 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import docking.DockingWindowManager;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
 import java.util.List;
 
 import static org.junit.Assert.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 /**
  * Integration tests for the FunctionLevelFunctionMatchingDialog.
@@ -37,7 +39,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         env.addPlugin(BinarySimilarityPlugin.class);
 
         // Create a test program with a function
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         // Register the program as analyzed (this triggers associateFunctionInfo internally)
@@ -87,7 +89,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -123,7 +125,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -157,7 +159,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -193,7 +195,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         env.addPlugin(BinarySimilarityPlugin.class);
 
-        var builder = new ProgramBuilder("test_binary", ProgramBuilder._X64, this);
+        var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
@@ -235,9 +237,133 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         // Verify the API was actually called
         assertTrue("Function matching API should have been called", mockApi.functionMatchingCalled);
 
+        // Once the results are in, the status must say so. Nothing used to write to the label after
+        // "Loading type information...", so a completed match looked exactly like a stuck one.
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        waitForCondition(() -> !statusLabel.getText().contains("Loading"),
+                "Status label should stop saying it is loading once matching has finished");
+        assertTrue("The finished status should report the matches, was: " + statusLabel.getText(),
+                statusLabel.getText().contains("Matching complete"));
+        TaskMonitorComponent monitor =
+                (TaskMonitorComponent) getInstanceField("taskMonitorComponent", foundDialog);
+        assertFalse("The progress bar should not be left spinning", monitor.isVisible());
+
         // Close the dialog
         close(foundDialog);
         waitForSwing();
+    }
+
+    /**
+     * The results table is sortable, so a selected view row need not be the same row in the list
+     * backing the table model. Selecting a row after sorting must still pick the match that is
+     * actually displayed on that row, otherwise "Rename Selected" renames an unrelated function.
+     */
+    @Test
+    public void testSelectedMatchFollowsSortOrderNotModelOrder() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new MultiMatchMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+        assertNotNull("Dialog should be shown", foundDialog);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() == 3,
+                "Results table should hold all three mocked matches");
+
+        // The model holds the matches in the order the server returned them
+        assertEquals("zeta_match", resultsTable.getModel().getValueAt(0, 0));
+        assertEquals("alpha_match", resultsTable.getModel().getValueAt(1, 0));
+        assertEquals("mid_match", resultsTable.getModel().getValueAt(2, 0));
+
+        // Sort ascending by matched function name, which reorders the view against the model
+        runSwing(() -> resultsTable.getRowSorter().toggleSortOrder(0));
+        waitForSwing();
+        assertEquals("Sorting should have reordered the view", 1, resultsTable.convertRowIndexToModel(0));
+
+        // Select the first row as displayed, which is no longer the first row of the model
+        runSwing(() -> resultsTable.setRowSelectionInterval(0, 0));
+        waitForSwing();
+
+        List<?> selected = (List<?>) invokeInstanceMethod("getSelectedMatches", foundDialog);
+        assertEquals("Exactly one match should be selected", 1, selected.size());
+        assertEquals("The match on the selected view row must be the one that gets renamed",
+                "alpha_match",
+                ((GhidraFunctionMatchWithSignature) selected.get(0)).functionMatch().name());
+
+        // And the last displayed row maps back to the first row of the model
+        runSwing(() -> resultsTable.setRowSelectionInterval(2, 2));
+        waitForSwing();
+        selected = (List<?>) invokeInstanceMethod("getSelectedMatches", foundDialog);
+        assertEquals(1, selected.size());
+        assertEquals("zeta_match",
+                ((GhidraFunctionMatchWithSignature) selected.get(0)).functionMatch().name());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    /**
+     * Returns several matches whose server order differs from their alphabetical order, so that
+     * sorting the results table genuinely separates view indices from model indices.
+     */
+    static class MultiMatchMockApi extends FunctionMatchingMockApi {
+        @Override
+        public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) {
+            var response = new GetMatchesOutputBody();
+            response.setStatus(GetMatchesOutputBody.StatusEnum.COMPLETED);
+
+            var functionMatch = new ai.reveng.model.FunctionMatch();
+            functionMatch.setFunctionId(100L);
+            functionMatch.setMatchedFunctions(List.of(
+                    matchedFunction(200L, "zeta_match", 0.50),
+                    matchedFunction(201L, "alpha_match", 0.95),
+                    matchedFunction(202L, "mid_match", 0.72)
+            ));
+            response.setMatches(List.of(functionMatch));
+
+            return response;
+        }
+
+        private static MatchedFunction matchedFunction(long id, String name, double similarity) {
+            var matchedFunc = new MatchedFunction();
+            matchedFunc.setFunctionId(id);
+            matchedFunc.setFunctionName(name);
+            matchedFunc.setMangledName(name);
+            matchedFunc.setSha256Hash(Long.toString(id).repeat(64).substring(0, 64));
+            matchedFunc.setBinaryName("libc.so");
+            matchedFunc.setBinaryId(1L);
+            matchedFunc.setFunctionVaddr(0x2000L + id);
+            matchedFunc.setAnalysisId(12345L);
+            matchedFunc.setDebug(false);
+            matchedFunc.setSimilarity(similarity);
+            matchedFunc.setConfidence(similarity);
+            return matchedFunc;
+        }
+
+        @Override
+        public List<String> getAssembly(TypedApiInterface.FunctionID functionID) {
+            return List.of("push rbp", "mov rbp, rsp", "ret");
+        }
     }
 
     /**
@@ -273,10 +399,9 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public Basic getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
-            // Create a Basic object with required fields
-            var basic = new Basic();
-            basic.setModelId(1);
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
+            var basic = new AnalysisBasicInfoOutputBody();
+            basic.setModelId(1L);
             basic.setModelName("test-model");
             basic.setBinaryName("test_binary");
             basic.setSha256Hash("0".repeat(64));
@@ -358,9 +483,10 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForFunctions(List<TypedApiInterface.FunctionID> functionIDs) {
-            // Return empty list - no type info available
-            return new FunctionDataTypesList();
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            // No type info available
+            return FunctionSignatureBatch.empty();
         }
     }
 }

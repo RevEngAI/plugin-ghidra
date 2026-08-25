@@ -1,9 +1,9 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.recentanalyses;
 
+import ai.reveng.model.AnalysisRecordBody;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
-import ai.reveng.toolkit.ghidra.core.services.function.export.ExportFunctionBoundariesService;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import docking.widgets.table.AbstractDynamicTableColumn;
 import docking.widgets.table.TableColumnDescriptor;
@@ -16,7 +16,9 @@ import ghidra.util.datastruct.Accumulator;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
-public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnalysisResult> {
+import java.time.OffsetDateTime;
+
+public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRecordBody> {
     private final TypedApiInterface.BinaryHash hash;
     private final Address imageBase;
 
@@ -27,25 +29,24 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
     }
 
     @Override
-    protected void doLoad(Accumulator<LegacyAnalysisResult> accumulator, TaskMonitor monitor) throws CancelledException {
+    protected void doLoad(Accumulator<AnalysisRecordBody> accumulator, TaskMonitor monitor) throws CancelledException {
         var revEngAIService = serviceProvider.getService(GhidraRevengService.class);
-        var functionBoundariesService = serviceProvider.getService(ExportFunctionBoundariesService.class);
         var loggingService = serviceProvider.getService(ReaiLoggingService.class);
 
         // The search endpoint only returns analyses we have access to so there is no need to filter them.
         revEngAIService.searchForHash(hash).forEach(
                 result -> {
                     // Filter out analyses that are not Complete
-                    if (result.status() != AnalysisStatus.Complete) {
-                        loggingService.info("[RevEng] Skipping analysis for " + result.binary_id() + " as status is " + result.status());
+                    if (!AnalysisStatus.Complete.name().equals(result.getStatus())) {
+                        loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as status is " + result.getStatus());
                         return;
                     }
 
                     // Filter out analyses where the base address does not match our program
-                    if (result.base_address() != imageBase.getOffset()) {
+                    if (result.getBaseAddress() == null || result.getBaseAddress() != imageBase.getOffset()) {
                         loggingService.info(
-                            "[RevEng] Skipping analysis for " + result.binary_id() + " as base address does not match. Expected " +
-                            imageBase.getOffset() + " but got " + result.base_address());
+                            "[RevEng] Skipping analysis for " + result.getBinaryId() + " as base address does not match. Expected " +
+                            imageBase.getOffset() + " but got " + result.getBaseAddress());
                         return;
                     }
 
@@ -55,17 +56,17 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
     }
 
     @Override
-    protected TableColumnDescriptor<LegacyAnalysisResult> createTableColumnDescriptor() {
-        TableColumnDescriptor<LegacyAnalysisResult> descriptor = new TableColumnDescriptor<>();
-        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<LegacyAnalysisResult, String, Object>() {
+    protected TableColumnDescriptor<AnalysisRecordBody> createTableColumnDescriptor() {
+        TableColumnDescriptor<AnalysisRecordBody> descriptor = new TableColumnDescriptor<>();
+        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<AnalysisRecordBody, String, Object>() {
             @Override
             public String getColumnName() {
                 return "Analysis ID";
             }
 
             @Override
-            public String getValue(LegacyAnalysisResult rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
-                return String.valueOf(rowObject.analysis_id().id());
+            public String getValue(AnalysisRecordBody rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return String.valueOf(rowObject.getAnalysisId());
             }
 
             @Override
@@ -73,39 +74,39 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<LegacyAnaly
                 return "Click to open analysis in RevEng.AI portal";
             }
         });
-        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<LegacyAnalysisResult, String, Object>() {
+        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<AnalysisRecordBody, String, Object>() {
             @Override
             public String getColumnName() {
                 return "Binary Name";
             }
 
             @Override
-            public String getValue(LegacyAnalysisResult rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
-                return rowObject.binary_name();
+            public String getValue(AnalysisRecordBody rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return rowObject.getBinaryName();
             }
         });
 
-        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<LegacyAnalysisResult, String, Object>() {
+        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<AnalysisRecordBody, OffsetDateTime, Object>() {
             @Override
             public String getColumnName() {
                 return "Creation Time";
             }
 
             @Override
-            public String getValue(LegacyAnalysisResult rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
-                return rowObject.creation();
+            public OffsetDateTime getValue(AnalysisRecordBody rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return rowObject.getCreation();
             }
         });
 
-        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<LegacyAnalysisResult, AnalysisStatus, Object>() {
+        descriptor.addVisibleColumn(new AbstractDynamicTableColumn<AnalysisRecordBody, String, Object>() {
             @Override
             public String getColumnName() {
                 return "Status";
             }
 
             @Override
-            public AnalysisStatus getValue(LegacyAnalysisResult rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
-                return rowObject.status();
+            public String getValue(AnalysisRecordBody rowObject, Settings settings, Object data, ServiceProvider serviceProvider) throws IllegalArgumentException {
+                return rowObject.getStatus();
             }
         });
 

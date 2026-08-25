@@ -91,6 +91,27 @@ public class HelpDialog extends RevEngDialogComponentProvider {
                         null
                 )
         );
+        panel.add(
+                createMenuItem(
+                        "Sync With Portal",
+                        """
+                        Reconcile this program with the attached analysis: pull function names that
+                        changed in the portal into Ghidra, and push local renames and function
+                        signature edits back up. Only available when an analysis is attached and has
+                        completed processing.""",
+                        null
+                )
+        );
+        panel.add(
+                createMenuItem(
+                        "Agent Chat",
+                        """
+                        Open the Agent Chat window and talk to the RevEng.AI agent about the current
+                        binary. The agent can rename and re-type functions, and its changes are
+                        pulled back into Ghidra.""",
+                        null
+                )
+        );
         panel.add(createMenuItem("Configure", "Configure the API endpoint and API key", null));
         panel.add(createMenuItem("Help", "Display this page", null));
         panel.add(createMenuItem("About", "Display plugin version", null));
@@ -105,7 +126,9 @@ public class HelpDialog extends RevEngDialogComponentProvider {
         panel.add(createMenuItem(
                 "AI Decompilation",
                 """
-                Decompile function using the RevEng.AI proprietary decompiler.
+                Decompile function using the RevEng.AI proprietary decompiler, and open the result in
+                the AI Decompilation window.
+                Not available for thunks or external functions, which the portal does not support.
                 """,
                 null
             )
@@ -113,7 +136,8 @@ public class HelpDialog extends RevEngDialogComponentProvider {
         panel.add(createMenuItem(
                 "Match function",
                 """
-                Run a match against the RevEng.AI API for this function. Only available for non-debug functions.
+                Run a match against the RevEng.AI API for this function.
+                Not available for thunks or external functions, which the portal does not support.
                 """,
                 null
             )
@@ -126,6 +150,40 @@ public class HelpDialog extends RevEngDialogComponentProvider {
                 null
             )
         );
+
+        panel.add(Box.createVerticalStrut(20));
+
+        panel.add(createSectionHeader("Windows"));
+        panel.add(createDescription(
+                "Dockable windows provided by the plugin. All of them can be reopened from Ghidra's Window menu.",
+                null));
+        panel.add(Box.createVerticalStrut(10));
+
+        panel.add(createMenuItem(
+                "RevEng.AI: Analysis Log",
+                "Progress and log output of the analyses this program has been attached to.",
+                null
+        ));
+        panel.add(createMenuItem(
+                "RevEng.AI: Similar Functions",
+                """
+                Matches for the function under the cursor, updating as you move around the program,
+                with an assembly diff against the selected match.""",
+                null
+        ));
+        panel.add(createMenuItem(
+                "RevEng.AI: AI Decompilation",
+                """
+                The AI decompilation of the selected function and an explanation of what it does.
+                The toolbar can re-pull the decompilation, and send positive feedback or report a
+                problem with it back to RevEng.AI.""",
+                null
+        ));
+        panel.add(createMenuItem(
+                "RevEng.AI: Agent Chat",
+                "Conversation with the RevEng.AI agent about the current binary.",
+                null
+        ));
 
         return panel;
     }

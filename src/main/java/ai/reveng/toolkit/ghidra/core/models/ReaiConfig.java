@@ -10,24 +10,12 @@ public class ReaiConfig {
 	public void setPluginSettings(PluginSettings pluginSettings) {
 		this.pluginSettings = pluginSettings;
 	}
-	
-	@Override
-	public String toString() {
-		StringBuilder sb = new StringBuilder();
-		sb.append("REAI Config:\n");
-		sb.append("\tPlugin Settings:\n");
-		sb.append("\t\tAPI_Key: " + this.pluginSettings.getApiKey() + "\n");
-		sb.append("\t\tHostname: " + this.pluginSettings.getHostname() + "\n");
-		sb.append("\t\tModel Name: " + this.pluginSettings.getModelName() + "\n");
-		return sb.toString();
-	}
-	
+
 	public static class PluginSettings {
 		private String apiKey;
 		private String hostname;
         private String portalHostname;
-		private String modelName;
-		
+
 		public String getApiKey() {
 			return apiKey;
 		}
@@ -51,13 +39,5 @@ public class ReaiConfig {
         public void setPortalHostname(String portalHostname) {
             this.portalHostname = portalHostname;
         }
-
-		public String getModelName() {
-			return modelName;
-		}
-		
-		public void setModelName(String modelName) {
-			this.modelName = modelName;
-		}
 	}
 }

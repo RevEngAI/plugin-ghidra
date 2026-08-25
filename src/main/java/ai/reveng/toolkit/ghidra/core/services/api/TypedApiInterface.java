@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Optional;
 
 import ai.reveng.model.*;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -30,11 +32,7 @@ import ai.reveng.invoker.ApiException;
 public interface TypedApiInterface {
 
     /// Data type to represent the RevEng.AI API concept of a function ID
-    record FunctionID(long value){
-        public Integer asInteger() {
-            return Math.toIntExact(value);
-        }
-    }
+    record FunctionID(long value){}
 
     /// This is a special box type for an analysis ID
     /// It enforces that the integer is specifically an analysis ID,
@@ -58,21 +56,9 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
     }
 
+    /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
     @Deprecated
-    default List<FunctionInfo> getFunctionInfo(BinaryID binID) throws ApiException {
-        return getFunctionInfo(getAnalysisIDfromBinaryID(binID));
-    }
-
-    @Deprecated
-    default AnalysisStatus status(BinaryID binID) throws ApiException {
-        throw new UnsupportedOperationException("status not implemented yet");
-    };
-
-    /**
-     * https://docs.reveng.ai/#/Utility/get_search
-     */
-    @Deprecated
-    default List<LegacyAnalysisResult> search(BinaryHash hash) {
+    default List<AnalysisRecordBody> search(BinaryHash hash) {
         throw new UnsupportedOperationException("search not implemented yet");
     }
 
@@ -84,39 +70,27 @@ public interface TypedApiInterface {
 
     String getAnalysisLogs(AnalysisID analysisID);
 
-    default DataTypeList generateFunctionDataTypes(AnalysisID analysisID, List<FunctionID> functionIDS) {
-        throw new UnsupportedOperationException("generateFunctionDataTypes not implemented yet");
+    /// GET /v3/functions/signatures
+    ///
+    /// Signatures for the given functions, which may belong to different analyses, plus — when
+    /// `includeDataTypes` is set — every data type those signatures reference, grouped by owning
+    /// analysis. Callers should go through {@link FunctionSignatureService}, which chunks the ids.
+    default FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs, boolean includeDataTypes) {
+        throw new UnsupportedOperationException("listFunctionSignatures not implemented yet");
     }
 
-    default DataTypeList getFunctionDataTypes(List<FunctionID> functionIDS) {
-        throw new UnsupportedOperationException("getFunctionDataTypes not implemented yet");
+    /// GET /v3/analyses/{analysis_id}/data-types
+    ///
+    /// One page of an analysis' data types. Callers should go through
+    /// {@link AnalysisDataTypesService}, which pages this into a catalogue.
+    default List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+        throw new UnsupportedOperationException("listAnalysisDataTypes not implemented yet");
     }
 
-    default Optional<FunctionDataTypeStatus> getFunctionDataTypes(AnalysisID analysisID, FunctionID functionID) {
-        throw new UnsupportedOperationException("getFunctionDataTypes not implemented yet");
+    /// GET /v3/analyses/{analysis_id}/functions/{function_id}/signature/history
+    default List<FunctionSignatureVersion> getFunctionSignatureHistory(AnalysisID analysisID, FunctionID functionID) {
+        throw new UnsupportedOperationException("getFunctionSignatureHistory not implemented yet");
     }
-
-    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID) {
-        return listFunctionDataTypesForAnalysis(analysisID, null);
-    }
-
-    default FunctionDataTypesList listFunctionDataTypesForAnalysis(AnalysisID analysisID, @Nullable List<FunctionID> ids) {
-        throw new UnsupportedOperationException("listFunctionDataTypesForAnalysis not implemented yet");
-    }
-
-    default FunctionDataTypesList listFunctionDataTypesForFunctions(List<FunctionID> functionIDs) {
-        throw new UnsupportedOperationException("listFunctionDataTypesForFunctions not implemented yet");
-    }
-
-    @Deprecated
-    default AnalysisID getAnalysisIDfromBinaryID(BinaryID binaryID) {
-        throw new UnsupportedOperationException("getAnalysisIDfromBinaryID not implemented yet");
-    }
-
-    default AnalysisResult getInfoForAnalysis(AnalysisID id) {
-        throw new UnsupportedOperationException("getInfoForAnalysis not implemented yet");
-    }
-
 
     default boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
         throw new UnsupportedOperationException("triggerAIDecompilationForFunctionID not implemented yet");
@@ -137,10 +111,11 @@ public interface TypedApiInterface {
     /**
      * Tokenised view of an AI decompilation. The tokenised text mirrors the human-readable
      * decompilation but with renameable identifiers replaced by stable tokens, and carries the
-     * mapping used to resolve a displayed name back to the token to override.
+     * value each token renders as, plus the caller's own overrides as a separate map, which is
+     * how a displayed name is resolved back to the token to override.
      */
-    default TokenisedData getAIDecompilationTokenised(FunctionID functionID) throws ApiException {
-        throw new UnsupportedOperationException("getAIDecompilationTokenised not implemented yet");
+    default GetTokensResponse getAIDecompilationTokens(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAIDecompilationTokens not implemented yet");
     }
 
     /**
@@ -173,42 +148,37 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("canonicalizeFunctionNames not implemented yet");
     }
 
-    /// The server's data-type blob for a function together with its optimistic-concurrency version.
-    record VersionedFunctionTypes(ai.reveng.model.V2FunctionInfo dataTypes, long version) {}
-
-    /**
-     * Fetch the current server-side data types for a function and the version to send back on update.
-     * Empty if the server has no data types for the function yet.
-     */
-    default Optional<VersionedFunctionTypes> getFunctionDataTypesWithVersion(FunctionID functionID) throws ApiException {
-        throw new UnsupportedOperationException("getFunctionDataTypesWithVersion not implemented yet");
+    /// POST /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Create types the analysis does not have. The bodies carry no `data_type_id`; the server
+    /// assigns one to each and returns the stored types. Callers should go through
+    /// {@link AnalysisDataTypesService}, which resolves against the catalogue first and chunks the
+    /// batch.
+    default List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                         CreateAnalysisDataTypesInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("createAnalysisDataTypes not implemented yet");
     }
 
-    /// Outcome of a single data-type push, mirroring the server status values.
-    enum DataTypePushStatus { UPDATED, VERSION_CONFLICT, ERROR, UNKNOWN }
+    /// PUT /v3/analyses/{analysis_id}/data-types
+    ///
+    /// Replace stored types in full — a field left out of the request is cleared. Every body must
+    /// name the `data_type_id` it replaces.
+    default List<ServerDataType> updateAnalysisDataTypes(AnalysisID analysisID,
+                                                         UpdateAnalysisDataTypesInputBody request) throws ApiException {
+        throw new UnsupportedOperationException("updateAnalysisDataTypes not implemented yet");
+    }
 
-    /// A local data-type blob to push for a function, carrying the version it was based on.
-    record FunctionDataTypeUpdate(FunctionID functionID, ai.reveng.model.FunctionInfo dataTypes, long version) {}
-
-    /// Per-function outcome of a data-type push.
-    record DataTypePushResult(FunctionID functionID, DataTypePushStatus status, @Nullable String error) {}
-
-    /**
-     * Push local data-type blobs back to the portal for the given analysis. Version conflicts are
-     * reported per function so the caller can re-fetch and retry.
-     */
-    default List<DataTypePushResult> pushFunctionDataTypes(AnalysisID analysisID, List<FunctionDataTypeUpdate> updates) throws ApiException {
-        throw new UnsupportedOperationException("pushFunctionDataTypes not implemented yet");
+    /// PUT /v3/analyses/{analysis_id}/functions/{function_id}/signature
+    ///
+    /// Replace one function's parameters, return type and calling convention. Edit-only: a function
+    /// the server has no extracted signature for is answered with 404. Callers should go through
+    /// {@link FunctionSignatureService#put}, which treats that 404 as "nothing to edit".
+    default void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                         UpdateFunctionSignatureInputBody signature) throws ApiException {
+        throw new UnsupportedOperationException("updateFunctionSignature not implemented yet");
     }
 
     void renameFunction(FunctionID id, String newName, String newNameMangled);
-
-    default FunctionNameScore getNameScore(FunctionMatch match) {
-        throw new UnsupportedOperationException("getNameScore not implemented yet");
-    }
-    default List<FunctionNameScore> getNameScores(List<FunctionMatch> matches, Boolean isDebug) {
-        throw new UnsupportedOperationException("getNameScores not implemented yet");
-    }
 
     default FunctionDetails getFunctionDetails(FunctionID id) {
         throw new UnsupportedOperationException("getFunctionInfo not implemented yet");
@@ -239,7 +209,7 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("searchBinaries not implemented yet");
     }
 
-    default ai.reveng.model.Basic getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
+    default AnalysisBasicInfoOutputBody getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
         throw new UnsupportedOperationException("getAnalysisBasicInfo not implemented yet");
     }
 

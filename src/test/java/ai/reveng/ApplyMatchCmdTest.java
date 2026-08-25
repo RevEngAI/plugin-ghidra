@@ -11,7 +11,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
@@ -29,7 +28,7 @@ public class ApplyMatchCmdTest extends RevEngMockableHeadedIntegrationTest {
         var tool = env.getTool();
         var service = addMockedService(tool, new RenameFailsAPI());
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
         var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
         var program = programWithID.program();

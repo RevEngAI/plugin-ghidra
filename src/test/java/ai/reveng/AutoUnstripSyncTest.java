@@ -1,7 +1,6 @@
 package ai.reveng;
 
 import ai.reveng.model.BatchRenameInputBody;
-import ai.reveng.model.FunctionDataTypesList;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AutoUnstripStatus;
@@ -10,15 +9,12 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.AutoUnstripSyncService;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.task.TaskMonitor;
-import org.jetbrains.annotations.Nullable;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -26,6 +22,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 
 /**
  * Integration tests for the post-auto-unstrip sync (PLU-300): once the server-side auto-unstrip pass
@@ -37,7 +34,6 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         @Override public void info(String message) {}
         @Override public void warn(String message) {}
         @Override public void error(String message) {}
-        @Override public void export(String targetDirectoryPath, String exportedFileName) {}
     };
 
     /// Mock API that scripts auto-unstrip status responses and records rename calls.
@@ -59,12 +55,9 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         }
 
         @Override
-        public FunctionDataTypesList listFunctionDataTypesForAnalysis(TypedApiInterface.AnalysisID analysisID, @Nullable List<TypedApiInterface.FunctionID> ids) {
-            try {
-                return FunctionDataTypesList.fromJson("{\"total_count\":0,\"total_data_types_count\":0,\"items\":[]}");
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+        public FunctionSignatureBatch listFunctionSignatures(List<TypedApiInterface.FunctionID> functionIDs,
+                                                             boolean includeDataTypes) {
+            return FunctionSignatureBatch.empty();
         }
 
         @Override
@@ -84,7 +77,7 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         api.functions = List.of(new FunctionInfo(new TypedApiInterface.FunctionID(7), "recovered_name", "recovered_name", 0x4000L, 0x100));
         var service = new GhidraRevengService(api);
 
-        var builder = new ProgramBuilder("mock", ProgramBuilder._X64, this);
+        var builder = newX64Program();
         builder.createMemory("mem", "0x4000", 0x100);
         Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
         var program = builder.getProgram();

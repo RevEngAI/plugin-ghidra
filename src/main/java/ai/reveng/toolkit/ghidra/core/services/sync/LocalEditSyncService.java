@@ -1,13 +1,13 @@
 package ai.reveng.toolkit.ghidra.core.services.sync;
 
 import ai.reveng.invoker.ApiException;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraDataTypeEncoder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
 import ghidra.framework.model.DomainObjectListenerBuilder;
-import ai.reveng.toolkit.ghidra.core.services.api.GhidraToServerTypeSerializer;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.Function;
@@ -197,7 +197,12 @@ public class LocalEditSyncService {
     }
 
     /// Push every server-known function that references the edited type, so a type edit is
-    /// propagated to the portal (which only stores types inside each function's data-types blob).
+    /// propagated to the portal.
+    ///
+    /// A data type is not attached to any one function, so an edit to it is turned back into
+    /// function pushes: each affected function's own push re-resolves the type and writes its new
+    /// definition. Rescheduling rather than pushing directly means the per-function debounce still
+    /// applies, so editing several members of a struct collapses into one push per function.
     private void pushFunctionsReferencingType(Program program, String typeName) {
         var analysedProgram = revengService.getAnalysedProgram(program);
         if (analysedProgram.isEmpty()) {
@@ -205,7 +210,7 @@ public class LocalEditSyncService {
         }
         for (Function function : analysedProgram.get().getFunctionMap().values()) {
             if (isSyncable(function)
-                    && GhidraToServerTypeSerializer.referencedTypeNames(function).contains(typeName)) {
+                    && GhidraDataTypeEncoder.referencedTypeNames(function).contains(typeName)) {
                 scheduleTypes(program, function.getEntryPoint());
             }
         }
@@ -226,9 +231,20 @@ public class LocalEditSyncService {
     private void pushTypes(Program program, Address entryPoint) {
         withAnalysedFunction(program, entryPoint, (analysedProgram, function) -> {
             try {
-                if (revengService.pushFunctionTypes(analysedProgram, function)) {
-                    loggingService.info("Pushed types for function \"%s\" at %s to the RevEng.AI portal"
-                            .formatted(function.getName(), entryPoint));
+                switch (revengService.pushFunctionTypes(analysedProgram, function)) {
+                    case SIGNATURE_WRITTEN -> loggingService.info(
+                            "Pushed types for function \"%s\" at %s to the RevEng.AI portal"
+                                    .formatted(function.getName(), entryPoint));
+                    // The data types did reach the portal; only the signature had nothing to update.
+                    // Saying so matters, because otherwise editing a type on a function the portal
+                    // never extracted a signature for looks like it did nothing at all.
+                    case TYPES_ONLY -> loggingService.info(
+                            ("Pushed the data types for function \"%s\" at %s; the portal holds no extracted "
+                                    + "signature for it, so its signature was left unchanged")
+                                    .formatted(function.getName(), entryPoint));
+                    case NOT_MATCHED -> {
+                        // Not part of the analysis, so there was nothing to push.
+                    }
                 }
             } catch (ApiException e) {
                 Msg.warn(this, "Failed to push types for %s to portal".formatted(function.getName()), e);

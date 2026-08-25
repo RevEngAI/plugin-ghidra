@@ -24,13 +24,6 @@ public class CollectionSelectionPanel extends ItemSelectionPanel {
     }
 
     /**
-     * Gets the currently selected collections
-     */
-    public Set<SelectableItem> getSelectedCollections() {
-        return getSelectedItems();
-    }
-
-    /**
      * Gets the IDs of currently selected collections
      */
     public Set<Integer> getSelectedCollectionIds() {
@@ -42,13 +35,6 @@ public class CollectionSelectionPanel extends ItemSelectionPanel {
      */
     public Set<String> getSelectedCollectionNames() {
         return getSelectedItemNames();
-    }
-
-    /**
-     * Sets the selected collections
-     */
-    public void setSelectedCollections(Set<SelectableItem> collections) {
-        setSelectedItems(collections);
     }
 
     /**

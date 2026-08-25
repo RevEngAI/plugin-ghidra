@@ -11,7 +11,6 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
-import com.google.common.collect.BiMap;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
@@ -25,6 +24,7 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -56,7 +56,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected AssemblyDiffPanel assemblyDiffPanel;
 
     // Data
-    protected Basic analysisBasicInfo;
+    protected AnalysisBasicInfoOutputBody analysisBasicInfo;
     protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
     protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 
@@ -132,7 +132,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                             ? progress.errorMessage()
                             : "Function matching returned an error status";
                     SwingUtilities.invokeLater(() -> {
-                        taskMonitorComponent.setVisible(false);
+                        statusLabel.setText("Function matching failed");
                         handleError(errorMsg);
                     });
                     return;
@@ -155,15 +155,27 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             var matches = fetchMatches();
             if (matchingCancelled) return;
             processFunctionMatchingResults(matches);
-            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
+            // The status label is the only thing that says what this dialog is doing, and nothing
+            // used to write to it again after the "Loading type information..." above. The work
+            // finished, the bar went away, and the label sat there claiming to still be loading —
+            // indistinguishable from a request that never returned.
+            SwingUtilities.invokeLater(() -> statusLabel.setText(
+                    "Matching complete: %d match(es)".formatted(functionMatchResults.size())));
         } catch (InterruptedException e) {
             // matching was cancelled, nothing to report
-        } catch (Exception e) {
+        } catch (Throwable t) {
+            // Throwable rather than Exception: an Error thrown in here — a clash between a bundled
+            // jar and Ghidra's own, or a large binary's type closure exhausting the heap — killed
+            // this thread without a word and left the progress message up for ever. Whatever it is,
+            // the user is told.
             SwingUtilities.invokeLater(() -> {
-                Msg.error(this, "Failed to poll function matching status: " + e.getMessage(), e);
-                handleError("Failed to poll function matching status: " + e.getMessage());
-                taskMonitorComponent.setVisible(false);
+                Msg.error(this, "Function matching failed: " + t, t);
+                handleError("Function matching failed: " + t);
+                statusLabel.setText("Function matching failed");
             });
+        } finally {
+            // No path out of here may leave the progress bar spinning.
+            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
         }
     }
 
@@ -205,7 +217,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     /// touch Swing, and those are marshalled back onto the EDT.
     protected void processFunctionMatchingResults(List<MatchedFunctionResult> response) {
         List<GhidraFunctionMatch> matches = new ArrayList<>();
-        final BiMap<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
+        final Map<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
 
         response.forEach(matchResult -> {
             // Retrieve the local function name
@@ -269,18 +281,16 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         updateResultsTable();
     }
 
-    protected void updateResultsTable() {
-        // Determine which results to show based on whether we have an active filter
+    /// The results that back the table model, in model-row order: all results when no function filter
+    /// is active, otherwise the filtered subset (which may be empty).
+    protected List<GhidraFunctionMatchWithSignature> displayedResults() {
         String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
-        List<GhidraFunctionMatchWithSignature> resultsToShow;
+        return filterText.isEmpty() ? functionMatchResults : filteredFunctionMatchResults;
+    }
 
-        if (filterText.isEmpty()) {
-            // No filter text, show all results
-            resultsToShow = functionMatchResults;
-        } else {
-            // Filter text exists, show filtered results (even if empty)
-            resultsToShow = filteredFunctionMatchResults;
-        }
+    protected void updateResultsTable() {
+        String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
 
         DefaultTableModel model = new DefaultTableModel(getTableColumnNames(), 0) {
             @Override
@@ -636,10 +646,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         // Convert view index to model index (in case table is sorted)
         int modelRow = resultsTable.convertRowIndexToModel(selectedRow);
 
-        // Get the appropriate results list
-        String filterText = functionFilterField != null ? functionFilterField.getText().trim() : "";
-        List<GhidraFunctionMatchWithSignature> resultsToShow = filterText.isEmpty() ?
-                functionMatchResults : filteredFunctionMatchResults;
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
 
         if (modelRow >= resultsToShow.size()) {
             return;
@@ -719,13 +726,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         thresholdValueLabel = new JLabel("70%", SwingConstants.CENTER);
         thresholdValueLabel.setFont(thresholdValueLabel.getFont().deriveFont(Font.BOLD, 14f));
 
-        thresholdSlider.addChangeListener(e -> {
-            int value = thresholdSlider.getValue();
-            thresholdValueLabel.setText(value + "%");
-            if (!thresholdSlider.getValueIsAdjusting()) {
-                onThresholdChanged(value);
-            }
-        });
+        thresholdSlider.addChangeListener(e -> thresholdValueLabel.setText(thresholdSlider.getValue() + "%"));
 
         JPanel sliderPanel = new JPanel(new BorderLayout());
         sliderPanel.add(thresholdSlider, BorderLayout.CENTER);
@@ -747,16 +748,12 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         debugSymbolsCheckBox = new JCheckBox("Only include functions with debug symbols", false);
         debugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        debugSymbolsCheckBox.addActionListener(e -> {
-            boolean selected = debugSymbolsCheckBox.isSelected();
-            userSubmittedDebugSymbolsCheckBox.setVisible(selected);
-            onDebugSymbolsChanged(selected);
-        });
+        debugSymbolsCheckBox.addActionListener(
+                e -> userSubmittedDebugSymbolsCheckBox.setVisible(debugSymbolsCheckBox.isSelected()));
 
         userSubmittedDebugSymbolsCheckBox = new JCheckBox("Include user submitted debug symbols", false);
         userSubmittedDebugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         userSubmittedDebugSymbolsCheckBox.setVisible(false);
-        userSubmittedDebugSymbolsCheckBox.addActionListener(e -> onUserSubmittedDebugSymbolsChanged(userSubmittedDebugSymbolsCheckBox.isSelected()));
 
         JPanel indentedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         indentedPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -820,18 +817,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 .collect(Collectors.toSet());
 
         Msg.info(this, "Selected binaries: " + binaryNames + " (IDs: " + binaryIds + ")");
-    }
-
-    protected void onThresholdChanged(int threshold) {
-        Msg.info(this, "Threshold changed to: " + threshold);
-    }
-
-    protected void onDebugSymbolsChanged(boolean includeDebugSymbols) {
-        Msg.info(this, "Debug symbols filter changed to: " + includeDebugSymbols);
-    }
-
-    protected void onUserSubmittedDebugSymbolsChanged(boolean includeUserSubmittedDebugSymbols) {
-        Msg.info(this, "User submitted debug symbols filter changed to: " + includeUserSubmittedDebugSymbols);
     }
 
     protected void onFunctionFilterChanged() {
@@ -899,26 +884,31 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         renameInBackground(functionMatchResults);
     }
 
-    protected void onRenameSelectedButtonClicked() {
-        int[] selectedRows = resultsTable.getSelectedRows();
-        if (selectedRows.length == 0) {
-            showError("Please select one or more rows to rename.");
-            return;
-        } else {
-            hideError();
-        }
-
-        List<GhidraFunctionMatchWithSignature> resultsToShow = filteredFunctionMatchResults.isEmpty() ?
-            functionMatchResults : filteredFunctionMatchResults;
-
+    /// The results behind the currently selected table rows.
+    ///
+    /// The table is sortable, so the view row order need not match the order of the list backing the
+    /// table model. Every selected view index is therefore converted to a model index before it is
+    /// used to look up a result.
+    protected List<GhidraFunctionMatchWithSignature> getSelectedMatches() {
+        List<GhidraFunctionMatchWithSignature> resultsToShow = displayedResults();
         List<GhidraFunctionMatchWithSignature> selectedMatches = new ArrayList<>();
-        for (int row : selectedRows) {
-            if (row < resultsToShow.size()) {
-                selectedMatches.add(resultsToShow.get(row));
+        for (int viewRow : resultsTable.getSelectedRows()) {
+            int modelRow = resultsTable.convertRowIndexToModel(viewRow);
+            if (modelRow >= 0 && modelRow < resultsToShow.size()) {
+                selectedMatches.add(resultsToShow.get(modelRow));
             }
         }
+        return selectedMatches;
+    }
 
-        renameInBackground(selectedMatches);
+    protected void onRenameSelectedButtonClicked() {
+        if (resultsTable.getSelectedRowCount() == 0) {
+            showError("Please select one or more rows to rename.");
+            return;
+        }
+        hideError();
+
+        renameInBackground(getSelectedMatches());
     }
 
     private void renameInBackground(List<GhidraFunctionMatchWithSignature> matches) {
