@@ -66,12 +66,13 @@ You can do this via `./gradlew -PGHIDRA_INSTALL_DIR=/opt/ghidra buildExtension`,
 
 ### Enabling the plugin
 
-Once installed, you can enable the plugin via the `Configure` tool.
+Once installed, you can enable the plugin via the `Configure` tool from the Code Browser.
 
-1. Navigate to Ghidra's Configure tool
+1. Open the Code Browser window
+2. Navigate to Ghidra's Configure tool
    - `File` -> `Configure`
-2. Click `Configure` under the `RevEng.AI` plugin group
-3. Select the checkbox next to every plugin in the list: `AgentChatPlugin`, `AnalysisManagementPlugin`, `BinarySimilarityPlugin`, `LoggingPlugin` and `ReaiAPIServicePlugin`
+3. Click `Configure` under the `RevEng.AI` plugin group
+4. Select the checkbox next to every plugin in the list: `AgentChatPlugin`, `AnalysisManagementPlugin`, `BinarySimilarityPlugin`, `LoggingPlugin` and `ReaiAPIServicePlugin`
 
 `ReaiAPIServicePlugin` and `LoggingPlugin` provide the API and logging services that the three feature plugins require, so all five need to be enabled.
 
