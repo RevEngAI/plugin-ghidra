@@ -142,7 +142,7 @@ public class AnalysisOptionsBuilder {
             JSONObject symbols = options.getJSONObject("symbols");
 
             var symbolsModel = new ai.reveng.model.Symbols()
-                    .baseAddress(symbols.getBigInteger("base_addr"));
+                    .baseAddress(symbols.getBigInteger("base_addr").longValue());
 
             List<ai.reveng.model.FunctionBoundary> boundaries = new ArrayList<>();
 
@@ -182,7 +182,7 @@ public class AnalysisOptionsBuilder {
         if (options.has("isa_options")) {
             var isaOption = options.getString("isa_options");
             if (!isaOption.equals("Auto")) {
-                var isa = ai.reveng.model.ISA.fromValue(isaOption);
+                var isa = ai.reveng.model.BinaryConfig.IsaEnum.fromValue(isaOption);
                 binaryConfig.setIsa(isa);
             }
         }
