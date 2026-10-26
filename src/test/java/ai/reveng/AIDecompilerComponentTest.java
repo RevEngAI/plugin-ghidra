@@ -23,6 +23,7 @@ import org.junit.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
@@ -342,6 +343,90 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
                 text.indexOf("// the exit code") < text.indexOf("return 0;"));
         assertTrue("comment must preserve the annotated line's indentation",
                 text.contains("    // the exit code"));
+    }
+
+    @Test
+    public void testSummaryTriggerRetriedAfterConflict() throws Exception {
+        var tool = env.getTool();
+        var summaryTriggers = new AtomicInteger();
+        var polls = new AtomicInteger();
+
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 10));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                WorkflowProgress.StatusEnum summaryStatus;
+                if (summaryTriggers.get() > 1) {
+                    summaryStatus = WorkflowProgress.StatusEnum.COMPLETED;
+                } else if (polls.incrementAndGet() > 5) {
+                    summaryStatus = WorkflowProgress.StatusEnum.FAILED;
+                } else {
+                    summaryStatus = WorkflowProgress.StatusEnum.UNINITIALISED;
+                }
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.COMPLETED,
+                        "void func1() { return; }",
+                        null,
+                        null,
+                        summaryStatus,
+                        WorkflowProgress.StatusEnum.UNINITIALISED,
+                        List.of(),
+                        null);
+            }
+
+            @Override
+            public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
+                return true;
+            }
+
+            @Override
+            public void triggerAIDecompilationSummary(FunctionID functionID) {
+                if (summaryTriggers.incrementAndGet() == 1) {
+                    throw new RuntimeException("Failed to trigger AI decompilation summary",
+                            new ApiException(409, "A decompilation is in progress for this function"));
+                }
+            }
+
+            @Override
+            public void triggerAIDecompilationInlineComments(FunctionID functionID) {
+                throw new RuntimeException("stop polling");
+            }
+        });
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program();
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+
+        var action = getAction(tool, "AI Decompilation");
+        var context = new ProgramLocationActionContext(
+                null,
+                programWithID.program(),
+                new ProgramLocation(programWithID.program(), func1.getEntryPoint()),
+                null, null);
+        performAction(action, context, true);
+        waitForTasks();
+        waitForSwing();
+
+        assertEquals("summary trigger must be retried after a 409", 2, summaryTriggers.get());
     }
 
     static class RatingsAPI extends UnimplementedAPI {

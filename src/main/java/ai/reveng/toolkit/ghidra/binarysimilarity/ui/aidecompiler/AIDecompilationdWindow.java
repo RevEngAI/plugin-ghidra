@@ -1027,7 +1027,12 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                             try {
                                 api.triggerAIDecompilationSummary(id);
                             } catch (RuntimeException e) {
-                                logger.error("Failed to trigger summary: %s".formatted(e.getMessage()));
+                                // 409: the decompilation's follow-up passes are still running; retry on the next poll.
+                                if (e.getCause() instanceof ApiException apiException && apiException.getCode() == 409) {
+                                    summaryTriggered = false;
+                                } else {
+                                    logger.error("Failed to trigger summary: %s".formatted(e.getMessage()));
+                                }
                             }
                         }
                         if (summaryStatus == WorkflowProgress.StatusEnum.FAILED) {

@@ -132,7 +132,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             while (true) {
                 ListAnalysesOutputBody page = analysisCoreApi.v3ListAnalyses(
-                        null, ALL_ANALYSIS_SCOPES, null, null, null, hash.sha256(),
+                        null, ALL_ANALYSIS_SCOPES, null, null, null, hash.sha256(), null, null, null,
                         ANALYSIS_LIST_PAGE_SIZE, pageToken, null, null);
                 var records = page.getResults();
                 if (records == null || records.isEmpty()) {
@@ -377,7 +377,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             // POST /v3/functions/{function_id}/ai-decompilation
             // The context_aware flag was removed from the API with no replacement; temperature is
             // left null so the server applies its own default.
-            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null);
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null, null, null, null);
             return Boolean.TRUE.equals(result.getStatus());
         } catch (ApiException e) {
             throw new RuntimeException("Failed to trigger AI decompilation", e);
@@ -583,7 +583,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     public List<CollectionListItemBody> searchCollections(String partialCollectionName) throws ApiException {
         // The v3 list-collections endpoint does not filter by model; scope is handled server-side.
         var results = this.collectionsApi
-                .v3ListCollections(partialCollectionName, null, 10L, 0L, null, null)
+                .v3ListCollections(partialCollectionName, null, null, null, null, null, 10L, 0L, null, null)
                 .getResults();
         return results != null ? results : List.of();
     }
