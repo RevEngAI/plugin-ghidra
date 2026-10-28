@@ -17,6 +17,7 @@ import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
 import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.cmd.function.SetFunctionNameCmd;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Structure;
@@ -1095,31 +1096,34 @@ public class GhidraRevengService {
         return api.getAnalysisLogs(analysisID);
     }
 
-    public void openFunctionInPortal(TypedApiInterface.FunctionID functionID) {
+    public void openFunctionInPortal(ServiceProvider serviceProvider, TypedApiInterface.FunctionID functionID) {
         var details = api.getFunctionDetails(functionID);
-        openFunctionInPortal(details.analysisId(), functionID);
+        openFunctionInPortal(serviceProvider, details.analysisId(), functionID);
     }
 
     /// Prefer this overload when the caller already knows the analysis the function belongs to:
     /// it builds the portal URL directly and avoids the getFunctionDetails call, which requires a
     /// permission the user may not have (returns 403) even when they can view the analysis.
-    public void openFunctionInPortal(TypedApiInterface.AnalysisID analysisID, TypedApiInterface.FunctionID functionID) {
-        openPortal("analyses", String.format("%s?view=functions&fn=%s", analysisID.id(), functionID.value()));
+    public void openFunctionInPortal(ServiceProvider serviceProvider,
+                                     TypedApiInterface.AnalysisID analysisID,
+                                     TypedApiInterface.FunctionID functionID) {
+        openPortal(serviceProvider, "analyses",
+                String.format("%s?view=functions&fn=%s", analysisID.id(), functionID.value()));
     }
 
-    public void openPortalFor(TypedApiInterface.FunctionID f){
-        openFunctionInPortal(f);
+    public void openPortalFor(ServiceProvider serviceProvider, TypedApiInterface.FunctionID f){
+        openFunctionInPortal(serviceProvider, f);
     }
 
-    public void openPortalFor(ProgramWithID programWithID) {
-        openPortalFor(programWithID.analysisID());
+    public void openPortalFor(ServiceProvider serviceProvider, ProgramWithID programWithID) {
+        openPortalFor(serviceProvider, programWithID.analysisID());
     }
 
-    public void openPortalFor(TypedApiInterface.AnalysisID analysisID) {
-        openPortal("analyses", String.valueOf(analysisID.id()));
+    public void openPortalFor(ServiceProvider serviceProvider, TypedApiInterface.AnalysisID analysisID) {
+        openPortal(serviceProvider, "analyses", String.valueOf(analysisID.id()));
     }
 
-    public void openPortal(String... subPath) {
+    public void openPortal(ServiceProvider serviceProvider, String... subPath) {
         StringBuilder sb = new StringBuilder(apiInfo.portalURI().toString());
         for (String s : subPath) {
             if (!s.startsWith("?")){
@@ -1127,14 +1131,15 @@ public class GhidraRevengService {
             }
             sb.append(s);
         }
-        openURI(URI.create(sb.toString()));
+        openURI(serviceProvider, URI.create(sb.toString()));
     }
 
-    private void openURI(URI uri){
-        // Ghidra's BrowserLoader is more reliable than java.awt.Desktop, which frequently
-        // no-ops or is reported unsupported inside Ghidra's JVM.
+    /// Ghidra's BrowserLoader is more reliable than java.awt.Desktop, which frequently no-ops or is
+    /// reported unsupported inside Ghidra's JVM. It reads the manual-viewer options off the service
+    /// provider, which Ghidra 12.2 made mandatory, so the tool has to be threaded this far down.
+    private void openURI(ServiceProvider serviceProvider, URI uri){
         try {
-            BrowserLoader.display(uri.toURL());
+            BrowserLoader.display(uri.toURL(), null, serviceProvider);
         } catch (MalformedURLException e) {
             Msg.showError(
                     this,

@@ -139,7 +139,7 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
                         @Override
                         public void run(TaskMonitor monitor) {
                             try {
-                                service.openFunctionInPortal(neighborId);
+                                service.openFunctionInPortal(tool, neighborId);
                             } catch (Exception e) {
                                 Msg.error(SimilarFunctionsWindow.this, "Failed to open match in portal: " + e.getMessage(), e);
                             }
