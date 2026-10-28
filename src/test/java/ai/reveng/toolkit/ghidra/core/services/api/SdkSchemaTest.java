@@ -44,6 +44,12 @@ public class SdkSchemaTest {
                 // v3 endpoints; the generator suffixes _0 where the deprecated v2 name collides.
                 "getFunctionBlocks_0", "getFunctionDetails_0"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{"batchRenameFunctions"});
+        // Agent chat. The two reads go through the call form: an event's `data` is an anyOf over
+        // the per-type payload schemas with no required field anywhere, so the generated model
+        // matches the first variant for every payload and drops the leaf fields.
+        apis.put("ai.reveng.api.ConversationsApi", new String[]{
+                "createConversation", "listConversations", "sendMessage", "cancelRun", "confirmTool",
+                "getConversationCall", "streamEventsCall"});
         apis.put("ai.reveng.api.DataTypesApi", new String[]{
                 "v3ListFunctionSignaturesCall", "v3ListAnalysisDataTypesCall",
                 "v3GetFunctionSignatureHistory",

@@ -7,9 +7,7 @@ import ai.reveng.invoker.Configuration;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.model.ConfirmToolInputBody;
 import ai.reveng.model.Conversation;
-import ai.reveng.model.ConversationWithEvents;
 import ai.reveng.model.CreateConversationRequest;
-import ai.reveng.model.Event;
 import ai.reveng.model.SendMessageRequest;
 import ai.reveng.toolkit.ghidra.chat.model.ChatEvent;
 import ai.reveng.toolkit.ghidra.chat.model.SseParser;
@@ -18,6 +16,8 @@ import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationReplay;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationSummary;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.StoredEvent;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.UserMessageReplay;
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -38,6 +38,8 @@ import java.util.function.Consumer;
 public class ConversationsApiChatService implements ChatService {
 
     private static final long STREAM_READ_TIMEOUT_MINUTES = 5;
+
+    private static final Gson GSON = new Gson();
 
     private volatile okhttp3.Call activeStreamCall;
 
@@ -128,12 +130,24 @@ public class ConversationsApiChatService implements ChatService {
         }
     }
 
+    /**
+     * Read through the generated call rather than the generated {@code ConversationWithEvents}: an
+     * event's {@code data} is an anyOf over the per-type payload schemas, none of which declares a
+     * required field, so the generated deserialiser matches the first variant for every payload and
+     * drops the leaf fields the transcript is built from. The call still builds the request — path
+     * and auth — exactly as the SDK would; only the body is read here, in the same shape
+     * {@link SseParser} hands to {@link ChatEvent#normalize} for a live run.
+     */
     @Override
+    @SuppressWarnings("unchecked")
     public ConversationReplay getConversation(String conversationId) throws ChatServiceException {
         try {
-            ConversationWithEvents conv = shortCallApi().getConversation(UUID.fromString(conversationId));
-            return new ConversationReplay(conv.getConversationUuid(), conv.getTitle(),
-                    replayEvents(conv.getEvents()));
+            var call = shortCallApi().getConversationCall(UUID.fromString(conversationId), null);
+            Map<String, Object> body = executeForJsonMap(call, "load conversation");
+            return new ConversationReplay(
+                    str(body.get("conversation_uuid")),
+                    str(body.get("title")),
+                    replayEvents(body.get("events") instanceof List<?> events ? (List<Object>) events : List.of()));
         } catch (ApiException e) {
             throw apiError("load conversation", e);
         }
@@ -193,25 +207,25 @@ public class ConversationsApiChatService implements ChatService {
      * normalized like a live frame.
      */
     @SuppressWarnings("unchecked")
-    private static List<StoredEvent> replayEvents(List<Event> events) {
+    private static List<StoredEvent> replayEvents(List<Object> events) {
         var out = new ArrayList<StoredEvent>();
-        if (events == null) {
-            return out;
-        }
         var emittedUserIds = new java.util.HashSet<String>();
         String currentUserId = null;
         var currentUserContent = new StringBuilder();
 
-        for (Event ev : events) {
-            String etype = ChatEvent.resolveType(ev.getType());
-            Integer role = ev.getRole();
-            Map<String, Object> data = ev.getData() instanceof Map ? (Map<String, Object>) ev.getData() : Map.of();
+        for (Object raw : events) {
+            if (!(raw instanceof Map<?, ?> ev)) {
+                continue;
+            }
+            Object etypeValue = ev.get("type");
+            String etype = ChatEvent.resolveType(etypeValue);
+            Number role = ev.get("role") instanceof Number n ? n : null;
+            Map<String, Object> data = ev.get("data") instanceof Map<?, ?> d ? (Map<String, Object>) d : Map.of();
 
-            if (role != null && role == ChatEvent.ROLE_USER) {
+            if (role != null && role.intValue() == ChatEvent.ROLE_USER) {
                 if ("TEXT_MESSAGE_START".equals(etype)) {
                     Object msgId = data.get("message_id");
-                    String id = msgId != null ? msgId.toString()
-                            : (ev.getEventId() != null ? ev.getEventId().toString() : "");
+                    String id = msgId != null ? msgId.toString() : eventId(ev);
                     if (!emittedUserIds.contains(id)) {
                         currentUserId = id;
                         currentUserContent.setLength(0);
@@ -233,12 +247,39 @@ public class ConversationsApiChatService implements ChatService {
                 continue;
             }
 
-            ChatEvent norm = ChatEvent.normalize(ev.getType(), data, null);
+            ChatEvent norm = ChatEvent.normalize(etypeValue, data, null);
             if (norm != null) {
                 out.add(StoredEvent.of(norm));
             }
         }
         return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> executeForJsonMap(okhttp3.Call call, String what) throws ApiException {
+        try (okhttp3.Response response = call.execute()) {
+            okhttp3.ResponseBody responseBody = response.body();
+            String text = responseBody == null ? "" : responseBody.string();
+            if (!response.isSuccessful()) {
+                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+            }
+            Object parsed = GSON.fromJson(text, Map.class);
+            if (!(parsed instanceof Map)) {
+                throw new ApiException("Failed to %s: response was not a JSON object".formatted(what));
+            }
+            return (Map<String, Object>) parsed;
+        } catch (IOException | JsonSyntaxException e) {
+            throw new ApiException(e);
+        }
+    }
+
+    private static String str(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    private static String eventId(Map<?, ?> ev) {
+        Object id = ev.get("event_id");
+        return id instanceof Number n ? Long.toString(n.longValue()) : "";
     }
 
     private static ChatServiceException apiError(String action, ApiException e) {

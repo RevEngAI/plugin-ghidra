@@ -267,7 +267,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         @Override
                         public void run(TaskMonitor monitor) {
                             try {
-                                apiService.openFunctionInPortal(analysisID, functionID);
+                                apiService.openFunctionInPortal(tool, analysisID, functionID);
                             } catch (Exception e) {
                                 Msg.showError(BinarySimilarityPlugin.this, null,
                                         ReaiPluginPackage.WINDOW_PREFIX + "View function in portal",
