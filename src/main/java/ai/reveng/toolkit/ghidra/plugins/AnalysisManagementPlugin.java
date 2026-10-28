@@ -262,7 +262,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 .onAction(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
                     var knownProgram = revengService.getKnownProgram(currentProgram).orElseThrow();
-                    revengService.openPortalFor(knownProgram);
+                    revengService.openPortalFor(tool, knownProgram);
                 })
                 .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "View in portal" })
                 .menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")

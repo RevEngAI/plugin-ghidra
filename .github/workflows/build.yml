@@ -11,6 +11,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Ghidra 12.2 raised application.java.min/compiler to 25 and application.gradle.min to 9.1.
+          - ghidra: "12.2"
+            java: "25"
           - ghidra: "12.1.4"
             java: "21"
           - ghidra: "12.1.3"

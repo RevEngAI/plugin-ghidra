@@ -73,7 +73,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
                                     @Override
                                     public void run(TaskMonitor monitor) {
                                         try {
-                                            ghidraRevengService.openPortalFor(analysisID);
+                                            ghidraRevengService.openPortalFor(tool, analysisID);
                                         } catch (Exception ex) {
                                             Msg.error(RecentAnalysisDialog.this, "Failed to open analysis in portal: " + ex.getMessage(), ex);
                                         }
