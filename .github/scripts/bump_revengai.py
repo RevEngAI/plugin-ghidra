@@ -11,7 +11,10 @@ from packaging.version import Version
 BUILD_GRADLE = Path(__file__).resolve().parents[2] / "build.gradle"
 MAVEN_METADATA_URL = "https://repo1.maven.org/maven2/ai/reveng/sdk/maven-metadata.xml"
 
-SDK_PIN_RE = re.compile(r"ai\.reveng:sdk:([\d.]+)")
+# The pin can be a staging release candidate (4.74.4-rc.1), which the qualifier puts below
+# the plain 4.74.4 on Maven Central. Capturing only the digits would both read it as the
+# already-released 4.74.4 and leave the "-rc.1" behind on rewrite.
+SDK_PIN_RE = re.compile(r"ai\.reveng:sdk:([\w.\-]+)")
 STABLE_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
