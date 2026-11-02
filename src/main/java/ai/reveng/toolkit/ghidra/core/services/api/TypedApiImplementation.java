@@ -377,7 +377,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             // POST /v3/functions/{function_id}/ai-decompilation
             // The context_aware flag was removed from the API with no replacement; temperature is
             // left null so the server applies its own default.
-            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null, null, null, null);
+            var result = functionsAiDecompilationApi.createAiDecompilation(functionID.value(), null, null, null, null, null, null);
             return Boolean.TRUE.equals(result.getStatus());
         } catch (ApiException e) {
             throw new RuntimeException("Failed to trigger AI decompilation", e);
