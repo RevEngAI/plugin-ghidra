@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
+import ghidra.framework.Application;
 import ghidra.framework.plugintool.util.PluginPackage;
 import resources.ResourceManager;
 
@@ -26,7 +27,9 @@ public class ReaiPluginPackage extends PluginPackage {
 
     public static final String REAI_OPTIONS_CATEGORY = "RevEngAI Options";
 
-    public static final Path DEFAULT_CONFIG_PATH = Path.of(System.getProperty("user.home"), ".reai", "reai.json");
+    /** Default config file, in Ghidra's user settings directory (portable installs keep it there). */
+    public static final Path DEFAULT_CONFIG_PATH =
+            Application.getUserSettingsDirectory().toPath().resolve("reai").resolve("reai.json");
 
 
     @Deprecated
