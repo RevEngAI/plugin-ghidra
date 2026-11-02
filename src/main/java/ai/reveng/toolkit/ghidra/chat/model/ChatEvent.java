@@ -48,13 +48,13 @@ public record ChatEvent(
             Map.entry(14, "RUN_CANCELLED"),
             Map.entry(15, "CONTEXT_COMPACTED"),
             Map.entry(16, "TOOL_CONFIRMATION_REQUIRED"),
-            Map.entry(17, "TOOL_CALL_PROGRESS"));
+            Map.entry(19, "TOOL_CALL_PROGRESS"));
 
     public static final Set<String> TERMINAL_EVENTS = Set.of("RUN_FINISHED", "RUN_ERROR", "RUN_CANCELLED");
 
     public static final int ROLE_USER = 2;
 
-    /// Resolve a wire {@code type} (string name or integer 1..17) to its canonical name.
+    /// Resolve a wire {@code type} (string name, or the number the API documents for it) to its canonical name.
     public static String resolveType(Object typeField) {
         if (typeField instanceof String s) {
             return s.isEmpty() ? null : s;

@@ -17,6 +17,11 @@ public class ChatEventNormalizationTest {
         assertEquals("TEXT_MESSAGE_CONTENT", ChatEvent.resolveType(7));
         assertEquals("TOOL_CALL_RESULT", ChatEvent.resolveType(12));
         assertEquals("RUN_STARTED", ChatEvent.resolveType("RUN_STARTED"));
+        // 19, not 17: 17 and 18 are QUESTION_ASKED and USER_ANSWERED, which the plugin does not
+        // render, so mapping either onto a name it does render mislabels the event.
+        assertEquals("TOOL_CALL_PROGRESS", ChatEvent.resolveType(19));
+        assertNull(ChatEvent.resolveType(17));
+        assertNull(ChatEvent.resolveType(18));
         assertNull(ChatEvent.resolveType(999));
         assertNull(ChatEvent.resolveType(""));
         assertNull(ChatEvent.resolveType(null));

@@ -46,7 +46,8 @@ The builds for latest stable version of the RevEng.AI Ghidra plugin for common G
 
 ### Supported Ghidra versions
 
-We support all versions compatible with Ghidra 11.4+ based on Java 21.
+We support all versions compatible with Ghidra 11.4+. Ghidra 11.4 through 12.1.x run on Java 21;
+Ghidra 12.2 requires Java 25 and Gradle 9.1, so the release page carries a separate build for it.
 
 #### Building your own plugin (for custom Ghidra forks and versions)
 

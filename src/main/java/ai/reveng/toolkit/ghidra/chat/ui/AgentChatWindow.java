@@ -311,7 +311,7 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
         // A link from the agent's markdown (e.g. a portal or docs URL) — open it in the browser.
         if (href.startsWith("http://") || href.startsWith("https://")) {
             try {
-                BrowserLoader.display(URI.create(href).toURL());
+                BrowserLoader.display(URI.create(href).toURL(), null, tool);
             } catch (Exception e) {
                 loggingService().warn("Failed to open link " + href + ": " + e.getMessage());
             }
