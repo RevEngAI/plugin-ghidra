@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.components;
 
+import generic.theme.GColor;
 import javax.swing.*;
 import javax.swing.border.Border;
 import java.awt.*;
@@ -107,7 +108,7 @@ public class ItemSelectionPanel extends JPanel {
     private void addItemTag(SelectableItem item) {
         JPanel tagPanel = new JPanel(new BorderLayout());
         tagPanel.setBorder(createTagBorder());
-        tagPanel.setBackground(new Color(230, 240, 250));
+        tagPanel.setBackground(new GColor("color.bg.reveng.tag"));
 
         JLabel label = new JLabel(item.getName()); // Display name to user
         label.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
@@ -116,8 +117,8 @@ public class ItemSelectionPanel extends JPanel {
         removeButton.setPreferredSize(new Dimension(20, 20));
         removeButton.setFont(removeButton.getFont().deriveFont(Font.BOLD, 12f));
         removeButton.setMargin(new Insets(0, 0, 0, 0));
-        removeButton.setBackground(Color.WHITE);
-        removeButton.setBorder(BorderFactory.createRaisedBevelBorder());
+        removeButton.setBorder(BorderFactory.createEmptyBorder());
+        removeButton.setContentAreaFilled(false);
         removeButton.addActionListener(e -> removeItem(item, tagPanel));
 
         tagPanel.add(label, BorderLayout.CENTER);
@@ -130,7 +131,7 @@ public class ItemSelectionPanel extends JPanel {
 
     private Border createTagBorder() {
         return BorderFactory.createCompoundBorder(
-                BorderFactory.createRaisedBevelBorder(),
+                BorderFactory.createLineBorder(new GColor("color.border.reveng.tag")),
                 BorderFactory.createEmptyBorder(2, 2, 2, 2)
         );
     }

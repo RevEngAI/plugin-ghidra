@@ -27,6 +27,7 @@ import ghidra.util.task.*;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.RTextScrollPane;
+import generic.theme.Gui;
 
 import javax.swing.*;
 import javax.swing.text.BadLocationException;
@@ -179,7 +180,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         descriptionArea.setContentType("text/html");
         descriptionArea.setEditable(false);
         descriptionArea.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
-        descriptionArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        descriptionArea.setFont(Gui.getFont("font.monospaced"));
         descriptionArea.setText("No function selected or binary not analysed yet with RevEng.AI");
         headerPanel.add(descriptionArea);
 

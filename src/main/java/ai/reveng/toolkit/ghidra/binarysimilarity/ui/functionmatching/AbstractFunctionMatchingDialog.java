@@ -18,6 +18,8 @@ import ghidra.util.task.TaskMonitor;
 import ghidra.util.task.TaskMonitorComponent;
 import ghidra.util.Msg;
 import resources.ResourceManager;
+import generic.theme.GThemeDefaults.Colors.Messages;
+import generic.theme.GColor;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
@@ -354,7 +356,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
                 if (!isSelected) {
                     // Set text color based on percentage value
-                    c.setForeground(textColor);
+                    c.setForeground(textColor != null ? textColor : table.getForeground());
                     // Keep default background color
                     c.setBackground(table.getBackground());
                 } else {
@@ -367,36 +369,37 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             return c;
         }
 
+        private static final Color SIMILARITY_CRITICAL = new GColor("color.fg.reveng.similarity.critical");
+        private static final Color SIMILARITY_HIGH = new GColor("color.fg.reveng.similarity.high");
+        private static final Color SIMILARITY_MEDIUM = new GColor("color.fg.reveng.similarity.medium");
+        private static final Color SIMILARITY_LOW = new GColor("color.fg.reveng.similarity.low");
+
         /**
-         * Get the text color based on percentage value
+         * Get the text color based on percentage value, or null for the table's default
          */
         private Color getColorForPercentage(String percentageStr) {
             try {
                 // Remove the % symbol and parse as double
                 String numStr = percentageStr.replace("%", "").trim();
                 if (numStr.equals("N/A")) {
-                    return Color.BLACK; // Default color for N/A values
+                    return null;
                 }
 
                 double percentage = Double.parseDouble(numStr);
 
-                if (percentage >= 0 && percentage <= 1) {
-                    return new Color(255, 0, 0); // Red
-                } else if (percentage > 1 && percentage <= 50) {
-                    return new Color(128, 0, 128); // Purple
+                if (percentage >= 0 && percentage <= 50) {
+                    return SIMILARITY_CRITICAL;
                 } else if (percentage > 50 && percentage <= 70) {
-                    return new Color(255, 165, 0); // Orange
+                    return SIMILARITY_HIGH;
                 } else if (percentage > 70 && percentage <= 90) {
-                    return new Color(200, 140, 0); // Darker yellow for better visibility
-                } else if (percentage > 90 && percentage <= 95) {
-                    return new Color(34, 139, 34); // Forest Green
-                } else if (percentage > 95 && percentage <= 100) {
-                    return new Color(0, 100, 0); // Dark Green
+                    return SIMILARITY_MEDIUM;
+                } else if (percentage > 90 && percentage <= 100) {
+                    return SIMILARITY_LOW;
                 } else {
-                    return Color.BLACK; // Default for out-of-range values
+                    return null;
                 }
             } catch (NumberFormatException e) {
-                return Color.BLACK; // Default color for unparseable values
+                return null;
             }
         }
     }
@@ -518,7 +521,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         errorArea.setLineWrap(true);
         errorArea.setWrapStyleWord(true);
         errorArea.setEditable(false);
-        errorArea.setBackground(Color.PINK);
+        errorArea.setForeground(Messages.ERROR);
         errorArea.setBorder(BorderFactory.createTitledBorder("Error Details"));
         errorScrollPane = new JScrollPane(errorArea);
 
