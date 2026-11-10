@@ -16,7 +16,7 @@ import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
-import java.awt.Color;
+import generic.theme.GColor;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -417,10 +417,10 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
             var renderer = runSwing(() -> resultsTable.getCellRenderer(0, column));
             var high = runSwing(() -> renderer.getTableCellRendererComponent(
                     resultsTable, new BigDecimal("99.93"), false, false, 0, column).getForeground());
-            assertEquals(new Color(0, 100, 0), high);
+            assertEquals(new GColor("color.fg.reveng.similarity.low"), high);
             var low = runSwing(() -> renderer.getTableCellRendererComponent(
                     resultsTable, BigDecimal.ZERO, false, false, 0, column).getForeground());
-            assertEquals(new Color(255, 0, 0), low);
+            assertEquals(new GColor("color.fg.reveng.similarity.critical"), low);
         }
 
         close(foundDialog);
