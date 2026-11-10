@@ -238,7 +238,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 								SwingUtilities.invokeLater(() -> {
 									analysisLogComponent.setLogs(logs);
 									Msg.showInfo(AnalysisManagementPlugin.this, null, ReaiPluginPackage.WINDOW_PREFIX + "Check status",
-											"Status of analysis " + knownProgram + ": " + status);
+											checkStatusMessage(status));
 								});
 							} catch (Exception e) {
 								Msg.error(AnalysisManagementPlugin.this, "Failed to check analysis status: " + e.getMessage(), e);
@@ -376,6 +376,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 }
             }
         }
+    }
+
+    static String checkStatusMessage(AnalysisStatus status) {
+        return "Analysis status: " + status;
     }
 
 }
