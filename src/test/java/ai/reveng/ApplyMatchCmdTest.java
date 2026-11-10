@@ -43,7 +43,8 @@ public class ApplyMatchCmdTest extends RevEngMockableHeadedIntegrationTest {
                 new BinaryHash("abc123"),
                 false,
                 BigDecimal.valueOf(0.9),
-                BigDecimal.valueOf(0.9));
+                BigDecimal.valueOf(0.9),
+                null);
         var ghidraMatch = new GhidraFunctionMatchWithSignature(func1, match, null);
 
         var cmd = new ApplyMatchCmd(service, analysedProgram, ghidraMatch, true);

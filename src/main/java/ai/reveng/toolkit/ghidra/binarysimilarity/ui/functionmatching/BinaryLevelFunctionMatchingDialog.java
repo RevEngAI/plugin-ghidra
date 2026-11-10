@@ -16,7 +16,7 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
 
     public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool.getService(GhidraRevengService.class), programWithBinaryID);
+              tool, programWithBinaryID);
     }
 
     @Override

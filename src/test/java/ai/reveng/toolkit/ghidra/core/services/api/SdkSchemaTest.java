@@ -130,7 +130,7 @@ public class SdkSchemaTest {
                 "getCollectionIds", "getBinaryIds", "getDebugTypes");
         requireMethods(missing, "ai.reveng.model.GetMatchesOutputBody", "getMatches", "getStatus");
         requireMethods(missing, "ai.reveng.model.MatchedFunction",
-                "getFunctionId", "getFunctionName", "getSimilarity", "getConfidence");
+                "getFunctionId", "getFunctionName", "getSimilarity", "getConfidence", "getAnalysisId");
         requireMethods(missing, "ai.reveng.model.BatchRenameInputBody", "setFunctions");
         requireMethods(missing, "ai.reveng.model.BatchRenameItem",
                 "setFunctionId", "setNewName", "setNewMangledName");

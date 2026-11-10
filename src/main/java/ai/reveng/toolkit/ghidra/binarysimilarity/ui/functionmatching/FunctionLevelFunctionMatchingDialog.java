@@ -18,7 +18,7 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
 
     public FunctionLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID, Function function) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool.getService(GhidraRevengService.class), programWithBinaryID);
+              tool, programWithBinaryID);
         this.function = function;
     }
 

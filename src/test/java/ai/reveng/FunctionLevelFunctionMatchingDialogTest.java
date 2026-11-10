@@ -427,6 +427,58 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
     }
 
+    @Test
+    public void testRightClickOffersMatchedBinaryInPortal() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new MultiMatchMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+        assertNull(invokeInstanceMethod("getSelectedMatchedAnalysisID", foundDialog));
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() == 3,
+                "Results table should hold all three mocked matches");
+
+        var cell = runSwing(() -> resultsTable.getCellRect(1, 0, true));
+        var rightClick = new java.awt.event.MouseEvent(resultsTable, java.awt.event.MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(), java.awt.event.InputEvent.BUTTON3_DOWN_MASK,
+                cell.x + 1, cell.y + 1, 1, true, java.awt.event.MouseEvent.BUTTON3);
+        runSwing(() -> resultsTable.dispatchEvent(rightClick));
+        var popup = (JPopupMenu) getInstanceField("portalPopup", foundDialog);
+        assertTrue("Right click should show the portal popup", runSwing(popup::isVisible));
+        assertTrue("Right click should not reach the docking popup", rightClick.isConsumed());
+        assertEquals("Right click should select the row under the cursor", 1, resultsTable.getSelectedRow());
+        var item = (JMenuItem) popup.getComponent(0);
+        assertEquals("Open in Portal", item.getText());
+        assertTrue(item.isEnabled());
+        assertEquals(new TypedApiInterface.AnalysisID(12345),
+                invokeInstanceMethod("getSelectedMatchedAnalysisID", foundDialog));
+        runSwing(() -> popup.setVisible(false));
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
     /**
      * Returns several matches whose server order differs from their alphabetical order, so that
      * sorting the results table genuinely separates view indices from model indices.
