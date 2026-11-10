@@ -177,11 +177,12 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
         assertNotNull("Dialog should be shown", foundDialog);
 
-        // Verify the initial status message
-        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
-        assertNotNull("Status label should exist", statusLabel);
-        assertTrue("Status should show ready message",
-                statusLabel.getText().contains("Ready"));
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+        waitForCondition(() -> resultsTable.getRowCount() > 0,
+                "Results table should populate without pressing Match Functions");
+        assertTrue("Function matching API should have been called", mockApi.functionMatchingCalled);
+        assertEquals("Should request 5 results per function",
+                Long.valueOf(5L), mockApi.lastMatchingRequest.getResultsPerFunction());
 
         // Close the dialog
         close(foundDialog);
@@ -530,6 +531,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     static class FunctionMatchingMockApi extends UnimplementedAPI {
         private final AnalysisStatus currentStatus = AnalysisStatus.Complete;
         boolean functionMatchingCalled = false;
+        StartMatchingForFunctionsInputBody lastMatchingRequest;
 
         @Override
         public TypedApiInterface.AnalysisID analyse(AnalysisOptionsBuilder options) {
@@ -568,6 +570,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         @Override
         public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
             functionMatchingCalled = true;
+            lastMatchingRequest = request;
             var response = new StartMatchingOutputBody();
             response.setStatus(StartMatchingOutputBody.StatusEnum.COMPLETED);
             return response;
