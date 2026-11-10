@@ -31,6 +31,7 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
     private final PluginTool tool;
     private final Program program;
     private final GhidraRevengService ghidraRevengService;
+    private final JPopupMenu portalPopup = new JPopupMenu();
 
     public RecentAnalysisDialog(PluginTool tool, Program program) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Recent Analyses", true);
@@ -53,34 +54,33 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         JPanel titlePanel = createTitlePanel("Find existing analyses for this binary");
         mainPanel.add(titlePanel, BorderLayout.NORTH);
 
-        // Create the table content
-        // Add mouse listener to handle clicks on the Analysis ID column
+        // Consuming the right-click keeps the dialog's docking popup, with its tool-wide actions, from appearing
+        JMenuItem openInPortalItem = new JMenuItem("Open in Portal");
+        openInPortalItem.addActionListener(e -> {
+            var selected = recentAnalysesTable.getSelectedRowObject();
+            if (selected != null) {
+                ghidraRevengService.openPortalFor(tool,
+                        new TypedApiInterface.AnalysisID(Math.toIntExact(selected.getAnalysisId())));
+            }
+        });
+        portalPopup.add(openInPortalItem);
         recentAnalysesTable.getTable().addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 1) {
-                    int row = recentAnalysesTable.getTable().rowAtPoint(e.getPoint());
-                    int col = recentAnalysesTable.getTable().columnAtPoint(e.getPoint());
+            public void mousePressed(MouseEvent e) {
+                showPortalPopup(e);
+            }
 
-                    if (row >= 0 && col >= 0) {
-                        // Check if clicked column is "Analysis ID" (column 0)
-                        String columnName = recentAnalysesTable.getTable().getColumnName(col);
-                        if ("Analysis ID".equals(columnName)) {
-                            AnalysisRecordBody result = recentAnalysesTable.getModel().getRowObject(row);
-                            if (result != null) {
-                                var analysisID = new TypedApiInterface.AnalysisID(Math.toIntExact(result.getAnalysisId()));
-                                tool.execute(new Task("Open analysis in portal", false, false, false) {
-                                    @Override
-                                    public void run(TaskMonitor monitor) {
-                                        try {
-                                            ghidraRevengService.openPortalFor(tool, analysisID);
-                                        } catch (Exception ex) {
-                                            Msg.error(RecentAnalysisDialog.this, "Failed to open analysis in portal: " + ex.getMessage(), ex);
-                                        }
-                                    }
-                                }, 0);
-                            }
-                        }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                showPortalPopup(e);
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                    var selected = recentAnalysesTable.getSelectedRowObject();
+                    if (selected != null) {
+                        pickAnalysis(selected);
                     }
                 }
             }
@@ -106,6 +106,19 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         addButton(pickSelectedButton);
 
         addWorkPanel(mainPanel);
+    }
+
+    private void showPortalPopup(MouseEvent e) {
+        if (!e.isPopupTrigger()) {
+            return;
+        }
+        e.consume();
+        JTable table = recentAnalysesTable.getTable();
+        int row = table.rowAtPoint(e.getPoint());
+        if (row >= 0) {
+            table.setRowSelectionInterval(row, row);
+            portalPopup.show(table, e.getX(), e.getY());
+        }
     }
 
     private void pickAnalysis(AnalysisRecordBody result) {

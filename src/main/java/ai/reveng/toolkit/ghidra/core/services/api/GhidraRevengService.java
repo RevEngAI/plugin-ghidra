@@ -5,6 +5,7 @@ import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
+import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -30,7 +31,6 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.StringPropertyMap;
-import ghidra.util.BrowserLoader;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
@@ -43,7 +43,6 @@ import javax.annotation.Nullable;
 import java.awt.*;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URI;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -1131,24 +1130,7 @@ public class GhidraRevengService {
             }
             sb.append(s);
         }
-        openURI(serviceProvider, URI.create(sb.toString()));
-    }
-
-    /// Ghidra's BrowserLoader is more reliable than java.awt.Desktop, which frequently no-ops or is
-    /// reported unsupported inside Ghidra's JVM. It reads the manual-viewer options off the service
-    /// provider, which Ghidra 12.2 made mandatory, so the tool has to be threaded this far down.
-    private void openURI(ServiceProvider serviceProvider, URI uri){
-        try {
-            BrowserLoader.display(uri.toURL(), null, serviceProvider);
-        } catch (MalformedURLException e) {
-            Msg.showError(
-                    this,
-                    null,
-                    "URI Opening Failed",
-                    "Browsing to URI %s failed".formatted(uri),
-                    e
-            );
-        }
+        WebBrowser.open(URI.create(sb.toString()));
     }
 
 
