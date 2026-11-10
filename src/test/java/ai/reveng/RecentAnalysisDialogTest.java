@@ -108,6 +108,53 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     }
 
     @Test
+    public void testDoubleClickPicksAnalysisAndRightClickOffersPortal() throws Exception {
+        var tool = env.getTool();
+        var service = addMockedService(tool, new RecentAnalysesMockApi());
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        AtomicBoolean eventReceived = new AtomicBoolean(false);
+        tool.addEventListener(RevEngAIAnalysisStatusChangedEvent.class, e -> eventReceived.set(true));
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+        @SuppressWarnings("unchecked")
+        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<AnalysisRecordBody, ?>)
+                getInstanceField("recentAnalysesTableModel", foundDialog);
+        waitForTableModel(tableModel);
+        @SuppressWarnings("unchecked")
+        var table = ((ghidra.util.table.GhidraFilterTable<AnalysisRecordBody>)
+                getInstanceField("recentAnalysesTable", foundDialog)).getTable();
+
+        clickTableCell(table, 0, 0, 1);
+        assertFalse("Single click should only select", eventReceived.get());
+
+        var cell = runSwing(() -> table.getCellRect(0, 0, true));
+        var rightClick = new java.awt.event.MouseEvent(table, java.awt.event.MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(), java.awt.event.InputEvent.BUTTON3_DOWN_MASK,
+                cell.x + 1, cell.y + 1, 1, true, java.awt.event.MouseEvent.BUTTON3);
+        runSwing(() -> table.dispatchEvent(rightClick));
+        var popup = (JPopupMenu) getInstanceField("portalPopup", foundDialog);
+        assertTrue("Right click should show the portal popup", runSwing(popup::isVisible));
+        assertTrue("Right click should not reach the docking popup", rightClick.isConsumed());
+        assertEquals(1, popup.getComponentCount());
+        assertEquals("Open in Portal", ((JMenuItem) popup.getComponent(0)).getText());
+        runSwing(() -> popup.setVisible(false));
+
+        clickTableCell(table, 0, 0, 2);
+        waitForCondition(eventReceived::get, "Double click should pick the analysis");
+        assertEquals(RecentAnalysesMockApi.MOCK_ANALYSIS_ID,
+                service.getKnownProgram(program).orElseThrow().analysisID().id());
+    }
+
+    @Test
     public void testDialogShowsRecentAnalyses() throws Exception {
         var tool = env.getTool();
 
