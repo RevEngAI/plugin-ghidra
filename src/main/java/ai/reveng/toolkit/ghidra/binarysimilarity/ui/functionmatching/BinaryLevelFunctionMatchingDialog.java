@@ -6,6 +6,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ghidra.framework.plugintool.PluginTool;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
+import generic.theme.Gui;
 
 import javax.swing.*;
 import java.awt.*;
@@ -101,7 +102,7 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
                 public Component getTableCellRendererComponent(JTable table, Object value,
                                                                boolean isSelected, boolean hasFocus, int row, int column) {
                     Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-                    c.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+                    c.setFont(Gui.getFont("font.monospaced"));
                     return c;
                 }
             });

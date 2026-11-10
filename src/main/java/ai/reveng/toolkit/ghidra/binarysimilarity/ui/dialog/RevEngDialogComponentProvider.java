@@ -2,7 +2,8 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog;
 
 import docking.DialogComponentProvider;
 import docking.widgets.label.GDLabel;
-import resources.ResourceManager;
+import generic.theme.GColor;
+import generic.theme.GIcon;
 
 import javax.swing.*;
 import java.awt.*;
@@ -13,39 +14,19 @@ public class RevEngDialogComponentProvider extends DialogComponentProvider  {
     }
 
     protected JPanel createTitlePanel(String title) {
-        // Load icon from resources
-        Icon dialogIcon = null;
-        try {
-            dialogIcon = ResourceManager.loadImage("images/icon_50.png");
-        } catch (Exception e) {
-            // If loading fails, fall back to no icon
-        }
+        return createTitlePanel(new GDLabel(title));
+    }
 
-        // Create title label
-        JLabel titleLabel = new GDLabel(title);
-        // Make the title text bold
-        Font currentFont = titleLabel.getFont();
-        titleLabel.setFont(currentFont.deriveFont(Font.BOLD));
+    public static JPanel createTitlePanel(JLabel titleLabel) {
+        titleLabel.setIcon(new GIcon("icon.reveng.mark.24"));
+        titleLabel.setIconTextGap(8);
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD));
 
         JPanel titlePanel = new JPanel(new BorderLayout());
-        titlePanel.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createEtchedBorder(),
-                BorderFactory.createEmptyBorder(5, 5, 5, 5)));
-
-        // Add icon to the left if available
-        if (dialogIcon != null) {
-            JLabel iconLabel = new JLabel(dialogIcon);
-            titlePanel.add(iconLabel, BorderLayout.WEST);
-        }
-
-        // Create a centered panel for the title text
-        JPanel centerPanel = new JPanel();
-        centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.X_AXIS));
-        centerPanel.add(Box.createHorizontalGlue());
-        centerPanel.add(titleLabel);
-        centerPanel.add(Box.createHorizontalGlue());
-
-        titlePanel.add(centerPanel, BorderLayout.CENTER);
-
+        titlePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, new GColor("color.border.reveng.title")),
+                BorderFactory.createEmptyBorder(8, 12, 8, 12)));
+        titlePanel.add(titleLabel, BorderLayout.CENTER);
         return titlePanel;
     }
 }

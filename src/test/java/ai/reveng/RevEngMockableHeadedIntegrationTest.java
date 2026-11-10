@@ -3,6 +3,10 @@ package ai.reveng;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.LoggingPlugin;
+import generic.jar.ResourceFile;
+import ghidra.GhidraTestApplicationLayout;
+import utility.application.ApplicationLayout;
+import ghidra.framework.GModule;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.mgr.ServiceManager;
 import ghidra.framework.plugintool.util.PluginException;
@@ -12,11 +16,28 @@ import ghidra.test.TestEnv;
 import org.junit.After;
 import org.junit.Before;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 /// Base class
 abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedIntegrationTest {
     protected TestEnv env;
+
+    /// Registers this project as a module so its data/*.theme.properties load, as for an installed extension.
+    @Override
+    protected ApplicationLayout createApplicationLayout() throws IOException {
+        return new GhidraTestApplicationLayout(new File(getTestDirectoryPath())) {
+            @Override
+            protected Map<String, GModule> findGhidraModules() throws IOException {
+                var modules = new HashMap<>(super.findGhidraModules());
+                var root = new ResourceFile(new File("").getAbsoluteFile());
+                modules.put(root.getName(), new GModule(applicationRootDirs, root));
+                return modules;
+            }
+        };
+    }
 
     @Before
     public void setup() throws IOException, PluginException {

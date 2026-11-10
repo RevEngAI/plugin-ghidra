@@ -25,6 +25,7 @@ import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
+import generic.theme.GThemeDefaults.Colors.Messages;
 
 import javax.swing.*;
 import javax.swing.text.AttributeSet;
@@ -105,7 +106,7 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
         top.add(header, BorderLayout.NORTH);
 
         contextLabel = new JLabel("No analysis attached");
-        contextLabel.setForeground(Color.GRAY);
+        contextLabel.setForeground(Messages.HINT);
         top.add(contextLabel, BorderLayout.CENTER);
 
         historyModel = new DefaultListModel<>();
