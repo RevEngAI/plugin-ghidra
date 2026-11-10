@@ -25,6 +25,11 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     private List<Long> matchingFunctionIds;
 
     @Override
+    protected void dialogShown() {
+        filterResults();
+    }
+
+    @Override
     protected MatchingProgress startMatching() throws ApiException {
         var functionIDOpt = analyzedProgram.getIDForFunction(function);
         if (functionIDOpt.isEmpty()) {
@@ -35,7 +40,7 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
         var request = new StartMatchingForFunctionsInputBody();
         request.setFunctionIds(matchingFunctionIds);
         request.setMinSimilarity((double) getThreshold());
-        request.setResultsPerFunction(25L);
+        request.setResultsPerFunction(5L);
         request.setFilters(buildMatchFilters());
 
         var response = revengService.startFunctionsMatching(request);
