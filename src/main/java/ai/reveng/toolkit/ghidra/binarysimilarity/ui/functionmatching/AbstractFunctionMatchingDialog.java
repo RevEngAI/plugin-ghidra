@@ -349,8 +349,8 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                                                        boolean isSelected, boolean hasFocus, int row, int column) {
             Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
 
-            if (value instanceof String percentageStr) {
-                Color textColor = getColorForPercentage(percentageStr);
+            if (value instanceof java.math.BigDecimal percentage) {
+                Color textColor = getColorForPercentage(percentage.toPlainString());
 
                 if (!isSelected) {
                     // Set text color based on percentage value
@@ -402,20 +402,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     /**
-     * Parse a percentage string (e.g., "95.50%") into a double value for sorting
-     */
-    protected Double parsePercentage(String percentageStr) {
-        if (percentageStr == null || percentageStr.equals("N/A")) {
-            return -1.0; // Sort N/A values to the bottom
-        }
-        try {
-            return Double.parseDouble(percentageStr.replace("%", "").trim());
-        } catch (NumberFormatException e) {
-            return -1.0; // Sort unparseable values to the bottom
-        }
-    }
-
-    /**
      * Configure custom comparators for percentage columns to enable proper numerical sorting
      * @param similarityColumnIndex the index of the similarity column
      * @param confidenceColumnIndex the index of the confidence column
@@ -423,11 +409,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected void configurePercentageColumnSorting(int similarityColumnIndex, int confidenceColumnIndex) {
         if (resultsTable.getRowSorter() != null) {
             javax.swing.table.TableRowSorter<?> sorter = (javax.swing.table.TableRowSorter<?>) resultsTable.getRowSorter();
-            java.util.Comparator<String> percentageComparator = (s1, s2) -> {
-                Double val1 = parsePercentage(s1);
-                Double val2 = parsePercentage(s2);
-                return val1.compareTo(val2);
-            };
+            java.util.Comparator<java.math.BigDecimal> percentageComparator = java.math.BigDecimal::compareTo;
             sorter.setComparator(similarityColumnIndex, percentageComparator);
             sorter.setComparator(confidenceColumnIndex, percentageComparator);
         }
