@@ -11,6 +11,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
@@ -24,6 +25,8 @@ import generic.theme.GColor;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +35,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public abstract class AbstractFunctionMatchingDialog extends RevEngDialogComponentProvider {
+    protected final PluginTool tool;
     protected final GhidraRevengService revengService;
     protected final GhidraRevengService.AnalysedProgram analyzedProgram;
 
@@ -56,6 +60,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     // Assembly comparison panel
     protected AssemblyDiffPanel assemblyDiffPanel;
+    private final JPopupMenu portalPopup = new JPopupMenu();
 
     // Data
     protected AnalysisBasicInfoOutputBody analysisBasicInfo;
@@ -65,10 +70,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     // Polling configuration
     protected static final int POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
 
-    protected AbstractFunctionMatchingDialog(String title, Boolean isModal, GhidraRevengService revengService,
+    protected AbstractFunctionMatchingDialog(String title, Boolean isModal, PluginTool tool,
                                            GhidraRevengService.AnalysedProgram analyzedProgram) {
         super(title, isModal);
-        this.revengService = revengService;
+        this.tool = tool;
+        this.revengService = tool.getService(GhidraRevengService.class);
         this.analyzedProgram = analyzedProgram;
         this.taskMonitorComponent = new TaskMonitorComponent(false, true);
         this.functionMatchResults = new ArrayList<>();
@@ -601,6 +607,27 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             }
         });
 
+        // Consuming the right-click keeps the dialog's docking popup, with its tool-wide actions, from appearing
+        JMenuItem openInPortalItem = new JMenuItem("Open in Portal");
+        openInPortalItem.addActionListener(e -> {
+            var analysisID = getSelectedMatchedAnalysisID();
+            if (analysisID != null) {
+                revengService.openPortalFor(tool, analysisID);
+            }
+        });
+        portalPopup.add(openInPortalItem);
+        resultsTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                showPortalPopup(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                showPortalPopup(e);
+            }
+        });
+
         // Create assembly comparison panel
         assemblyDiffPanel = new AssemblyDiffPanel();
 
@@ -639,6 +666,24 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         GhidraFunctionMatchWithSignature selectedMatch = resultsToShow.get(modelRow);
         assemblyDiffPanel.showAssemblyFor(selectedMatch, revengService);
+    }
+
+    private void showPortalPopup(MouseEvent e) {
+        if (!e.isPopupTrigger()) {
+            return;
+        }
+        e.consume();
+        int row = resultsTable.rowAtPoint(e.getPoint());
+        if (row >= 0) {
+            resultsTable.setRowSelectionInterval(row, row);
+            portalPopup.getComponent(0).setEnabled(getSelectedMatchedAnalysisID() != null);
+            portalPopup.show(resultsTable, e.getX(), e.getY());
+        }
+    }
+
+    private TypedApiInterface.AnalysisID getSelectedMatchedAnalysisID() {
+        var selected = getSelectedMatches();
+        return selected.size() == 1 ? selected.get(0).functionMatch().nearest_neighbor_analysis_id() : null;
     }
 
     protected JPanel createRenameButtonsPanel() {
