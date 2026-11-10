@@ -40,11 +40,6 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
-    public AnalysisOptionsBuilder advancedAnalysis(boolean advanced) {
-        options.put("advanced_analysis", advanced);
-        return this;
-    }
-
     public AnalysisOptionsBuilder fileName(String name) {
         options.put("file_name", name);
         return this;
@@ -169,10 +164,6 @@ public class AnalysisOptionsBuilder {
 
         if (options.has("skip_capabilities")) {
             analysisConfig.setGenerateCapabilities(!options.getBoolean("skip_capabilities"));
-        }
-
-        if (options.has("advanced_analysis")) {
-            analysisConfig.setAdvancedAnalysis(options.getBoolean("advanced_analysis"));
         }
 
         request.setAnalysisConfig(analysisConfig);

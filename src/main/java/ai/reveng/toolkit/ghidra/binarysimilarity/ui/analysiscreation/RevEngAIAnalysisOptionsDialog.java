@@ -169,10 +169,9 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         var options = AnalysisOptionsBuilder.forProgram(program,
                 function -> includedEntryPoints.contains(function.getEntryPoint()));
 
-        // Capability generation and advanced analysis are not offered by this dialog and are
-        // always off for analyses the plugin creates.
+        // Capability generation is not offered by this dialog and is always off for analyses
+        // the plugin creates.
         options.skipCapabilities(true);
-        options.advancedAnalysis(false);
 
         if (privateScope.isSelected() && privateScope.isEnabled()) {
             options.scope(AnalysisScope.PRIVATE);

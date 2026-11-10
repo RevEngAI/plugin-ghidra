@@ -100,7 +100,6 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var analysisConfig = request.getAnalysisConfig();
         assertNotNull("The request must always carry an analysis config", analysisConfig);
         assertEquals("Capabilities are never generated", Boolean.FALSE, analysisConfig.getGenerateCapabilities());
-        assertEquals("Advanced analysis is never requested", Boolean.FALSE, analysisConfig.getAdvancedAnalysis());
         assertNull("Third-party scraping is never requested", analysisConfig.getScrapeThirdPartyConfig());
         assertNull("Sandbox execution is never requested", analysisConfig.getSandboxConfig());
 
