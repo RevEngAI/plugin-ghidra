@@ -16,6 +16,8 @@ import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
+import java.awt.Color;
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.Assert.*;
@@ -317,6 +319,109 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         assertEquals(1, selected.size());
         assertEquals("zeta_match",
                 ((GhidraFunctionMatchWithSignature) selected.get(0)).functionMatch().name());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    public void testSortBySimilarityAndConfidence() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new MultiMatchMockApi() {
+            @Override
+            public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) {
+                var response = super.getFunctionsMatches(functionIds);
+                var matches = response.getMatches().get(0).getMatchedFunctions();
+                matches.get(0).setConfidence(0.0);
+                matches.get(2).setConfidence(null);
+                return response;
+            }
+        };
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() == 3,
+                "Results table should hold all three mocked matches");
+
+        // Similarity: zeta 0.50, alpha 0.95, mid 0.72
+        runSwing(() -> resultsTable.getRowSorter().toggleSortOrder(1));
+        waitForSwing();
+        assertEquals("zeta_match", resultsTable.getValueAt(0, 0));
+        assertEquals("mid_match", resultsTable.getValueAt(1, 0));
+        assertEquals("alpha_match", resultsTable.getValueAt(2, 0));
+
+        // Confidence: zeta 0, alpha 0.95, mid null
+        runSwing(() -> resultsTable.getRowSorter().toggleSortOrder(2));
+        waitForSwing();
+        assertEquals("mid_match", resultsTable.getValueAt(0, 0));
+        assertEquals("zeta_match", resultsTable.getValueAt(1, 0));
+        assertEquals("alpha_match", resultsTable.getValueAt(2, 0));
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    public void testSimilarityAndConfidenceCellsAreColorCoded() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() > 0, "Results table should have rows");
+
+        // Similarity (1) and Confidence (2) hold BigDecimal values on a 0-100 scale
+        for (int column : new int[]{1, 2}) {
+            var renderer = runSwing(() -> resultsTable.getCellRenderer(0, column));
+            var high = runSwing(() -> renderer.getTableCellRendererComponent(
+                    resultsTable, new BigDecimal("99.93"), false, false, 0, column).getForeground());
+            assertEquals(new Color(0, 100, 0), high);
+            var low = runSwing(() -> renderer.getTableCellRendererComponent(
+                    resultsTable, BigDecimal.ZERO, false, false, 0, column).getForeground());
+            assertEquals(new Color(255, 0, 0), low);
+        }
 
         close(foundDialog);
         waitForSwing();
