@@ -20,6 +20,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -31,6 +32,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.invoker.ApiException;
+import okhttp3.Dns;
 
 import static ai.reveng.toolkit.ghidra.core.services.api.LoggingInterceptor.*;
 
@@ -85,7 +87,11 @@ public class TypedApiImplementation implements TypedApiInterface {
 
         // Use a custom HTTP client to add Ghidra specific logging
         // Set withResponseBody to true if debugging issues with the API to see the full response body
-        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder().addInterceptor(ghidraLogger(false)).build());
+        // Bound DNS too: the connect timeout below doesn't cover it, and offline it can hang for minutes
+        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder()
+                .addInterceptor(ghidraLogger(false))
+                .dns(new TimeoutDns(Dns.SYSTEM, Duration.ofSeconds(5)))
+                .build());
 
         apiClient.setConnectTimeout(5000);
         apiClient.setReadTimeout(15000);
