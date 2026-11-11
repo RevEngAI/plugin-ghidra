@@ -65,11 +65,6 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
     }
 
     @Override
-    protected String getTableTitle() {
-        return "Function matching results";
-    }
-
-    @Override
     protected int getTableSelectionMode() {
         return ListSelectionModel.MULTIPLE_INTERVAL_SELECTION;
     }
@@ -121,6 +116,11 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
     @Override
     protected String getDialogDescription() {
         return "Match functions in this binary against previously seen samples";
+    }
+
+    @Override
+    protected String getFunctionFilterHint() {
+        return "Virtual address, function name, matched function name, hash or binary";
     }
 
     @Override
