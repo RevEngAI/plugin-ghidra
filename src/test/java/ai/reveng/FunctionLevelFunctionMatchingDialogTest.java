@@ -153,6 +153,47 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     }
 
     @Test
+    public void testUserSubmittedDebugSymbolsAlwaysVisibleAndEnabledByParent() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JCheckBox debugSymbols = (JCheckBox) getInstanceField("debugSymbolsCheckBox", foundDialog);
+        JCheckBox userSubmitted = (JCheckBox) getInstanceField("userSubmittedDebugSymbolsCheckBox", foundDialog);
+
+        assertTrue(userSubmitted.isVisible());
+        assertFalse(userSubmitted.isEnabled());
+
+        setToggleButtonSelected(debugSymbols, true);
+        assertTrue(userSubmitted.isVisible());
+        assertTrue(userSubmitted.isEnabled());
+
+        setToggleButtonSelected(debugSymbols, false);
+        assertTrue(userSubmitted.isVisible());
+        assertFalse(userSubmitted.isEnabled());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
     public void testFunctionMatchingTriggersAPICall() throws Exception {
         var tool = env.getTool();
 
