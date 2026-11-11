@@ -218,4 +218,21 @@ public class ServerDataTypeDecoderTest extends RevEngMockableHeadedIntegrationTe
 
         assertEquals("int", decoder.typeFor(1L, 0).getName());
     }
+
+    /// `size` is nullable on the wire. An unsized type that falls back to a filler must not fail the
+    /// decode.
+    @Test
+    public void unsizedTypesFallBackToFiller() {
+        var decoder = ServerDataTypeDecoder.decode(types("""
+                {"items": [
+                  {"data_type_id": 1, "namespace": "", "name": "not_a_ghidra_type", "kind": "BASE",
+                   "size": null, "source_type": "AUTO", "has_definition": false},
+                  {"data_type_id": 2, "namespace": "", "name": "orphan_t", "kind": "TYPEDEF",
+                   "source_type": "AUTO", "has_definition": false}
+                ]}
+                """));
+
+        assertEquals(1, decoder.typeFor(1L, 0).getLength());
+        assertTrue(decoder.typeFor(2L, 0) instanceof TypeDef);
+    }
 }

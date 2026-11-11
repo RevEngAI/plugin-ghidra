@@ -338,7 +338,7 @@ public final class ServerDataTypeDecoder {
 
     /// An exact-width filler for a type we could not build. Ghidra only has undefined1/2/4/8, so
     /// anything else becomes an array of undefined1 to keep the surrounding layout intact.
-    private static DataType undefined(long size) {
+    private static DataType undefined(@Nullable Long size) {
         long clamped = clampSize(size);
         if (clamped == 1 || clamped == 2 || clamped == 4 || clamped == 8) {
             return Undefined.getUndefinedDataType((int) clamped);
