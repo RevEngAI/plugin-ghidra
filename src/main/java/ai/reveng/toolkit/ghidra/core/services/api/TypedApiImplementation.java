@@ -60,6 +60,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
     private final DataTypesApi dataTypesApi;
     private final IamUsersApi iamUsersApi;
+    private final AuthenticationUsersApi authenticationUsersApi;
 
     private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
@@ -109,6 +110,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         this.dataTypesApi = new DataTypesApi(apiClient);
         this.configApi = new ConfigApi(apiClient);
         this.iamUsersApi = new IamUsersApi(apiClient);
+        this.authenticationUsersApi = new AuthenticationUsersApi(apiClient);
     }
 
 
@@ -597,6 +599,12 @@ public class TypedApiImplementation implements TypedApiInterface {
     @Override
     public List<BinarySearchResult> searchBinaries(String partialBinaryName, String modelName) throws ApiException {
         return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null, null).getData().getResults();
+    }
+
+    @Override
+    public List<PublicUserBody> searchUsers(String searchTerm) throws ApiException {
+        var results = this.authenticationUsersApi.v3ListUsers(searchTerm).getResults();
+        return results != null ? results : List.of();
     }
 
     @Override

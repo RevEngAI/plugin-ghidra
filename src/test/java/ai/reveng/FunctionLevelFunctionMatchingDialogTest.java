@@ -231,6 +231,57 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void testPlatformAndArchitectureTogglesAreSentAsMatchFilters() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        // The automatic run on open leaves platform, architecture and user unfiltered, i.e. any
+        waitForCondition(() -> mockApi.lastMatchingRequest != null, "Matching should start when the dialog opens");
+        MatchFilters initialFilters = mockApi.lastMatchingRequest.getFilters();
+        assertNull(initialFilters.getPlatforms());
+        assertNull(initialFilters.getArchitectures());
+        assertNull(initialFilters.getUserIds());
+        waitForTasks();
+
+        var platforms = (java.util.Map<MatchFilters.PlatformsEnum, JCheckBox>) getInstanceField("platformCheckBoxes", foundDialog);
+        var architectures = (java.util.Map<MatchFilters.ArchitecturesEnum, JCheckBox>) getInstanceField("architectureCheckBoxes", foundDialog);
+        setToggleButtonSelected(platforms.get(MatchFilters.PlatformsEnum.LINUX), true);
+        setToggleButtonSelected(architectures.get(MatchFilters.ArchitecturesEnum.ARM_64), true);
+
+        var firstRequest = mockApi.lastMatchingRequest;
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new match");
+        waitForTasks();
+
+        MatchFilters filters = mockApi.lastMatchingRequest.getFilters();
+        assertEquals(List.of(MatchFilters.PlatformsEnum.LINUX), filters.getPlatforms());
+        assertEquals(List.of(MatchFilters.ArchitecturesEnum.ARM_64), filters.getArchitectures());
+        assertNull(filters.getUserIds());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
     public void testClickMatchButtonPopulatesResultsTable() throws Exception {
         var tool = env.getTool();
 
@@ -572,7 +623,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     static class FunctionMatchingMockApi extends UnimplementedAPI {
         private final AnalysisStatus currentStatus = AnalysisStatus.Complete;
         boolean functionMatchingCalled = false;
-        StartMatchingForFunctionsInputBody lastMatchingRequest;
+        volatile StartMatchingForFunctionsInputBody lastMatchingRequest;
 
         @Override
         public TypedApiInterface.AnalysisID analyse(AnalysisOptionsBuilder options) {

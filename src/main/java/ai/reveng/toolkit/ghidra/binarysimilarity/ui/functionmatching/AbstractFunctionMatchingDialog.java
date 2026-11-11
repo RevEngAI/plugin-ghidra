@@ -8,6 +8,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponent
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.CollectionSelectionPanel;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.BinarySelectionPanel;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.UserSelectionPanel;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
@@ -28,6 +29,7 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -50,6 +52,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected JLabel thresholdValueLabel;
     protected JCheckBox debugSymbolsCheckBox;
     protected JCheckBox userSubmittedDebugSymbolsCheckBox;
+    protected UserSelectionPanel userSelector;
+    // Nothing ticked means any platform / architecture, as in the portal
+    protected final Map<MatchFilters.PlatformsEnum, JCheckBox> platformCheckBoxes = new LinkedHashMap<>();
+    protected final Map<MatchFilters.ArchitecturesEnum, JCheckBox> architectureCheckBoxes = new LinkedHashMap<>();
     protected JLabel statusLabel;
     protected JTextArea errorArea;
     protected JScrollPane errorScrollPane;
@@ -560,6 +566,21 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         gbc.insets = new Insets(0, 0, 0, 0);
         filterPanel.add(createDebugSymbolsPanel(), gbc);
 
+        // Row 2, Col 0: Platform and architecture toggles (50% width), as tall as the user selector beside it
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.weightx = 0.5;
+        gbc.insets = new Insets(10, 0, 0, 10);
+        filterPanel.add(createPlatformArchitecturePanel(), gbc);
+
+        // Row 2, Col 1: User selector (50% width)
+        gbc.gridx = 1;
+        gbc.gridy = 2;
+        gbc.weightx = 0.5;
+        gbc.insets = new Insets(10, 0, 0, 0);
+        filterPanel.add(createUserSelectorPanel(), gbc);
+
         return filterPanel;
     }
 
@@ -798,6 +819,52 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         return panel;
     }
 
+    protected JPanel createPlatformArchitecturePanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Platform & architecture"));
+        panel.setToolTipText("Leave unticked to match any platform or architecture");
+
+        platformCheckBoxes.put(MatchFilters.PlatformsEnum.LINUX, new JCheckBox("Linux"));
+        platformCheckBoxes.put(MatchFilters.PlatformsEnum.WINDOWS, new JCheckBox("Windows"));
+        platformCheckBoxes.put(MatchFilters.PlatformsEnum.ANDROID, new JCheckBox("Android"));
+
+        architectureCheckBoxes.put(MatchFilters.ArchitecturesEnum.X86_64, new JCheckBox("x86 (64-bit)"));
+        architectureCheckBoxes.put(MatchFilters.ArchitecturesEnum.X86_32, new JCheckBox("x86 (32-bit)"));
+        architectureCheckBoxes.put(MatchFilters.ArchitecturesEnum.ARM_64, new JCheckBox("ARM (64-bit)"));
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.insets = new Insets(0, 5, 0, 5);
+
+        gbc.gridy = 0;
+        panel.add(new JLabel("Platforms:"), gbc);
+        for (JCheckBox checkBox : platformCheckBoxes.values()) {
+            panel.add(checkBox, gbc);
+        }
+
+        gbc.gridy = 1;
+        panel.add(new JLabel("Architectures:"), gbc);
+        for (JCheckBox checkBox : architectureCheckBoxes.values()) {
+            panel.add(checkBox, gbc);
+        }
+
+        // Keep the toggles left-aligned when the panel is wider than they are
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        panel.add(Box.createHorizontalGlue(), gbc);
+
+        return panel;
+    }
+
+    protected JPanel createUserSelectorPanel() {
+        userSelector = new UserSelectionPanel(
+                query -> revengService.searchUsersWithIds(query),
+                3
+        );
+
+        return userSelector;
+    }
+
     protected JPanel createFunctionFilterPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Filter matches by function virtual address, name, hash or binary"));
@@ -879,6 +946,52 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         return userSubmittedDebugSymbolsCheckBox != null && userSubmittedDebugSymbolsCheckBox.isSelected();
     }
 
+    public List<MatchFilters.PlatformsEnum> getSelectedPlatforms() {
+        return platformCheckBoxes.entrySet().stream()
+                .filter(entry -> entry.getValue().isSelected())
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    public List<MatchFilters.ArchitecturesEnum> getSelectedArchitectures() {
+        return architectureCheckBoxes.entrySet().stream()
+                .filter(entry -> entry.getValue().isSelected())
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /// The filters sent with the matching request, from the current state of the filter panel
+    protected MatchFilters buildMatchFilters() {
+        var filters = new MatchFilters();
+        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
+                .map(Integer::longValue).toList());
+        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
+                .map(Integer::longValue).toList());
+
+        if (isDebugSymbolsEnabled()) {
+            var debugTypes = new ArrayList<String>();
+            debugTypes.add("SYSTEM");
+            if (isUserSubmittedDebugSymbolsEnabled()) {
+                debugTypes.add("USER");
+            }
+            filters.setDebugTypes(debugTypes);
+        }
+
+        var platforms = getSelectedPlatforms();
+        if (!platforms.isEmpty()) {
+            filters.setPlatforms(platforms);
+        }
+        var architectures = getSelectedArchitectures();
+        if (!architectures.isEmpty()) {
+            filters.setArchitectures(architectures);
+        }
+        var userIds = userSelector.getSelectedUserIds();
+        if (!userIds.isEmpty()) {
+            filters.setUserIds(userIds.stream().map(Integer::longValue).toList());
+        }
+        return filters;
+    }
+
     protected void filterResults() {
         Set<Integer> selectedCollectionIds = collectionSelector.getSelectedCollectionIds();
         Set<Integer> selectedBinaryIds = binarySelector.getSelectedBinaryIds();
@@ -899,7 +1012,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                          " (IDs: " + selectedBinaryIds +
                          "), threshold: " + threshold +
                          ", debug symbols: " + includeDebugSymbols +
-                         ", user submitted debug symbols: " + includeUserSubmittedDebugSymbols);
+                         ", user submitted debug symbols: " + includeUserSubmittedDebugSymbols +
+                         ", platforms: " + getSelectedPlatforms() +
+                         ", architectures: " + getSelectedArchitectures() +
+                         ", users: " + userSelector.getSelectedUserNames() +
+                         " (IDs: " + userSelector.getSelectedUserIds() + ")");
 
         taskMonitorComponent.setVisible(true);
         startFunctionMatching();

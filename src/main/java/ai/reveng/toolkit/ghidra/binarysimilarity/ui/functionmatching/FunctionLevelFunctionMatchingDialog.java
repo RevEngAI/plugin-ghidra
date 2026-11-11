@@ -10,7 +10,6 @@ import ghidra.program.model.listing.Function;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.ArrayList;
 import java.util.List;
 
 public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
@@ -62,24 +61,6 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     @Override
     protected List<MatchedFunctionResult> fetchMatches() throws ApiException {
         return flattenMatches(revengService.getFunctionsMatches(matchingFunctionIds).getMatches());
-    }
-
-    private MatchFilters buildMatchFilters() {
-        var filters = new MatchFilters();
-        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
-                .map(Integer::longValue).toList());
-        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
-                .map(Integer::longValue).toList());
-
-        if (isDebugSymbolsEnabled()) {
-            var debugTypes = new ArrayList<String>();
-            debugTypes.add("SYSTEM");
-            if (isUserSubmittedDebugSymbolsEnabled()) {
-                debugTypes.add("USER");
-            }
-            filters.setDebugTypes(debugTypes);
-        }
-        return filters;
     }
 
     @Override

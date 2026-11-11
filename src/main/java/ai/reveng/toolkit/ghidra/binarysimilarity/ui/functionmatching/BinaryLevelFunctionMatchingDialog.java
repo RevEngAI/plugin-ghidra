@@ -10,7 +10,6 @@ import generic.theme.Gui;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.ArrayList;
 
 public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
 
@@ -45,24 +44,6 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
     @Override
     protected java.util.List<MatchedFunctionResult> fetchMatches() throws ApiException {
         return flattenMatches(revengService.getAnalysisFunctionMatches(analyzedProgram.analysisID()).getMatches());
-    }
-
-    private MatchFilters buildMatchFilters() {
-        var filters = new MatchFilters();
-        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
-                .map(Integer::longValue).toList());
-        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
-                .map(Integer::longValue).toList());
-
-        if (isDebugSymbolsEnabled()) {
-            var debugTypes = new ArrayList<String>();
-            debugTypes.add("SYSTEM");
-            if (isUserSubmittedDebugSymbolsEnabled()) {
-                debugTypes.add("USER");
-            }
-            filters.setDebugTypes(debugTypes);
-        }
-        return filters;
     }
 
     @Override

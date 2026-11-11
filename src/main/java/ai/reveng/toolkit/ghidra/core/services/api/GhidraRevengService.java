@@ -1273,6 +1273,27 @@ public class GhidraRevengService {
         });
     }
 
+    public CompletableFuture<List<SelectableItem>> searchUsersWithIds(String query) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                List<SelectableItem> selectableItems = api.searchUsers(query).stream()
+                        .filter(result -> result.getUsername() != null && !result.getUsername().trim().isEmpty())
+                        .map(result -> new SelectableItem(
+                                Math.toIntExact(result.getUserId()),
+                                result.getUsername()
+                        ))
+                        .collect(Collectors.toList());
+
+                Msg.info(this, "Found " + selectableItems.size() + " users matching '" + query + "'");
+                return selectableItems;
+
+            } catch (Exception e) {
+                Msg.error(this, "Error searching users: " + e.getMessage(), e);
+                return List.of();
+            }
+        });
+    }
+
     public AnalysisBasicInfoOutputBody getBasicDetailsForAnalysis(TypedApiInterface.AnalysisID analysisID) throws ApiException {
         return api.getAnalysisBasicInfo(analysisID);
     }
