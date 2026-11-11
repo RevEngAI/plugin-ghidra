@@ -1,42 +1,30 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.about;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
+import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker;
+import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker.UpdateInfo;
+import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.framework.plugintool.PluginTool;
-import resources.ResourceManager;
 
 import javax.swing.*;
 import java.awt.*;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.util.Optional;
 import ai.reveng.invoker.Configuration;
 
 /**
  * Shows a dialog with about information.
  */
 public class AboutDialog extends RevEngDialogComponentProvider {
-    public AboutDialog(PluginTool tool) {
+    private final Optional<UpdateInfo> update;
+
+    public AboutDialog(PluginTool tool, Optional<UpdateInfo> update) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "About", true);
+        this.update = update;
 
-        buildInterface(getPluginVersion());
-        setPreferredSize(300, 210);
-    }
-
-    private String getPluginVersion() {
-        String pluginVersion = "unknown";
-        try {
-            // This resource is written by the release workflow, so it is absent from a local build
-            // and the stream is then null.
-            var inputStream = ResourceManager.getResourceAsStream("reai_ghidra_plugin_version.txt");
-            if (inputStream != null) {
-                pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
-                inputStream.close();
-            }
-        } catch (IOException e) {
-            // ignore — fall back to "unknown"
-        }
-
-        return pluginVersion;
+        buildInterface(UpdateChecker.currentVersion());
+        setPreferredSize(300, update.isPresent() ? 250 : 210);
     }
 
     private void buildInterface(String pluginVersion) {
@@ -72,6 +60,14 @@ public class AboutDialog extends RevEngDialogComponentProvider {
         JLabel sdkLabel = new JLabel("SDK version: " + Configuration.VERSION);
         sdkLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         panel.add(sdkLabel);
+
+        update.ifPresent(u -> {
+            panel.add(Box.createVerticalStrut(10));
+            JButton updateButton = new JButton("Update available: " + u.version());
+            updateButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+            updateButton.addActionListener(e -> WebBrowser.open(URI.create(u.releaseUrl())));
+            panel.add(updateButton);
+        });
 
         return panel;
     }
