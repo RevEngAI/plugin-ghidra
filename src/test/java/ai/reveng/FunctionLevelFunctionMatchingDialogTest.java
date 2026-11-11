@@ -268,6 +268,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         setToggleButtonSelected(platforms.get(MatchFilters.PlatformsEnum.LINUX), true);
         setToggleButtonSelected(architectures.get(MatchFilters.ArchitecturesEnum.ARM_64), true);
 
+        waitForMatchingIdle(foundDialog);
         var firstRequest = mockApi.lastMatchingRequest;
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new match");
@@ -307,16 +308,17 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
         assertNotNull("Dialog should be shown", foundDialog);
 
-        // Get the results table before clicking
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
         assertNotNull("Results table should exist", resultsTable);
-        assertEquals("Results table should be empty initially", 0, resultsTable.getRowCount());
 
-        // Find and click the "Match Functions" button
+        // Find and click the "Match Functions" button once the automatic match on open is done
+        waitForMatchingIdle(foundDialog);
+        var firstRequest = mockApi.lastMatchingRequest;
         JButton matchButton = findButtonByText(foundDialog.getComponent(), "Match Functions");
         assertNotNull("Match Functions button should exist", matchButton);
 
         pressButton(matchButton);
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new match");
 
         // Wait for the API call to complete and results to be processed
         // The mock API returns COMPLETED status immediately, so we just need to wait for Swing
@@ -379,6 +381,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
 
+        waitForMatchingIdle(foundDialog);
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForTasks();
         waitForSwing();
@@ -451,6 +454,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
 
+        waitForMatchingIdle(foundDialog);
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForTasks();
         waitForSwing();
@@ -500,6 +504,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
 
+        waitForMatchingIdle(foundDialog);
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForTasks();
         waitForSwing();
@@ -546,6 +551,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
         assertNull(invokeInstanceMethod("getSelectedMatchedAnalysisID", foundDialog));
 
+        waitForMatchingIdle(foundDialog);
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForTasks();
         waitForSwing();
@@ -614,6 +620,16 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         public List<String> getAssembly(TypedApiInterface.FunctionID functionID) {
             return List.of("push rbp", "mov rbp, rsp", "ret");
         }
+    }
+
+    /// The function-level dialog matches by itself when it opens, and its Match button reads Cancel while
+    /// a run is going. Waits for that first run to finish, so that pressing Match starts a new run rather
+    /// than, on a slow machine, cancelling the one that started after the button was looked up.
+    private void waitForMatchingIdle(FunctionLevelFunctionMatchingDialog dialog) {
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", dialog);
+        waitForCondition(() -> statusLabel.getText().startsWith("Matching complete")
+                        && getInstanceField("matchingThread", dialog) == null,
+                "The automatic match on open should finish");
     }
 
     /// A run that is cancelled and replaced must not reach the UI. Its thread, once its request came back,
