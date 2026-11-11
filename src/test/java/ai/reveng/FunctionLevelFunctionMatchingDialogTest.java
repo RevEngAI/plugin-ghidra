@@ -627,8 +627,12 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     /// than, on a slow machine, cancelling the one that started after the button was looked up.
     private void waitForMatchingIdle(FunctionLevelFunctionMatchingDialog dialog) {
         JLabel statusLabel = (JLabel) getInstanceField("statusLabel", dialog);
-        waitForCondition(() -> statusLabel.getText().startsWith("Matching complete")
-                        && getInstanceField("matchingThread", dialog) == null,
+        JButton matchButton = (JButton) getInstanceField("matchButton", dialog);
+        // Checked on the EDT: the run is marked finished and the button relabelled in one Swing update,
+        // which a check from the test thread can otherwise see half done
+        waitForCondition(() -> runSwing(() -> statusLabel.getText().startsWith("Matching complete")
+                        && getInstanceField("matchingThread", dialog) == null
+                        && matchButton.getText().equals("Match Functions")),
                 "The automatic match on open should finish");
     }
 
