@@ -34,6 +34,7 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
+        apis.put("ai.reveng.api.AuthenticationUsersApi", new String[]{"v3ListUsers"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
                 "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches",
@@ -127,7 +128,9 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.StartMatchingForFunctionsInputBody",
                 "getFunctionIds", "getResultsPerFunction", "getFilters", "getMinSimilarity");
         requireMethods(missing, "ai.reveng.model.MatchFilters",
-                "getCollectionIds", "getBinaryIds", "getDebugTypes");
+                "getCollectionIds", "getBinaryIds", "getDebugTypes", "getPlatforms", "getArchitectures", "getUserIds");
+        requireMethods(missing, "ai.reveng.model.ListPublicUsersOutputBody", "getResults");
+        requireMethods(missing, "ai.reveng.model.PublicUserBody", "getUserId", "getUsername");
         requireMethods(missing, "ai.reveng.model.GetMatchesOutputBody", "getMatches", "getStatus");
         requireMethods(missing, "ai.reveng.model.MatchedFunction",
                 "getFunctionId", "getFunctionName", "getSimilarity", "getConfidence", "getAnalysisId");

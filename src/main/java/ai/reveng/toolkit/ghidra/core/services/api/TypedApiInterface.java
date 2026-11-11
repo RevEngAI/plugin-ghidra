@@ -209,6 +209,10 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("searchBinaries not implemented yet");
     }
 
+    default List<PublicUserBody> searchUsers(String searchTerm) throws ApiException {
+        throw new UnsupportedOperationException("searchUsers not implemented yet");
+    }
+
     default AnalysisBasicInfoOutputBody getAnalysisBasicInfo(AnalysisID analysisID) throws ApiException {
         throw new UnsupportedOperationException("getAnalysisBasicInfo not implemented yet");
     }
