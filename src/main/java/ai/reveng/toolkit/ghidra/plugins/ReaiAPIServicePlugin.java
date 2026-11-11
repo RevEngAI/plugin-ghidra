@@ -4,21 +4,28 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.about.AboutDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.help.HelpDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.ApiInfo;
+import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker;
+import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker.UpdateInfo;
+import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.ui.wizard.SetupWizardManager;
 import ai.reveng.toolkit.ghidra.core.ui.wizard.SetupWizardStateKey;
 import docking.ActionContext;
 import docking.action.builder.ActionBuilder;
+import docking.widgets.OptionDialog;
 import docking.wizard.WizardManager;
 import docking.wizard.WizardState;
 import ghidra.app.plugin.PluginCategoryNames;
+import ghidra.framework.Application;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.util.Msg;
+import ghidra.util.Swing;
 import org.json.JSONException;
 
 import java.io.FileNotFoundException;
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.Optional;
 
@@ -34,14 +41,21 @@ import static ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage.REAI_OPTIONS_CA
 )
 public class ReaiAPIServicePlugin extends Plugin {
     private GhidraRevengService revengService;
+    private Optional<UpdateInfo> update = Optional.empty();
+    // One startup prompt per Ghidra session, even with several tools open.
+    private static boolean updatePromptShown = false;
 
     private static final String REAI_PLUGIN_SETUP_MENU_GROUP = "RevEng.AI Setup";
     public static final String REAI_WIZARD_RUN_PREF = "REAISetupWizardRun";
+    public static final String CHECK_FOR_UPDATES_PREF = "Check for updates";
+    public static final String SKIPPED_UPDATE_PREF = "Skipped update version";
 
     public ReaiAPIServicePlugin(PluginTool tool) {
         super(tool);
 
         tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(REAI_WIZARD_RUN_PREF, "false", null, "If the setup wizard has been run");
+        tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(CHECK_FOR_UPDATES_PREF, true, null, "Check GitHub for a newer plugin release on startup");
+        tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(SKIPPED_UPDATE_PREF, "", null, "Release the user chose not to be prompted about");
 
         // Try to get API info from config file or tool options
         Optional<ApiInfo> apiInfoOpt = getApiInfoFromConfig()
@@ -61,6 +75,47 @@ public class ReaiAPIServicePlugin extends Plugin {
         registerServiceProvided(GhidraRevengService.class, revengService);
 
         setupActions();
+        checkForUpdates();
+    }
+
+    private void checkForUpdates() {
+        var currentVersion = UpdateChecker.currentVersion();
+        if (!tool.getOptions(REAI_OPTIONS_CATEGORY).getBoolean(CHECK_FOR_UPDATES_PREF, true)
+                || currentVersion.equals(UpdateChecker.UNKNOWN_VERSION)) {
+            return;
+        }
+        UpdateChecker.check(currentVersion, Application.getApplicationVersion())
+                .thenAccept(result -> result.ifPresent(u -> Swing.runLater(() -> notifyUpdate(u))));
+    }
+
+    private void notifyUpdate(UpdateInfo u) {
+        // The check can outlive the tool.
+        if (isDisposed()) {
+            return;
+        }
+        update = Optional.of(u);
+
+        new ActionBuilder("Update available", this.toString())
+                .withContext(ActionContext.class)
+                .onAction(context -> WebBrowser.open(URI.create(u.downloadUrl())))
+                .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Update available (" + u.version() + ")" })
+                .menuGroup(REAI_PLUGIN_SETUP_MENU_GROUP, "050")
+                .buildAndInstall(tool);
+        tool.setStatusInfo("RevEng.AI plugin " + u.version() + " is available");
+
+        var options = tool.getOptions(REAI_OPTIONS_CATEGORY);
+        if (updatePromptShown || u.version().equals(options.getString(SKIPPED_UPDATE_PREF, ""))) {
+            return;
+        }
+        updatePromptShown = true;
+        int choice = OptionDialog.showOptionNoCancelDialog(tool.getToolFrame(), "RevEng.AI update available",
+                "RevEng.AI plugin " + u.version() + " is available. You have " + UpdateChecker.currentVersion() + ".",
+                "Download", "Later", "Skip this version", OptionDialog.INFORMATION_MESSAGE);
+        if (choice == OptionDialog.OPTION_ONE) {
+            WebBrowser.open(URI.create(u.downloadUrl()));
+        } else if (choice == OptionDialog.OPTION_THREE) {
+            options.setString(SKIPPED_UPDATE_PREF, u.version());
+        }
     }
 
     /**
@@ -114,7 +169,7 @@ public class ReaiAPIServicePlugin extends Plugin {
         new ActionBuilder("About", this.toString())
                 .withContext(ActionContext.class)
                 .onAction(context -> {
-                    var aboutDialog = new AboutDialog(tool);
+                    var aboutDialog = new AboutDialog(tool, update);
                     tool.showDialog(aboutDialog);
                 })
                 .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "About" })
