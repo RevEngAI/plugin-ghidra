@@ -77,6 +77,9 @@ jobs:
 
       - name: Publish test report
         if: always()
+        # Updating the check run right after creating it intermittently 404s, which failed jobs whose
+        # tests had passed. Failing tests already fail "Run tests", so the report is display only.
+        continue-on-error: true
         uses: dorny/test-reporter@d61b558e8df85cb60d09ca3e5b09653b4477cea7 # v1
         with:
           name: Tests (Ghidra ${{ matrix.ghidra }})
