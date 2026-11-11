@@ -333,6 +333,9 @@ public final class ServerDataTypeDecoder {
     /// Enum values stay strings on the wire because they may be negative or exceed 64 unsigned bits.
     /// Ghidra can only hold a `long`, so widen through {@link BigInteger} and take the low 64 bits.
     private static long toLong(String value) {
+        if (value == null) {
+            throw new NumberFormatException("missing value");
+        }
         return new BigInteger(value.trim()).longValue();
     }
 

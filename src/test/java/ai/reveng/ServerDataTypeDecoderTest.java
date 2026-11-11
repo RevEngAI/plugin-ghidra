@@ -235,4 +235,31 @@ public class ServerDataTypeDecoderTest extends RevEngMockableHeadedIntegrationTe
         assertEquals(1, decoder.typeFor(1L, 0).getLength());
         assertTrue(decoder.typeFor(2L, 0) instanceof TypeDef);
     }
+
+    /// Null entries in any array are skipped rather than failing the whole decode.
+    @Test
+    public void skipsNullArrayElements() {
+        var decoder = ServerDataTypeDecoder.decode(types("""
+                {"items": [
+                  null,
+                  {"data_type_id": 1, "namespace": "", "name": "S", "kind": "STRUCT",
+                   "size": 4, "source_type": "AUTO", "has_definition": true,
+                   "definition": {"members": [
+                     null,
+                     {"name": "x", "offset": 0, "size": 4, "data_type_id": null, "is_bitfield": false}]}},
+                  {"data_type_id": 2, "namespace": "", "name": "U", "kind": "UNION",
+                   "size": 4, "source_type": "AUTO", "has_definition": true,
+                   "definition": {"members": [null]}},
+                  {"data_type_id": 3, "namespace": "", "name": "E", "kind": "ENUM",
+                   "size": 4, "source_type": "AUTO", "has_definition": true,
+                   "definition": {"values": [null, {"name": "NO_VALUE", "value": null}, {"name": "A", "value": "1"}]}},
+                  {"data_type_id": 4, "namespace": "", "name": "F", "kind": "FUNCTION_DEFINITION",
+                   "size": 0, "source_type": "AUTO", "has_definition": true,
+                   "definition": {"return_data_type_id": null, "parameters": [null]}}
+                ]}
+                """));
+
+        assertEquals("x", ((Structure) decoder.typeFor(1L, 0)).getComponentAt(0).getFieldName());
+        assertEquals(1L, ((Enum) decoder.typeFor(3L, 0)).getValue("A"));
+    }
 }

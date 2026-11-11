@@ -8,6 +8,10 @@ import ghidra.app.script.GhidraScript;
 public class RevEngExamplePostScript extends GhidraScript {
     @Override
     protected void run() throws Exception {
+        if (currentProgram == null) {
+            printerr("No program open");
+            return;
+        }
         // Services are not available in headless mode, so we have to instantiate it ourselves
         var ghidraRevengService = new GhidraRevengService(ApiInfo.fromConfig(ReaiPluginPackage.DEFAULT_CONFIG_PATH));
 

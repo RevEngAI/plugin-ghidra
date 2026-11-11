@@ -684,7 +684,7 @@ public class GhidraRevengService {
         Set<TypedApiInterface.FunctionID> remotePresent = signatures()
                 .getMany(List.copyOf(matchedIds), false)
                 .items().stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
+                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
                 .map(item -> new TypedApiInterface.FunctionID(item.getFunctionId()))
                 .collect(Collectors.toSet());
 
@@ -800,7 +800,7 @@ public class GhidraRevengService {
         Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
         Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
                 .stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
+                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
                 .collect(
                 Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
@@ -828,6 +828,10 @@ public class GhidraRevengService {
 
             // Get the current name on  the server side
             FunctionInfo details = functionInfoMap.get(fID.get().functionID);
+            if (details == null) {
+                Msg.warn(this, "No server info for function %s, skipping".formatted(function.getName()));
+                continue;
+            }
 
             // Extract the mangled name from Ghidra
             var revEngMangledName = details.functionMangledName();
@@ -1203,7 +1207,7 @@ public class GhidraRevengService {
         // Create a map from FunctionID to signature for easy lookup, only where the server has one.
         // The same neighbour can still appear more than once in the response, so keep the first.
         Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = batch.items().stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
+                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
                 .collect(Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
                         item -> item,

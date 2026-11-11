@@ -101,6 +101,9 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         pickSelectedButton.setName("Pick selected");
         pickSelectedButton.addActionListener(e -> {
             var selectedRowObject = recentAnalysesTable.getSelectedRowObject();
+            if (selectedRowObject == null) {
+                return;
+            }
             pickAnalysis(selectedRowObject);
         });
         addButton(pickSelectedButton);

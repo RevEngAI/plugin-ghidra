@@ -30,10 +30,16 @@ import ghidra.program.util.ProgramLocation;
 //@formatter:on
 public class AgentChatPlugin extends ProgramPlugin {
 
-    private final AgentChatWindow chatWindow;
+    private AgentChatWindow chatWindow;
 
     public AgentChatPlugin(PluginTool tool) {
         super(tool);
+    }
+
+    @Override
+    protected void init() {
+        // Required services are only resolved by now
+        super.init();
         chatWindow = new AgentChatWindow(tool, getName(), new ConversationsApiChatService());
         chatWindow.addToTool();
         setupActions();
@@ -55,7 +61,9 @@ public class AgentChatPlugin extends ProgramPlugin {
 
     @Override
     protected void dispose() {
-        chatWindow.dispose();
+        if (chatWindow != null) {
+            chatWindow.dispose();
+        }
         super.dispose();
     }
 }
