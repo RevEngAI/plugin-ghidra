@@ -12,12 +12,12 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.UserSelectionPane
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import docking.widgets.textfield.HintTextField;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
 import ghidra.util.task.TaskMonitor;
-import ghidra.util.task.TaskMonitorComponent;
 import ghidra.util.Msg;
 import resources.ResourceManager;
 import generic.theme.GThemeDefaults.Colors.Messages;
@@ -57,11 +57,15 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected final Map<MatchFilters.PlatformsEnum, JCheckBox> platformCheckBoxes = new LinkedHashMap<>();
     protected final Map<MatchFilters.ArchitecturesEnum, JCheckBox> architectureCheckBoxes = new LinkedHashMap<>();
     protected JLabel statusLabel;
+    protected JProgressBar matchingProgressBar;
+    protected JButton matchButton;
+    private Icon matchIcon;
+    protected JLabel resultsCountLabel;
     protected JTextArea errorArea;
     protected JScrollPane errorScrollPane;
-    protected final TaskMonitorComponent taskMonitorComponent;
-    protected volatile boolean matchingCancelled;
-    protected Thread matchingThread;
+    /// The thread of the current matching run; null when idle or cancelled. A run whose thread is no
+    /// longer this one has been superseded, and must not touch the UI.
+    protected volatile Thread matchingThread;
     protected JPanel renameButtonsPanel;
 
     // Assembly comparison panel
@@ -82,7 +86,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         this.tool = tool;
         this.revengService = tool.getService(GhidraRevengService.class);
         this.analyzedProgram = analyzedProgram;
-        this.taskMonitorComponent = new TaskMonitorComponent(false, true);
         this.functionMatchResults = new ArrayList<>();
         this.filteredFunctionMatchResults = new ArrayList<>();
 
@@ -105,21 +108,35 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         setPreferredSize(1200, 1000);
 
         // Don't start function matching automatically - wait for user to click Match button
-        statusLabel.setText("Ready - adjust filters and click 'Match Functions' to begin search");
-        taskMonitorComponent.setVisible(false);
+        statusLabel.setText("Ready: adjust the filters and press Match Functions");
     }
 
     protected void startFunctionMatching() {
-        // Show initial status. All network work runs on a background thread so the UI stays responsive;
-        // the bar is indeterminate (animated) until/unless the server reports step counters.
+        // All network work runs on a background thread so the UI stays responsive
         statusLabel.setText("Starting function matching...");
-        taskMonitorComponent.initialize(100);
-        taskMonitorComponent.setIndeterminate(true);
+        matchingProgressBar.setIndeterminate(true);
+        setMatchingInProgress(true);
 
-        matchingCancelled = false;
         matchingThread = new Thread(this::runMatchingLoop, "RevEngAI function matching");
         matchingThread.setDaemon(true);
         matchingThread.start();
+    }
+
+    /// Shows or hides the progress bar, and turns the Match button into Cancel while a run is going
+    protected void setMatchingInProgress(boolean inProgress) {
+        matchingProgressBar.setVisible(inProgress);
+        matchButton.setText(inProgress ? "Cancel" : "Match Functions");
+        matchButton.setIcon(inProgress ? null : matchIcon);
+    }
+
+    /// Runs {@code update} on the EDT, unless the run on {@code self} has been cancelled or superseded
+    /// by the time it gets there
+    private void onEdtIfCurrent(Thread self, Runnable update) {
+        SwingUtilities.invokeLater(() -> {
+            if (matchingThread == self) {
+                update.run();
+            }
+        });
     }
 
     /// Normalised view of the v3 matching progress, shared by the start and status responses
@@ -135,19 +152,20 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected abstract List<MatchedFunctionResult> fetchMatches() throws ai.reveng.invoker.ApiException;
 
     private void runMatchingLoop() {
+        final Thread self = Thread.currentThread();
         try {
             MatchingProgress progress = startMatching();
-            while (!matchingCancelled) {
+            while (matchingThread == self) {
                 final MatchingProgress current = progress;
-                SwingUtilities.invokeLater(() -> updateProgressUI(current));
+                onEdtIfCurrent(self, () -> updateProgressUI(current));
 
                 if ("FAILED".equals(progress.status())) {
                     String errorMsg = progress.errorMessage() != null && !progress.errorMessage().isEmpty()
                             ? progress.errorMessage()
                             : "Function matching returned an error status";
-                    SwingUtilities.invokeLater(() -> {
-                        statusLabel.setText("Function matching failed");
+                    onEdtIfCurrent(self, () -> {
                         handleError(errorMsg);
+                        statusLabel.setText("Function matching failed");
                     });
                     return;
                 }
@@ -155,41 +173,45 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                     break;
                 }
                 Thread.sleep(POLL_INTERVAL_MS);
-                if (matchingCancelled) return;
+                if (matchingThread != self) return;
                 progress = pollMatchingStatus();
             }
-            if (matchingCancelled) return;
+            if (matchingThread != self) return;
 
             // Resolving type signatures fires many requests, so keep it off the EDT too
-            SwingUtilities.invokeLater(() -> {
-                taskMonitorComponent.setIndeterminate(true);
-                taskMonitorComponent.setMessage("Loading type information...");
+            onEdtIfCurrent(self, () -> {
+                matchingProgressBar.setIndeterminate(true);
                 statusLabel.setText("Loading type information...");
             });
-            var matches = fetchMatches();
-            if (matchingCancelled) return;
-            processFunctionMatchingResults(matches);
-            // The status label is the only thing that says what this dialog is doing, and nothing
-            // used to write to it again after the "Loading type information..." above. The work
-            // finished, the bar went away, and the label sat there claiming to still be loading —
-            // indistinguishable from a request that never returned.
-            SwingUtilities.invokeLater(() -> statusLabel.setText(
-                    "Matching complete: %d match(es)".formatted(functionMatchResults.size())));
+            var built = buildMatchResults(fetchMatches());
+            // The status label is the only thing that says what this dialog is doing, so it has to be
+            // told the work finished, or it sits there claiming to still be loading.
+            onEdtIfCurrent(self, () -> {
+                functionMatchResults.clear();
+                functionMatchResults.addAll(built);
+                // Apply any existing function filter, which also refreshes the table
+                onFunctionFilterChanged();
+                statusLabel.setText("Matching complete: %d match(es)".formatted(functionMatchResults.size()));
+            });
         } catch (InterruptedException e) {
             // matching was cancelled, nothing to report
         } catch (Throwable t) {
             // Throwable rather than Exception: an Error thrown in here — a clash between a bundled
             // jar and Ghidra's own, or a large binary's type closure exhausting the heap — killed
-            // this thread without a word and left the progress message up for ever. Whatever it is,
+            // this thread without a word and left the progress bar up for ever. Whatever it is,
             // the user is told.
-            SwingUtilities.invokeLater(() -> {
-                Msg.error(this, "Function matching failed: " + t, t);
+            Msg.error(this, "Function matching failed: " + t, t);
+            onEdtIfCurrent(self, () -> {
                 handleError("Function matching failed: " + t);
                 statusLabel.setText("Function matching failed");
             });
         } finally {
-            // No path out of here may leave the progress bar spinning.
-            SwingUtilities.invokeLater(() -> taskMonitorComponent.setVisible(false));
+            // No path out of here may leave the progress bar spinning. A cancelled run has already
+            // been reset by stopPolling, and must not hide the bar of the run that replaced it.
+            onEdtIfCurrent(self, () -> {
+                matchingThread = null;
+                setMatchingInProgress(false);
+            });
         }
     }
 
@@ -226,10 +248,9 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         return results;
     }
 
-    /// Builds the result rows (this resolves type signatures, which is the expensive part) and is expected
-    /// to run off the EDT. Only the final swap into {@link #functionMatchResults} and the table refresh
-    /// touch Swing, and those are marshalled back onto the EDT.
-    protected void processFunctionMatchingResults(List<MatchedFunctionResult> response) {
+    /// Builds the result rows. This resolves type signatures, which is the expensive part, so it is
+    /// expected to run off the EDT and does not touch Swing.
+    protected List<GhidraFunctionMatchWithSignature> buildMatchResults(List<MatchedFunctionResult> response) {
         List<GhidraFunctionMatch> matches = new ArrayList<>();
         final Map<TypedApiInterface.FunctionID, Function> functionMap = analyzedProgram.getFunctionMap();
 
@@ -254,34 +275,34 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             var sig = ghidraResultsWithSignatures.get(match);
             built.add(new GhidraFunctionMatchWithSignature(match.function(), match.functionMatch(), sig));
         }
-
-        SwingUtilities.invokeLater(() -> {
-            functionMatchResults.clear();
-            functionMatchResults.addAll(built);
-            // Apply any existing function filter, which also refreshes the table
-            onFunctionFilterChanged();
-        });
+        return built;
     }
 
 
     protected void updateProgressUI(MatchingProgress progress) {
         if (progress == null) return;
 
-        // Update progress bar from the v3 step counters when present; otherwise show an animated
-        // (indeterminate) bar so the user can see that matching is still running.
+        // A determinate bar when the server reports step counters (step_index is zero-based, so the bar
+        // fills by completed steps); otherwise an animated one so the user can see it is still running.
+        // The step itself goes in the status text: painted on the bar it overlaps the thin macOS track.
+        String step = progress.step() != null && !progress.step().isBlank() ? progress.step() : null;
         if (progress.stepsTotal() != null && progress.stepsTotal() > 0 && progress.stepIndex() != null) {
-            int percent = (int) Math.min(100, Math.max(0, progress.stepIndex() * 100 / progress.stepsTotal()));
-            taskMonitorComponent.setIndeterminate(false);
-            taskMonitorComponent.setProgress(percent);
-            taskMonitorComponent.setMessage(progress.step() != null ? progress.step() : percent + "%");
+            int total = (int) Math.min(Integer.MAX_VALUE, progress.stepsTotal());
+            int index = (int) Math.max(0, Math.min(total, progress.stepIndex()));
+            matchingProgressBar.setIndeterminate(false);
+            matchingProgressBar.setMaximum(total);
+            matchingProgressBar.setValue(index);
+            if (step != null) {
+                step = "%s (step %d of %d)".formatted(step, Math.min(index + 1, total), total);
+            }
         } else {
-            taskMonitorComponent.setIndeterminate(true);
-            taskMonitorComponent.setMessage(progress.step() != null ? progress.step() : "Matching functions...");
+            matchingProgressBar.setIndeterminate(true);
         }
 
-        // Update status
-        if (progress.status() != null) {
-            statusLabel.setText("Status: " + getFriendlyStatusMessage(progress.status()));
+        if (step != null) {
+            statusLabel.setText(step);
+        } else if (progress.status() != null) {
+            statusLabel.setText(getFriendlyStatusMessage(progress.status()));
         }
 
         // Handle error message - dynamically add/remove error panel
@@ -290,9 +311,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         } else {
             hideError();
         }
-
-        // Update results table
-        updateResultsTable();
     }
 
     /// The results that back the table model, in model-row order: all results when no function filter
@@ -318,16 +336,12 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         }
         resultsTable.setModel(model);
 
-        // Update the dynamic title with filtered count
+        // Show how many of the matches the results filter lets through
         int totalMatchCount = functionMatchResults.size();
         int displayedMatchCount = resultsToShow.size();
-        String title;
-        if (filterText.isEmpty()) {
-            title = getTableTitle() + " (" + totalMatchCount + " matches found)";
-        } else {
-            title = getTableTitle() + " (" + displayedMatchCount + " of " + totalMatchCount + " matches shown)";
-        }
-        resultsScrollPane.setBorder(BorderFactory.createTitledBorder(title));
+        resultsCountLabel.setText(filterText.isEmpty()
+                ? "%d match%s".formatted(totalMatchCount, totalMatchCount == 1 ? "" : "es")
+                : "%d of %d shown".formatted(displayedMatchCount, totalMatchCount));
 
         // Show/hide rename buttons based on whether we have results
         boolean hasResults = displayedMatchCount > 0;
@@ -350,7 +364,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected abstract String[] getTableColumnNames();
     protected abstract Object[] getTableRowData(GhidraFunctionMatchWithSignature result);
-    protected abstract String getTableTitle();
     protected abstract int getTableSelectionMode();
     protected abstract void configureTableColumns();
 
@@ -439,19 +452,18 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         }
 
         return switch (apiStatus) {
-            case "UNINITIALISED", "PENDING" -> "starting function matching...";
-            case "RUNNING" -> "running function matching...";
-            case "COMPLETED" -> "completed function matching";
-            case "FAILED" -> "function matching failed";
+            case "UNINITIALISED", "PENDING" -> "Starting function matching...";
+            case "RUNNING" -> "Running function matching...";
+            case "COMPLETED" -> "Completed function matching";
+            case "FAILED" -> "Function matching failed";
             default -> apiStatus; // Fallback to original if unknown
         };
     }
 
     protected void handleError(String message) {
         Msg.error(this, message);
-        statusLabel.setText("An error occurred, press 'Match Functions' again to retry");
+        statusLabel.setText("An error occurred, press Match Functions again to retry");
         showError(message);
-        taskMonitorComponent.setMessage("Error");
     }
 
     protected void showError(String message) {
@@ -474,10 +486,13 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected void stopPolling() {
-        matchingCancelled = true;
-        if (matchingThread != null) {
-            matchingThread.interrupt();
-            matchingThread = null;
+        Thread running = matchingThread;
+        matchingThread = null;
+        if (running != null) {
+            running.interrupt();
+        }
+        if (matchingProgressBar != null) {
+            setMatchingInProgress(false);
         }
     }
 
@@ -490,25 +505,23 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         // Create content panel
         contentPanel = new JPanel(new BorderLayout());
+        contentPanel.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
 
-        // Create top panel with progress and filters
-        JPanel topPanel = new JPanel(new BorderLayout());
+        // Top half: the filters sent with the matching request, then status and the Match button
+        JPanel searchSection = new JPanel(new BorderLayout(0, 10));
+        searchSection.add(createSectionHeading("Filter Search"), BorderLayout.NORTH);
+        searchSection.add(createFilterPanel(), BorderLayout.CENTER);
+        searchSection.add(createMatchActionPanel(), BorderLayout.SOUTH);
+        contentPanel.add(searchSection, BorderLayout.NORTH);
 
-        // Progress panel at the top
-        JPanel progressPanel = createProgressPanel();
-        topPanel.add(progressPanel, BorderLayout.NORTH);
+        // Bottom half: narrowing down the results that came back
+        JPanel resultsHeader = new JPanel(new BorderLayout(0, 10));
+        resultsHeader.setBorder(BorderFactory.createEmptyBorder(18, 0, 0, 0));
+        resultsHeader.add(createSectionHeading("Filter Results"), BorderLayout.NORTH);
+        resultsHeader.add(createFunctionFilterPanel(), BorderLayout.CENTER);
 
-        // Create filter panel
-        JPanel filterPanel = createFilterPanel();
-        topPanel.add(filterPanel, BorderLayout.CENTER);
-        contentPanel.add(topPanel, BorderLayout.NORTH);
-
-        // Match button panel and function filter
-        JPanel buttonAndFilterPanel = createButtonAndFilterPanel();
-
-        // Create a center panel to hold the button and results
-        JPanel centerPanel = new JPanel(new BorderLayout());
-        centerPanel.add(buttonAndFilterPanel, BorderLayout.NORTH);
+        JPanel centerPanel = new JPanel(new BorderLayout(0, 8));
+        centerPanel.add(resultsHeader, BorderLayout.NORTH);
 
         // Initialize error area but don't add it to the panel yet
         errorArea = new JTextArea(5, 60);
@@ -531,85 +544,102 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected abstract String getDialogDescription();
 
-    protected JPanel createFilterPanel() {
-        JPanel filterPanel = new JPanel(new GridBagLayout());
+    /// A bold heading followed by a rule across the rest of the row, splitting the dialog into sections
+    protected static JComponent createSectionHeading(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(label.getFont().deriveFont(Font.BOLD, label.getFont().getSize2D() + 1f));
+
+        JPanel heading = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridy = 0;
+        gbc.anchor = GridBagConstraints.WEST;
+        heading.add(label, gbc);
+
+        gbc.weightx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weighty = 0;
+        gbc.insets = new Insets(0, 8, 0, 0);
+        heading.add(new JSeparator(), gbc);
+        return heading;
+    }
 
-        // Row 0, Col 0: Collection selector (50% width)
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.gridwidth = 1;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(10, 0, 10, 10);
-        filterPanel.add(createCollectionSelectorPanel(), gbc);
+    protected JPanel createFilterPanel() {
+        JPanel filterPanel = new JPanel();
+        filterPanel.setLayout(new BoxLayout(filterPanel, BoxLayout.Y_AXIS));
 
-        // Row 0, Col 1: Binary selector (50% width)
-        gbc.gridx = 1;
-        gbc.gridy = 0;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(10, 0, 10, 0);
-        filterPanel.add(createBinarySelectorPanel(), gbc);
-
-        // Row 1, Col 0: Threshold panel (50% width)
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(0, 0, 0, 10);
-        filterPanel.add(createThresholdPanel(), gbc);
-
-        // Row 1, Col 1: Debug symbols toggle (50% width)
-        gbc.gridx = 1;
-        gbc.gridy = 1;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(0, 0, 0, 0);
-        filterPanel.add(createDebugSymbolsPanel(), gbc);
-
-        // Row 2, Col 0: Platform and architecture toggles (50% width), as tall as the user selector beside it
-        gbc.fill = GridBagConstraints.BOTH;
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(10, 0, 0, 10);
-        filterPanel.add(createPlatformArchitecturePanel(), gbc);
-
-        // Row 2, Col 1: User selector (50% width)
-        gbc.gridx = 1;
-        gbc.gridy = 2;
-        gbc.weightx = 0.5;
-        gbc.insets = new Insets(10, 0, 0, 0);
-        filterPanel.add(createUserSelectorPanel(), gbc);
+        filterPanel.add(createFilterRow(createCollectionSelectorPanel(), createBinarySelectorPanel()));
+        filterPanel.add(Box.createVerticalStrut(12));
+        filterPanel.add(createFilterRow(
+                createField("Minimum similarity", createThresholdPanel()),
+                createField("Debug symbols", createDebugSymbolsPanel())));
+        filterPanel.add(Box.createVerticalStrut(12));
+        filterPanel.add(createFilterRow(
+                createField("Platform & architecture", createPlatformArchitecturePanel()),
+                createUserSelectorPanel()));
 
         return filterPanel;
     }
 
-    protected JPanel createButtonAndFilterPanel() {
-        // Match button panel
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        JButton matchButton = new JButton("Match Functions");
+    /// Two filters side by side in equal-width columns, top-aligned
+    private static JPanel createFilterRow(JComponent left, JComponent right) {
+        JPanel row = new JPanel(new GridLayout(1, 2, 24, 0));
+        row.add(topAligned(left));
+        row.add(topAligned(right));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return row;
+    }
+
+    private static JPanel topAligned(JComponent component) {
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.add(component, BorderLayout.NORTH);
+        return wrapper;
+    }
+
+    /// A bold caption above a filter's controls
+    protected static JPanel createField(String caption, JComponent control) {
+        JLabel label = new JLabel(caption);
+        label.setFont(label.getFont().deriveFont(Font.BOLD));
+
+        JPanel field = new JPanel(new BorderLayout(0, 4));
+        field.add(label, BorderLayout.NORTH);
+        field.add(control, BorderLayout.CENTER);
+        return field;
+    }
+
+    /// Status on the left; progress and the Match button right-aligned beneath the filters they apply
+    protected JPanel createMatchActionPanel() {
+        JPanel panel = new JPanel(new BorderLayout(12, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+
+        statusLabel = new JLabel("Initializing...");
+        panel.add(statusLabel, BorderLayout.CENTER);
+
+        matchingProgressBar = new JProgressBar();
+        matchingProgressBar.setPreferredSize(new Dimension(220, matchingProgressBar.getPreferredSize().height));
+        matchingProgressBar.setVisible(false);
+
+        matchButton = new JButton("Match Functions");
 
         // Add magnifying glass icon to the button
         try {
-            Icon icon = ResourceManager.loadImage("images/magnifier.png");
-            matchButton.setIcon(icon);
+            matchIcon = ResourceManager.loadImage("images/magnifier.png");
+            matchButton.setIcon(matchIcon);
         } catch (Exception e) {
             // If icon loading fails, button will just show text without icon
         }
 
         matchButton.addActionListener(e -> onMatchButtonClicked());
-        buttonPanel.add(matchButton);
 
+        // The button sets the row's height, so showing or hiding the bar beside it moves nothing
+        JPanel actions = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridy = 0;
+        gbc.insets = new Insets(0, 0, 0, 10);
+        actions.add(matchingProgressBar, gbc);
+        gbc.insets = new Insets(0, 0, 0, 0);
+        actions.add(matchButton, gbc);
+        panel.add(actions, BorderLayout.EAST);
 
-        // Function filter panel
-        JPanel functionFilterPanel = createFunctionFilterPanel();
-
-        // Create a combined panel for button and function filter
-        JPanel buttonAndFilterPanel = new JPanel(new BorderLayout());
-        buttonAndFilterPanel.add(buttonPanel, BorderLayout.NORTH);
-        buttonAndFilterPanel.add(functionFilterPanel, BorderLayout.CENTER);
-
-        return buttonAndFilterPanel;
+        return panel;
     }
 
     protected JPanel createResultsContainer() {
@@ -618,8 +648,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         // Results table
         resultsTable = new JTable();
         resultsTable.setAutoCreateRowSorter(true);
+        resultsTable.setFillsViewportHeight(true);
+        resultsTable.setRowHeight(resultsTable.getRowHeight() + 4);
+        resultsTable.setShowVerticalLines(false);
         resultsScrollPane = new JScrollPane(resultsTable);
-        resultsScrollPane.setBorder(BorderFactory.createTitledBorder("Function Matching Results"));
+        resultsScrollPane.setPreferredSize(new Dimension(0, 200));
 
         // Add selection listener for assembly comparison
         resultsTable.getSelectionModel().addListSelectionListener(e -> {
@@ -649,15 +682,19 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             }
         });
 
-        // Create assembly comparison panel
+        // Create assembly comparison panel; its two halves are titled, so it needs no box of its own here
         assemblyDiffPanel = new AssemblyDiffPanel();
+        assemblyDiffPanel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        // Its default 300px left the table only a few rows in a dialog of the default size
+        assemblyDiffPanel.setPreferredSize(new Dimension(0, 200));
 
-        // Create vertical split pane with results table on top and assembly comparison below
+        // Create vertical split pane with results table on top and assembly comparison below,
+        // sized from their preferred heights and sharing any extra room
         JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         mainSplitPane.setTopComponent(resultsScrollPane);
         mainSplitPane.setBottomComponent(assemblyDiffPanel);
-        mainSplitPane.setResizeWeight(0.4);
-        mainSplitPane.setDividerLocation(250);
+        mainSplitPane.setResizeWeight(0.5);
+        mainSplitPane.setBorder(null);
 
         resultsContainer.add(mainSplitPane, BorderLayout.CENTER);
 
@@ -708,7 +745,8 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected JPanel createRenameButtonsPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
         JButton renameAllButton = new JButton("Rename All");
         renameAllButton.addActionListener(e -> onRenameAllButtonClicked());
@@ -717,29 +755,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         JButton renameSelectedButton = new JButton("Rename Selected");
         renameSelectedButton.addActionListener(e -> onRenameSelectedButtonClicked());
         panel.add(renameSelectedButton);
-
-        return panel;
-    }
-
-    protected JPanel createProgressPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(10, 10, 0, 10);
-        gbc.anchor = GridBagConstraints.WEST;
-
-        // Progress bar
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(taskMonitorComponent, gbc);
-
-        // Status label
-        gbc.gridy = 1;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        statusLabel = new JLabel("Initializing...");
-        panel.add(statusLabel, gbc);
 
         return panel;
     }
@@ -766,7 +781,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected JPanel createThresholdPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Minimum similarity"));
 
         thresholdSlider = new JSlider(0, 100, 70);
         thresholdSlider.setMajorTickSpacing(25);
@@ -774,8 +788,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         thresholdSlider.setPaintTicks(true);
         thresholdSlider.setPaintLabels(true);
 
-        thresholdValueLabel = new JLabel("70%", SwingConstants.CENTER);
+        thresholdValueLabel = new JLabel("70%", SwingConstants.RIGHT);
         thresholdValueLabel.setFont(thresholdValueLabel.getFont().deriveFont(Font.BOLD, 14f));
+        // Room for "100%" so the slider doesn't shift as the value changes
+        thresholdValueLabel.setPreferredSize(new Dimension(48, thresholdValueLabel.getPreferredSize().height));
+
 
         thresholdSlider.addChangeListener(e -> thresholdValueLabel.setText(thresholdSlider.getValue() + "%"));
 
@@ -790,12 +807,9 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected JPanel createDebugSymbolsPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Debug symbols"));
 
         JPanel checkboxPanel = new JPanel();
         checkboxPanel.setLayout(new BoxLayout(checkboxPanel, BoxLayout.Y_AXIS));
-        checkboxPanel.setPreferredSize(new Dimension(0, 52));
-        checkboxPanel.setMinimumSize(new Dimension(0, 52));
 
         debugSymbolsCheckBox = new JCheckBox("Only include functions with debug symbols", false);
         debugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -806,13 +820,14 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         userSubmittedDebugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         userSubmittedDebugSymbolsCheckBox.setEnabled(false);
 
+        // Indented under the box it depends on
         JPanel indentedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         indentedPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        indentedPanel.setBorder(BorderFactory.createEmptyBorder(0, 20, 0, 0));
         indentedPanel.add(userSubmittedDebugSymbolsCheckBox);
 
         checkboxPanel.add(debugSymbolsCheckBox);
         checkboxPanel.add(indentedPanel);
-        checkboxPanel.add(Box.createVerticalGlue());
 
         panel.add(checkboxPanel, BorderLayout.CENTER);
 
@@ -821,7 +836,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
     protected JPanel createPlatformArchitecturePanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Platform & architecture"));
         panel.setToolTipText("Leave unticked to match any platform or architecture");
 
         platformCheckBoxes.put(MatchFilters.PlatformsEnum.LINUX, new JCheckBox("Linux"));
@@ -834,7 +848,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.anchor = GridBagConstraints.WEST;
-        gbc.insets = new Insets(0, 5, 0, 5);
+        gbc.insets = new Insets(0, 0, 0, 10);
 
         gbc.gridy = 0;
         panel.add(new JLabel("Platforms:"), gbc);
@@ -866,11 +880,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
     protected JPanel createFunctionFilterPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Filter matches by function virtual address, name, hash or binary"));
+        JPanel panel = new JPanel(new BorderLayout(8, 0));
+        panel.add(new JLabel("Filter:"), BorderLayout.WEST);
 
-        functionFilterField = new JTextField();
-        functionFilterField.setPreferredSize(new Dimension(0, 30));
+        functionFilterField = new HintTextField(getFunctionFilterHint());
         functionFilterField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
@@ -890,7 +903,15 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         panel.add(functionFilterField, BorderLayout.CENTER);
 
+        resultsCountLabel = new JLabel("No matches yet");
+        panel.add(resultsCountLabel, BorderLayout.EAST);
+
         return panel;
+    }
+
+    /// Placeholder for the results filter, naming the columns {@link #matchesFilter} searches
+    protected String getFunctionFilterHint() {
+        return "Matched function name, hash or binary";
     }
 
     // Event handler methods
@@ -1018,11 +1039,16 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                          ", users: " + userSelector.getSelectedUserNames() +
                          " (IDs: " + userSelector.getSelectedUserIds() + ")");
 
-        taskMonitorComponent.setVisible(true);
         startFunctionMatching();
     }
 
+    /// Starts a match, or cancels the one in progress (the button reads Cancel while it runs)
     protected void onMatchButtonClicked() {
+        if (matchingThread != null) {
+            stopPolling();
+            statusLabel.setText("Cancelled: press Match Functions to search again");
+            return;
+        }
         filterResults();
     }
 
@@ -1066,7 +1092,8 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 importFunctionNames(matches);
             }
         };
-        TaskBuilder.withTask(task).launchInBackground(taskMonitorComponent);
+        // Shown in a task dialog: the dialog's progress bar belongs to matching, and is hidden by now
+        TaskBuilder.withTask(task).setParent(getComponent()).launchModal();
     }
 
     protected void batchRenameFunctions(List<GhidraFunctionMatchWithSignature> functionMatches) {

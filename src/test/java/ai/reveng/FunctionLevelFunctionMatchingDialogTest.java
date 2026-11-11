@@ -12,13 +12,14 @@ import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
-import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
 import generic.theme.GColor;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
@@ -339,9 +340,8 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
                 "Status label should stop saying it is loading once matching has finished");
         assertTrue("The finished status should report the matches, was: " + statusLabel.getText(),
                 statusLabel.getText().contains("Matching complete"));
-        TaskMonitorComponent monitor =
-                (TaskMonitorComponent) getInstanceField("taskMonitorComponent", foundDialog);
-        assertFalse("The progress bar should not be left spinning", monitor.isVisible());
+        JProgressBar progressBar = (JProgressBar) getInstanceField("matchingProgressBar", foundDialog);
+        assertFalse("The progress bar should not be left spinning", progressBar.isVisible());
 
         // Close the dialog
         close(foundDialog);
@@ -613,6 +613,101 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         @Override
         public List<String> getAssembly(TypedApiInterface.FunctionID functionID) {
             return List.of("push rbp", "mov rbp, rsp", "ret");
+        }
+    }
+
+    /// A run that is cancelled and replaced must not reach the UI. Its thread, once its request came back,
+    /// used to hide the progress bar of the run that replaced it on the way out.
+    @Test
+    public void testCancelledRunDoesNotHideTheNextRunsProgress() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new StillRunningMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JProgressBar progressBar = (JProgressBar) getInstanceField("matchingProgressBar", foundDialog);
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        // The first run's request is held by the mock, as a slow server would; while running, the Match button cancels
+        waitForCondition(() -> mockApi.lastMatchingRequest != null, "Matching should start when the dialog opens");
+        pressButton(findButtonByText(foundDialog.getComponent(), "Cancel"));
+        waitForSwing();
+        assertFalse("Cancelling should hide the progress bar", progressBar.isVisible());
+
+        var firstRequest = mockApi.lastMatchingRequest;
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new run");
+        waitForCondition(() -> statusLabel.getText().contains("step 2 of 4"),
+                "The step reported by the server should be shown");
+
+        // Only now does the cancelled run's request come back
+        mockApi.firstStartGate.countDown();
+        waitForCondition(() -> mockApi.firstStartReturned, "The cancelled run's request should return");
+        Thread.sleep(200);
+        waitForSwing();
+        assertTrue("The cancelled run must not hide the new run's progress bar", progressBar.isVisible());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    /// Reports matching as still running, on the second of four steps, so a run never finishes on its own.
+    /// The first request to start matching is held until {@link #firstStartGate} opens.
+    static class StillRunningMockApi extends FunctionMatchingMockApi {
+        final CountDownLatch firstStartGate = new CountDownLatch(1);
+        volatile boolean firstStartReturned = false;
+        private final AtomicInteger starts = new AtomicInteger();
+
+        @Override
+        public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
+            boolean first = starts.getAndIncrement() == 0;
+            super.startFunctionsMatching(request);
+            if (first) {
+                // Like a blocking HTTP call, cancelling (an interrupt) doesn't cut this short
+                boolean interrupted = false;
+                while (true) {
+                    try {
+                        firstStartGate.await();
+                        break;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                firstStartReturned = true;
+            }
+            var response = new StartMatchingOutputBody();
+            response.setStatus(StartMatchingOutputBody.StatusEnum.RUNNING);
+            response.setStep("Searching for similar functions");
+            response.setStepIndex(1L);
+            response.setStepsTotal(4L);
+            return response;
+        }
+
+        @Override
+        public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) {
+            var response = new GetMatchesStatusOutputBody();
+            response.setStatus(GetMatchesStatusOutputBody.StatusEnum.RUNNING);
+            response.setStep("Searching for similar functions");
+            response.setStepIndex(1L);
+            response.setStepsTotal(4L);
+            return response;
         }
     }
 

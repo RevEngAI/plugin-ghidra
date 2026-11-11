@@ -80,11 +80,6 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     }
 
     @Override
-    protected String getTableTitle() {
-        return "Function Matching Results";
-    }
-
-    @Override
     protected int getTableSelectionMode() {
         return ListSelectionModel.SINGLE_SELECTION;
     }
@@ -132,7 +127,8 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
 
     @Override
     protected JPanel createRenameButtonsPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
         // Only show "Rename Selected" button for function-level matching
         // since we're only matching a single function
