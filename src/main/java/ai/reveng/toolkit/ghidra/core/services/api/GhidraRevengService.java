@@ -531,10 +531,12 @@ public class GhidraRevengService {
     /// applied this run, so the command is given {@link FunctionRenameOption#NO_CHANGE} and nothing
     /// here competes with it.
     ///
-    /// A signature is applied unless the analyst wrote the local one by hand; anything Ghidra's own
-    /// analysis inferred is fair game. That is also what makes a second sync useful: an earlier pull
-    /// stamps {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the
-    /// first into a no-op.
+    /// A signature is applied unless the analyst wrote the local one by hand, or the server only has
+    /// what it extracted itself and the local one is better-founded — see
+    /// {@link #localSignatureOutranks}. A signature edited in the portal still replaces one Ghidra
+    /// inferred. That is also what makes a second sync useful: an earlier pull stamps
+    /// {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the first
+    /// into a no-op.
     private int applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) {
         var functionMap = analysedProgram.getFunctionMap();
         if (functionMap.isEmpty()) {
@@ -550,12 +552,13 @@ public class GhidraRevengService {
                 if (monitor.isCancelled()) {
                     break;
                 }
-                if (!Boolean.TRUE.equals(entry.getHasSignature())) {
+                if (!FunctionSignatureService.hasUsableSignature(entry)) {
                     continue;
                 }
                 var function = functionMap.get(new TypedApiInterface.FunctionID(entry.getFunctionId()));
                 if (function == null || function.isExternal() || function.isThunk()
-                        || function.getSignatureSource() == SourceType.USER_DEFINED) {
+                        || function.getSignatureSource() == SourceType.USER_DEFINED
+                        || localSignatureOutranks(function, entry)) {
                     continue;
                 }
                 var signature = getFunctionSignature(entry, decoderFor(decoders, batch, entry));
@@ -583,6 +586,15 @@ public class GhidraRevengService {
             program.endTransaction(transactionId, applied > 0 && !monitor.isCancelled());
         }
         return applied;
+    }
+
+    /// Whether the function's own signature beats one the server extracted itself. A SYSTEM signature
+    /// is what server-side Ghidra worked out, so it adds nothing over a signature imported from debug
+    /// info locally, or one local analysis inferred, and replacing either can only lose information.
+    private static boolean localSignatureOutranks(Function function, BatchFunctionSignatureEntry entry) {
+        var local = function.getSignatureSource();
+        return entry.getSourceType() == BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM
+                && (local == SourceType.IMPORTED || local == SourceType.ANALYSIS);
     }
 
     /// Apply one server-sourced signature to a function.
@@ -679,12 +691,14 @@ public class GhidraRevengService {
                                                  Set<TypedApiInterface.FunctionID> matchedIds,
                                                  TaskMonitor monitor,
                                                  ReaiLoggingService log) {
-        // Only the matched functions are candidates, and only whether the server holds a signature
-        // at all matters here, so ask for exactly those ids and skip the type closure.
+        // Only the matched functions are candidates, and only whether the server holds a usable
+        // signature matters here, so ask for exactly those ids and skip the type closure. A placeholder
+        // counts as missing: unlike a function with no signature at all, it is a stored row the
+        // signature PUT accepts, so these are the functions a push can actually fill in.
         Set<TypedApiInterface.FunctionID> remotePresent = signatures()
                 .getMany(List.copyOf(matchedIds), false)
                 .items().stream()
-                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
+                .filter(FunctionSignatureService::hasUsableSignature)
                 .map(item -> new TypedApiInterface.FunctionID(item.getFunctionId()))
                 .collect(Collectors.toSet());
 
@@ -801,7 +815,7 @@ public class GhidraRevengService {
             Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
             Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
                     .stream()
-                    .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
+                    .filter(FunctionSignatureService::hasUsableSignature)
                     .collect(
                     Collectors.toMap(
                             item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
@@ -846,8 +860,11 @@ public class GhidraRevengService {
 
                 // Get the type information on the server side. Every type the signature refers to is
                 // resolved by id against its analysis' decoder, so there is nothing left to fail on.
+                // A signature the local one outranks is treated as absent, so the function can still
+                // take the portal's name below.
                 Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
                         Optional.ofNullable(signatureMap.get(fID.get().functionID))
+                                .filter(entry -> !localSignatureOutranks(function, entry))
                                 .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
 
 
@@ -1210,7 +1227,7 @@ public class GhidraRevengService {
         // Create a map from FunctionID to signature for easy lookup, only where the server has one.
         // The same neighbour can still appear more than once in the response, so keep the first.
         Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = batch.items().stream()
-                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
+                .filter(FunctionSignatureService::hasUsableSignature)
                 .collect(Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
                         item -> item,

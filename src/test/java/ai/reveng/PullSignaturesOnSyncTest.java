@@ -2,7 +2,9 @@ package ai.reveng;
 
 import ai.reveng.model.BatchFunctionSignatureEntry;
 import ai.reveng.model.BatchRenameInputBody;
+import ai.reveng.model.CreateAnalysisDataTypesInputBody;
 import ai.reveng.model.SignatureParameterEntry;
+import ai.reveng.model.UpdateFunctionSignatureInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
@@ -19,11 +21,13 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /// The portal -> Ghidra half of "Sync With Portal": the signature the portal holds, and the data
 /// types it names, land on the matched function.
@@ -57,6 +61,14 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         Boolean remoteHasSignature = true;
         /// Calls of {@link #getFunctionInfo} after which the portal stops listing the function.
         int functionInfoCallsBeforeRemoval = Integer.MAX_VALUE;
+        /// The `source_type` the portal reports for its signature.
+        BatchFunctionSignatureEntry.SourceTypeEnum remoteSourceType;
+        /// When true the portal holds only the `undefined f(void)` placeholder extraction stores for a
+        /// function Ghidra had no signature for.
+        boolean remotePlaceholder = false;
+        /// Every function a signature was pushed for.
+        final List<FunctionID> pushedSignatures = new ArrayList<>();
+        private long nextDataTypeId = 100;
 
         @Override
         public AnalysisStatus status(AnalysisID analysisID) {
@@ -75,14 +87,24 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         @Override
         public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs,
                                                             boolean includeDataTypes) {
-            if (remoteReturnType == null) {
-                return FunctionSignatureBatch.empty();
-            }
             var entry = new BatchFunctionSignatureEntry();
             entry.setAnalysisId(1L);
             entry.setFunctionId(FUNCTION_ID);
             entry.setFunctionName(remoteSignatureName);
             entry.setHasSignature(remoteHasSignature);
+            if (remotePlaceholder) {
+                entry.setSourceType(BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM);
+                entry.setReturnDataTypeId(0L);
+                entry.setParameters(List.of());
+                var undefined = new ServerDataType(0L, "", "undefined", ServerDataType.Kind.BASE,
+                        1L, "AUTO", false, null, null, null);
+                return new FunctionSignatureBatch(List.of(entry),
+                        Map.of(new AnalysisID(1), List.of(undefined)));
+            }
+            if (remoteReturnType == null) {
+                return FunctionSignatureBatch.empty();
+            }
+            entry.setSourceType(remoteSourceType);
             entry.setReturnDataTypeId(1L);
             var parameter = new SignatureParameterEntry();
             parameter.setOrdinal(0L);
@@ -100,6 +122,26 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         public void batchRenameFunctions(BatchRenameInputBody request) {
             // A name pushback is not what these tests are about; accept and ignore it.
         }
+
+        @Override
+        public List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                            CreateAnalysisDataTypesInputBody request) {
+            return request.getDataTypes().stream()
+                    .map(type -> new ServerDataType(nextDataTypeId++, "", "pushed",
+                            ServerDataType.Kind.BASE, null, "USER", false, null, null, null))
+                    .toList();
+        }
+
+        @Override
+        public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                            UpdateFunctionSignatureInputBody signature) {
+            pushedSignatures.add(functionID);
+        }
     }
 
     private record Fixture(GhidraRevengService service, GhidraRevengService.AnalysedProgram analysed,
@@ -108,6 +150,11 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
     /// Attach an analysis that holds no signature yet, so the attach-time pull leaves the local
     /// signature alone and each test can decide what the portal gains afterwards.
     private Fixture attachWithoutRemoteSignature(SignatureApi api) throws Exception {
+        return attachWithoutRemoteSignature(api, SourceType.ANALYSIS);
+    }
+
+    private Fixture attachWithoutRemoteSignature(SignatureApi api, SourceType localSignatureSource)
+            throws Exception {
         var service = new GhidraRevengService(api);
         var builder = newX64Program();
         builder.createMemory("mem", "0x4000", 0x100);
@@ -118,8 +165,8 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         // to leave alone. A real stripped binary's signature comes from Ghidra's own analysis, and
         // that is the case under test: it is neither hand-written nor default, so the old
         // "default signatures only" guard skipped exactly these.
-        program.withTransaction("mark the signature analysis-derived", () ->
-                function.setSignatureSource(SourceType.ANALYSIS));
+        program.withTransaction("set the local signature's source", () ->
+                function.setSignatureSource(localSignatureSource));
 
         var programWithID = service.registerAnalysisForProgram(program, new AnalysisID(1));
         service.registerFinishedAnalysisForProgram(programWithID, TaskMonitor.DUMMY);
@@ -222,6 +269,89 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         assertEquals("a signature the analyst set must not be overwritten by the portal's",
                 0, summary.appliedSignatures());
         assertEquals("char", function.getReturnType().getName());
+    }
+
+    /// Extraction stores `undefined f(void)` for every function Ghidra had nothing for. Applying it
+    /// erased real DWARF and analysis signatures on every QA binary.
+    @Test
+    public void doesNotApplyThePortalsPlaceholderSignature() throws Exception {
+        var api = new SignatureApi();
+        api.remotePlaceholder = true;
+        var fixture = attachWithoutRemoteSignature(api, SourceType.IMPORTED);
+
+        var summary = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(0, summary.appliedSignatures());
+        assertEquals("the local signature survives attach and sync",
+                "undefined8", fixture.function().getReturnType().getName());
+    }
+
+    /// A placeholder is a stored row the signature PUT accepts, so it is exactly where the better
+    /// local signature can be pushed.
+    @Test
+    public void pushesTheLocalSignatureWhenThePortalOnlyHasAPlaceholder() throws Exception {
+        var api = new SignatureApi();
+        api.remotePlaceholder = true;
+        var fixture = attachWithoutRemoteSignature(api, SourceType.IMPORTED);
+
+        var summary = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(1, summary.pushedTypeSets());
+        assertEquals(List.of(new FunctionID(FUNCTION_ID)), api.pushedSignatures);
+    }
+
+    /// A function Ghidra knows nothing about has nothing worth pushing over the placeholder.
+    @Test
+    public void doesNotPushADefaultLocalSignatureOverAPlaceholder() throws Exception {
+        var api = new SignatureApi();
+        api.remotePlaceholder = true;
+        var fixture = attachWithoutRemoteSignature(api, SourceType.DEFAULT);
+
+        fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertTrue(api.pushedSignatures.isEmpty());
+    }
+
+    /// A signature the server extracted itself is what server-side Ghidra worked out, so it never
+    /// replaces one local analysis inferred or debug info supplied.
+    @Test
+    public void aSignatureTheServerExtractedDoesNotReplaceALocalAnalysisOne() throws Exception {
+        var api = new SignatureApi();
+        api.remoteSourceType = BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM;
+        var fixture = attachWithoutRemoteSignature(api);
+
+        api.remoteReturnType = "int";
+        var summary = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(0, summary.appliedSignatures());
+        assertEquals("undefined8", fixture.function().getReturnType().getName());
+    }
+
+    @Test
+    public void aSignatureTheServerExtractedStillFillsADefaultLocalOne() throws Exception {
+        var api = new SignatureApi();
+        api.remoteSourceType = BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM;
+        var fixture = attachWithoutRemoteSignature(api, SourceType.DEFAULT);
+
+        api.remoteReturnType = "int";
+        var summary = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(1, summary.appliedSignatures());
+        assertEquals("int", fixture.function().getReturnType().getName());
+    }
+
+    /// An edit made in the portal still beats what Ghidra inferred.
+    @Test
+    public void aSignatureEditedInThePortalReplacesALocalAnalysisOne() throws Exception {
+        var api = new SignatureApi();
+        api.remoteSourceType = BatchFunctionSignatureEntry.SourceTypeEnum.USER;
+        var fixture = attachWithoutRemoteSignature(api);
+
+        api.remoteReturnType = "int";
+        var summary = fixture.service().syncAnalysisUpdates(fixture.analysed(), TaskMonitor.DUMMY, NOOP_LOG);
+
+        assertEquals(1, summary.appliedSignatures());
+        assertEquals("int", fixture.function().getReturnType().getName());
     }
 
     @Test

@@ -2,6 +2,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.BatchFunctionSignatureEntry;
+import ai.reveng.model.SignatureParameterEntry;
 import ai.reveng.model.UpdateFunctionSignatureInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
@@ -118,6 +119,69 @@ public class FunctionSignatureServiceTest {
                 present.get().dataTypes().isEmpty());
 
         assertTrue(service.get(new FunctionID(3)).isEmpty());
+    }
+
+    /// What the server stores for a function Ghidra had no signature for: `undefined f(void)`.
+    private static BatchFunctionSignatureEntry placeholder() {
+        var entry = new BatchFunctionSignatureEntry();
+        entry.setHasSignature(true);
+        entry.setSourceType(BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM);
+        entry.setParameters(List.of());
+        entry.setReturnDataTypeId(0L);
+        return entry;
+    }
+
+    @Test
+    public void undefinedReturnAndNoParametersFromTheServerIsAPlaceholder() {
+        assertTrue(FunctionSignatureService.isPlaceholder(placeholder()));
+        assertFalse(FunctionSignatureService.hasUsableSignature(placeholder()));
+    }
+
+    @Test
+    public void unresolvedReturnTypeAndNoParametersIsAPlaceholder() {
+        var entry = placeholder();
+        entry.setReturnDataTypeId(null);
+        assertTrue(FunctionSignatureService.isPlaceholder(entry));
+    }
+
+    /// `void f(void)` is a real signature: its return type is `void`, not `undefined` (id 0).
+    @Test
+    public void aRealReturnTypeIsNotAPlaceholder() {
+        var entry = placeholder();
+        entry.setReturnDataTypeId(5L);
+        assertFalse(FunctionSignatureService.isPlaceholder(entry));
+        assertTrue(FunctionSignatureService.hasUsableSignature(entry));
+    }
+
+    @Test
+    public void parametersMakeItARealSignature() {
+        var entry = placeholder();
+        entry.setParameters(List.of(new SignatureParameterEntry()));
+        assertFalse(FunctionSignatureService.isPlaceholder(entry));
+    }
+
+    /// Once someone edits or copies a signature it is theirs, even if it reads `undefined f(void)`.
+    @Test
+    public void aSignatureSomeoneWroteIsNotAPlaceholder() {
+        var entry = placeholder();
+        entry.setSourceType(BatchFunctionSignatureEntry.SourceTypeEnum.USER);
+        assertFalse(FunctionSignatureService.isPlaceholder(entry));
+    }
+
+    @Test
+    public void getSkipsAPlaceholder() {
+        var service = new FunctionSignatureService(new UnimplementedAPI() {
+            @Override
+            public FunctionSignatureBatch listFunctionSignatures(List<FunctionID> functionIDs,
+                                                                boolean includeDataTypes) {
+                var entry = placeholder();
+                entry.setAnalysisId(1L);
+                entry.setFunctionId(functionIDs.get(0).value());
+                return new FunctionSignatureBatch(List.of(entry), Map.of());
+            }
+        });
+
+        assertTrue(service.get(new FunctionID(1)).isEmpty());
     }
 
     /// Accepts a signature write for one function and answers 404 for every other, which is how the
