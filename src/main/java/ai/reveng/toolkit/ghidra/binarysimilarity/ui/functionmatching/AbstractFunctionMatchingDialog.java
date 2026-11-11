@@ -779,11 +779,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         debugSymbolsCheckBox = new JCheckBox("Only include functions with debug symbols", false);
         debugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         debugSymbolsCheckBox.addActionListener(
-                e -> userSubmittedDebugSymbolsCheckBox.setVisible(debugSymbolsCheckBox.isSelected()));
+                e -> userSubmittedDebugSymbolsCheckBox.setEnabled(debugSymbolsCheckBox.isSelected()));
 
         userSubmittedDebugSymbolsCheckBox = new JCheckBox("Include user submitted debug symbols", false);
         userSubmittedDebugSymbolsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        userSubmittedDebugSymbolsCheckBox.setVisible(false);
+        userSubmittedDebugSymbolsCheckBox.setEnabled(false);
 
         JPanel indentedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         indentedPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
