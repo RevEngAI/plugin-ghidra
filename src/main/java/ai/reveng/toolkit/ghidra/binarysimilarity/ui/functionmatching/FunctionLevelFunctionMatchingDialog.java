@@ -126,15 +126,13 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     }
 
     @Override
-    protected JPanel createRenameButtonsPanel() {
+    protected JPanel createTransferButtonsPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
         panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
-        // Only show "Rename Selected" button for function-level matching
+        // Only offer the selected match for function-level matching,
         // since we're only matching a single function
-        JButton renameSelectedButton = new JButton("Rename Selected");
-        renameSelectedButton.addActionListener(e -> onRenameSelectedButtonClicked());
-        panel.add(renameSelectedButton);
+        panel.add(createTransferButton("Transfer Symbol", this::onTransferSelected));
 
         return panel;
     }
