@@ -287,32 +287,45 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 // This can happen if the analysis was started in a previous session but hadn't finished when closing Ghidra
                 // Either the analysis is finished already now, or we want to actively wait for it to finish
                 log.info("Detected known program that hasn't been fully loaded yet: {}", knownProgram.get());
-                var status = revengService.status(knownProgram.get());
-                switch (status) {
-                    case Complete -> {
-                        tool.firePluginEvent(
-                                new RevEngAIAnalysisStatusChangedEvent(
-                                        "programOpened",
-                                        knownProgram.get(),
-                                        status));
-                    }
-                    case Queued, Processing -> {
-                        // This is the same code as above, but it has the implicit assumption that someone
-                        /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
-                        tool.firePluginEvent(
-                                new RevEngAIAnalysisStatusChangedEvent(
-                                        "programOpened",
-                                        knownProgram.get(),
-                                        status));
-                    }
+                // Off the Swing thread: programs are opened on it, and without network the request blocks until it times out
+                tool.execute(new Task("Check RevEng.AI analysis status", false, false, false) {
+                    @Override
+                    public void run(TaskMonitor monitor) {
+                        AnalysisStatus status;
+                        try {
+                            status = revengService.status(knownProgram.get());
+                        } catch (Exception e) {
+                            Msg.warn(AnalysisManagementPlugin.this,
+                                    "Could not check the RevEng.AI analysis status for " + knownProgram.get() + ": " + e.getMessage());
+                            return;
+                        }
+                        switch (status) {
+                            case Complete -> {
+                                tool.firePluginEvent(
+                                        new RevEngAIAnalysisStatusChangedEvent(
+                                                "programOpened",
+                                                knownProgram.get(),
+                                                status));
+                            }
+                            case Queued, Processing -> {
+                                // This is the same code as above, but it has the implicit assumption that someone
+                                /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
+                                tool.firePluginEvent(
+                                        new RevEngAIAnalysisStatusChangedEvent(
+                                                "programOpened",
+                                                knownProgram.get(),
+                                                status));
+                            }
 
 
-                    case Error -> {
-                        // The analysis failed on the server side
-                        Msg.showError(this, null, "Analysis Error",
-                                "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                            case Error -> {
+                                // The analysis failed on the server side
+                                Msg.showError(AnalysisManagementPlugin.this, null, "Analysis Error",
+                                        "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                            }
+                        }
                     }
-                }
+                }, 0);
             }
         } else {
             log.info("Opened unknown program: {}", program.getName());
@@ -361,19 +374,22 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
                 // If the analysis is complete, we refresh the function signatures from the server
                 var program = analysisEvent.getProgramWithBinaryID();
-                try {
-                    // TODO: Can we get a better taskmonitor here?
-                    // Or should we never do something here that warrants a monitor in the first place?
-                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, TaskMonitor.DUMMY);
-                    localEditSyncService.attach(program.program());
-                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
-                    // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
-                    // and sync the recovered names / data types once it finishes (PLU-300).
-                    autoUnstripSyncService.pollAndSync(analysedProgram, true);
-                } catch (Exception e) {
-                    Msg.error(this, "Error registering finished analysis for program " + program, e);
-                    return;
-                }
+                // Events arrive on the Swing thread, and loading the results makes several requests
+                tool.execute(new Task("Load RevEng.AI analysis results", true, false, false) {
+                    @Override
+                    public void run(TaskMonitor monitor) {
+                        try {
+                            var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, monitor);
+                            localEditSyncService.attach(program.program());
+                            tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
+                            // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
+                            // and sync the recovered names / data types once it finishes (PLU-300).
+                            autoUnstripSyncService.pollAndSync(analysedProgram, true);
+                        } catch (Exception e) {
+                            Msg.error(AnalysisManagementPlugin.this, "Error registering finished analysis for program " + program, e);
+                        }
+                    }
+                }, 0);
             }
         }
     }
