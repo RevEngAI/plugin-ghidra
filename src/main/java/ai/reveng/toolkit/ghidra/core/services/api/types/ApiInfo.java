@@ -27,6 +27,9 @@ public record ApiInfo(
         } catch (java.io.IOException e) {
             throw new RuntimeException("Failed to read config file: " + configFilePath, e);
         }
+        if (config == null || config.getPluginSettings() == null) {
+            throw new JSONException("Invalid config file: pluginSettings missing");
+        }
         var apikey = config.getPluginSettings().getApiKey();
         var hostname = config.getPluginSettings().getHostname();
         var portalHostname = config.getPluginSettings().getPortalHostname();

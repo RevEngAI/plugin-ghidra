@@ -181,7 +181,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
                     var apiService = getApiService();
-                    if (apiService == null) return false;
+                    if (apiService == null || context.getAddress() == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -209,7 +209,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				.withContext(ProgramLocationActionContext.class)
 				.enabledWhen(context -> {
 					var apiService = getApiService();
-					if (apiService == null) return false;
+					if (apiService == null || context.getAddress() == null) return false;
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 					return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -243,7 +243,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
                     var apiService = getApiService();
-                    if (apiService == null) return false;
+                    if (apiService == null || context.getAddress() == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();

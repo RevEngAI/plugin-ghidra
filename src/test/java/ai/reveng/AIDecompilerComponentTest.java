@@ -504,4 +504,18 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
             super.aiDecompRating(functionID, rating, reason);
         }
     }
+
+    /// The Decompiler reports a context without an address when the cursor is on a blank line.
+    @Test
+    public void popupActionsAreDisabledForContextWithoutAddress() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI());
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var program = newX64Program().getProgram();
+
+        var context = new ProgramLocationActionContext(null, program, null, null, null);
+        for (String name : List.of("Match function", "AI Decompilation", "View function in portal")) {
+            assertFalse(name, getAction(tool, name).isEnabledForContext(context));
+        }
+    }
 }

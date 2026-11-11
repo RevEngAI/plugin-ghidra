@@ -126,6 +126,9 @@ public class TypedApiImplementation implements TypedApiInterface {
 
         var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
 
+        if (result.getData() == null) {
+            throw new ApiException("Upload response carried no data");
+        }
         return new BinaryHash(result.getData().getSha256Hash());
     }
 
@@ -162,12 +165,18 @@ public class TypedApiImplementation implements TypedApiInterface {
     public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
         var analysisRequest = options.toAnalysisCreateRequest();
         var result = this.analysisCoreApi.createAnalysis(analysisRequest, null);
+        if (result.getData() == null) {
+            throw new ApiException("Analysis creation response carried no data");
+        }
         return new AnalysisID(result.getData().getAnalysisId());
     }
 
     @Override
     public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
         var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
+        if (status.getData() == null) {
+            throw new ApiException("Analysis status response carried no data");
+        }
         return AnalysisStatus.fromApiValue(status.getData().getAnalysisStatus());
     }
 

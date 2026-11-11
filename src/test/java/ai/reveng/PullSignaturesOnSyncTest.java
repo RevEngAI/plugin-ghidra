@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 /// The portal -> Ghidra half of "Sync With Portal": the signature the portal holds, and the data
 /// types it names, land on the matched function.
@@ -52,6 +53,10 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         String remoteSignatureName = FUNCTION_NAME;
         /// The name the portal gives the single parameter, or null for a parameter it does not name.
         String remoteParameterName = "count";
+        /// What the portal reports as `has_signature`; the generated model lets a JSON null through.
+        Boolean remoteHasSignature = true;
+        /// Calls of {@link #getFunctionInfo} after which the portal stops listing the function.
+        int functionInfoCallsBeforeRemoval = Integer.MAX_VALUE;
 
         @Override
         public AnalysisStatus status(AnalysisID analysisID) {
@@ -60,6 +65,9 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
 
         @Override
         public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+            if (functionInfoCallsBeforeRemoval-- <= 0) {
+                return List.of();
+            }
             return List.of(new FunctionInfo(
                     new FunctionID(FUNCTION_ID), FUNCTION_NAME, FUNCTION_NAME, ADDRESS, 0x100));
         }
@@ -74,7 +82,7 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
             entry.setAnalysisId(1L);
             entry.setFunctionId(FUNCTION_ID);
             entry.setFunctionName(remoteSignatureName);
-            entry.setHasSignature(true);
+            entry.setHasSignature(remoteHasSignature);
             entry.setReturnDataTypeId(1L);
             var parameter = new SignatureParameterEntry();
             parameter.setOrdinal(0L);
@@ -214,5 +222,58 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         assertEquals("a signature the analyst set must not be overwritten by the portal's",
                 0, summary.appliedSignatures());
         assertEquals("char", function.getReturnType().getName());
+    }
+
+    @Test
+    public void nullHasSignatureIsTreatedAsNoSignature() throws Exception {
+        var api = new SignatureApi();
+        api.remoteReturnType = "int";
+        api.remoteHasSignature = null;
+
+        var fixture = attachWithoutRemoteSignature(api);
+
+        assertEquals("undefined8", fixture.function().getReturnType().getName());
+    }
+
+    /// The function list can change between the attach-time association and the pull that follows.
+    @Test
+    public void functionNoLongerListedByThePortalIsSkipped() throws Exception {
+        var api = new SignatureApi();
+        api.functionInfoCallsBeforeRemoval = 1;
+
+        var fixture = attachWithoutRemoteSignature(api);
+
+        assertEquals(FUNCTION_NAME, fixture.function().getName());
+    }
+
+    /// A failure while pulling must not leave the program's transaction open.
+    @Test
+    public void failedPullDoesNotLeakTransaction() throws Exception {
+        var api = new SignatureApi() {
+            int calls = 0;
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                // The pull runs after the attach-time association; make it fail there.
+                if (calls++ == 0) {
+                    return super.getFunctionInfo(analysisID);
+                }
+                throw new RuntimeException("simulated failure");
+            }
+        };
+        var service = new GhidraRevengService(api);
+        var builder = newX64Program();
+        builder.createMemory("mem", "0x4000", 0x100);
+        builder.createEmptyFunction(FUNCTION_NAME, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        var program = builder.getProgram();
+        var programWithID = service.registerAnalysisForProgram(program, new AnalysisID(1));
+
+        try {
+            service.registerFinishedAnalysisForProgram(programWithID, TaskMonitor.DUMMY);
+        } catch (RuntimeException expected) {
+            // the transaction is what matters
+        }
+
+        assertNull("transaction must be closed", program.getCurrentTransactionInfo());
     }
 }

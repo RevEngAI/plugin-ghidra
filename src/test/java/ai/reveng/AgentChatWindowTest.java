@@ -12,6 +12,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.AgentChatPlugin;
+import ai.reveng.toolkit.ghidra.plugins.LoggingPlugin;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -156,5 +157,19 @@ public class AgentChatWindowTest extends RevEngMockableHeadedIntegrationTest {
 
         assertEquals("agent rename must overwrite the existing local name",
                 "renamed_by_agent", func.getName());
+    }
+
+    /// Plugins are constructed in list order, before services are resolved, so the chat must not
+    /// capture the logging service until it is available.
+    @Test
+    public void capturesLoggingServiceWhenLoadedBeforeLoggingPlugin() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI());
+        tool.removePlugins(List.of(env.getPlugin(LoggingPlugin.class)));
+
+        tool.addPlugins(List.of(AgentChatPlugin.class.getName(), LoggingPlugin.class.getName()));
+
+        var controller = getInstanceField("controller", getComponentProvider(AgentChatWindow.class));
+        assertNotNull(getInstanceField("log", controller));
     }
 }

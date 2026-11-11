@@ -55,7 +55,7 @@ public class ApplyMatchCmd implements Command<Program> {
                 !match.functionMatch().nearest_neighbor_mangled_function_name().contains(" ") &&
                 !match.functionMatch().nearest_neighbor_function_name().contains(" ")
                 // Only rename if the function ID is known (boundaries matched)
-                && analyzedProgram.getIDForFunction(func).map(id -> id.functionID() != match.functionMatch().origin_function_id()).orElse(false);
+                && analyzedProgram.getIDForFunction(func).isPresent();
     }
 
     @Override

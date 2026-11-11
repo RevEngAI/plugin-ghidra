@@ -8,10 +8,14 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.model.AnalysisRecordBody;
 import docking.DockingWindowManager;
+import ghidra.framework.Log4jErrorLogger;
+import ghidra.util.DefaultErrorLogger;
+import ghidra.util.Msg;
 import org.junit.Test;
 
 import javax.swing.*;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -190,6 +194,68 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         // Close the dialog
         close(foundDialog);
         waitForSwing();
+    }
+
+    @Test
+    public void testPickSelectedWithoutSelectionDoesNothing() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new RecentAnalysesMockApi());
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        List<Object> errors = new CopyOnWriteArrayList<>();
+        Msg.setErrorLogger(new DefaultErrorLogger() {
+            @Override
+            public void error(Object originator, Object message, Throwable throwable) {
+                errors.add(message);
+            }
+        });
+        try {
+            RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+            runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+            var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+            pressButton(findButtonByText(foundDialog.getComponent(), "Pick selected"));
+            waitForTasks();
+            waitForSwing();
+
+            assertEquals(List.of(), errors);
+            close(foundDialog);
+        } finally {
+            Msg.setErrorLogger(new Log4jErrorLogger());
+        }
+    }
+
+    @Test
+    public void testPickMostRecentWithoutAnalysesDoesNothing() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
+                return List.of();
+            }
+        });
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+        waitForTasks();
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Pick most recent"));
+        waitForSwing();
+
+        assertTrue("dialog should stay open", foundDialog.isVisible());
+        close(foundDialog);
     }
 
     /**
