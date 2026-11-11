@@ -290,7 +290,7 @@ public final class ServerDataTypeDecoder {
         if (namespace == null || namespace.isBlank()) {
             return CategoryPath.ROOT;
         }
-        return TypePathAndName.fromString(namespace + "::" + leafName(type)).toCategoryPath();
+        return TypePathAndName.fromString(sanitise(namespace) + "::" + leafName(type)).toCategoryPath();
     }
 
     private static String leafName(ServerDataType type) {
@@ -298,7 +298,13 @@ public final class ServerDataTypeDecoder {
         if (name == null || name.isBlank()) {
             return "anon_%d".formatted(type.id());
         }
-        return TypePathAndName.fromString(name).name();
+        String leaf = sanitise(TypePathAndName.fromString(name).name());
+        return leaf.isBlank() ? "anon_%d".formatted(type.id()) : leaf;
+    }
+
+    /// Ghidra rejects names containing control characters.
+    private static String sanitise(String name) {
+        return name.replaceAll("\\p{Cntrl}", "_");
     }
 
     /// Ghidra sizes are `int`; the API's are `long`. Anything that does not fit is not a real type.

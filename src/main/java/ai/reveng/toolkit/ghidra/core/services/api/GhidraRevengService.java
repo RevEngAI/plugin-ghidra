@@ -781,136 +781,139 @@ public class GhidraRevengService {
         List<RenameResult> renameResults = new ArrayList<>();
 
         int failedRenames = 0;
+        try {
 
-        var revEngNamespace = getRevEngAINameSpace(analysedProgram.program());
+            var revEngNamespace = getRevEngAINameSpace(analysedProgram.program());
 
-        Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
-                .collect(
-                        Collectors.toMap(
-                                FunctionInfo::functionID,
-                                fi -> fi
-                        )
-                );
-
-
-        // /v3/functions/signatures is addressed by function id rather than by analysis, so ask for
-        // the functions this analysis reported. The response carries the types those signatures
-        // reference alongside them, which is what the decoders below are built from.
-        var signatureBatch = signatures().getMany(List.copyOf(functionInfoMap.keySet()));
-        Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
-        Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
-                .stream()
-                .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
-                .collect(
-                Collectors.toMap(
-                        item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
-                        item -> item,
-                        (existing, replacement) -> existing
-                )
-        );
-
-        for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
-            if (monitor.isCancelled()) {
-                continue;
-            }
-            var ghidraMangledName = function.getSymbol().getName(false);
-            // Skip external and thunk functions because we don't support them
-            if (function.isExternal() || function.isThunk()) {
-                Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
-                continue;
-            }
-
-            var fID = analysedProgram.getIDForFunction(function);
-            if (fID.isEmpty()) {
-                Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
-                continue;
-            }
-
-            // Get the current name on  the server side
-            FunctionInfo details = functionInfoMap.get(fID.get().functionID);
-            if (details == null) {
-                Msg.warn(this, "No server info for function %s, skipping".formatted(function.getName()));
-                continue;
-            }
-
-            // Extract the mangled name from Ghidra
-            var revEngMangledName = details.functionMangledName();
-            var revEngDemangledName = details.functionName();
-
-            // Skip invalid function mangled names
-            if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
-                Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                continue;
-            }
-
-            // Get the type information on the server side. Every type the signature refers to is
-            // resolved by id against its analysis' decoder, so there is nothing left to fail on.
-            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
-                    Optional.ofNullable(signatureMap.get(fID.get().functionID))
-                            .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
+            Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
+                    .collect(
+                            Collectors.toMap(
+                                    FunctionInfo::functionID,
+                                    fi -> fi
+                            )
+                    );
 
 
-            analysedProgram.setMangledNameForFunction(function, revEngMangledName);
+            // /v3/functions/signatures is addressed by function id rather than by analysis, so ask for
+            // the functions this analysis reported. The response carries the types those signatures
+            // reference alongside them, which is what the decoders below are built from.
+            var signatureBatch = signatures().getMany(List.copyOf(functionInfoMap.keySet()));
+            Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
+            Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
+                    .stream()
+                    .filter(item -> Boolean.TRUE.equals(item.getHasSignature()))
+                    .collect(
+                    Collectors.toMap(
+                            item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
+                            item -> item,
+                            (existing, replacement) -> existing
+                    )
+            );
 
-            /// Source types:
-            /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
-            /// ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
-            /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
-            /// USER_DEFINED: A name or signature explicitly set by the analyst.
-            /// See {@link ghidra.program.model.symbol.SourceType} for more details
-            // The name and the signature are separate decisions. Gating the signature on the name
-            // source hid every type the portal held for a function that was already named — by the
-            // analyst, or by an earlier run of this same pull — and the signature apply is what
-            // carries the data types down.
-            if (functionSignatureMessageOpt.isEmpty()) {
-                // No signature to apply, so a rename is all that is left. Skip server-side default
-                // names — Ghidra's own "FUN_" and IDA's "sub_" — so we never overwrite Ghidra's
-                // default placeholder with an IDA-style one.
-                if (function.getSymbol().getSource() == SourceType.DEFAULT
-                        && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")
-                        && !function.getSymbol().getName(false).equals(revEngDemangledName)) {
-                    Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                    try {
-                        function.setParentNamespace(revEngNamespace);
-                    } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
-                        throw new RuntimeException(e);
+            for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
+                if (monitor.isCancelled()) {
+                    continue;
+                }
+                var ghidraMangledName = function.getSymbol().getName(false);
+                // Skip external and thunk functions because we don't support them
+                if (function.isExternal() || function.isThunk()) {
+                    Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
+                    continue;
+                }
+
+                var fID = analysedProgram.getIDForFunction(function);
+                if (fID.isEmpty()) {
+                    Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
+                    continue;
+                }
+
+                // Get the current name on  the server side
+                FunctionInfo details = functionInfoMap.get(fID.get().functionID);
+                if (details == null) {
+                    Msg.warn(this, "No server info for function %s, skipping".formatted(function.getName()));
+                    continue;
+                }
+
+                // Extract the mangled name from Ghidra
+                var revEngMangledName = details.functionMangledName();
+                var revEngDemangledName = details.functionName();
+
+                // Skip invalid function mangled names
+                if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
+                    Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                    continue;
+                }
+
+                // Get the type information on the server side. Every type the signature refers to is
+                // resolved by id against its analysis' decoder, so there is nothing left to fail on.
+                Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
+                        Optional.ofNullable(signatureMap.get(fID.get().functionID))
+                                .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
+
+
+                analysedProgram.setMangledNameForFunction(function, revEngMangledName);
+
+                /// Source types:
+                /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
+                /// ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
+                /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
+                /// USER_DEFINED: A name or signature explicitly set by the analyst.
+                /// See {@link ghidra.program.model.symbol.SourceType} for more details
+                // The name and the signature are separate decisions. Gating the signature on the name
+                // source hid every type the portal held for a function that was already named — by the
+                // analyst, or by an earlier run of this same pull — and the signature apply is what
+                // carries the data types down.
+                if (functionSignatureMessageOpt.isEmpty()) {
+                    // No signature to apply, so a rename is all that is left. Skip server-side default
+                    // names — Ghidra's own "FUN_" and IDA's "sub_" — so we never overwrite Ghidra's
+                    // default placeholder with an IDA-style one.
+                    if (function.getSymbol().getSource() == SourceType.DEFAULT
+                            && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")
+                            && !function.getSymbol().getName(false).equals(revEngDemangledName)) {
+                        Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                        try {
+                            function.setParentNamespace(revEngNamespace);
+                        } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+                            throw new RuntimeException(e);
+                        }
+                        var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
+                                .applyTo(analysedProgram.program());
+                        if (success) {
+                            renameResults.add(new RenameResult(
+                                    function,
+                                    ghidraMangledName,
+                                    revEngDemangledName
+                            ));
+                        } else {
+                            failedRenames++;
+                            Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                        }
                     }
-                    var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
-                            .applyTo(analysedProgram.program());
-                    if (success) {
+                } else if (function.getSignatureSource() != SourceType.USER_DEFINED) {
+                    // RENAME_IF_DEFAULT preserves the long-standing behaviour that applying a signature
+                    // also names a function still carrying Ghidra's placeholder, and leaves every other
+                    // name alone.
+                    var application = applyRemoteSignature(analysedProgram.program(), function,
+                            functionSignatureMessageOpt.get(), monitor, FunctionRenameOption.RENAME_IF_DEFAULT);
+                    // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
+                    if (application.success()) {
                         renameResults.add(new RenameResult(
                                 function,
                                 ghidraMangledName,
                                 revEngDemangledName
                         ));
                     } else {
+                        Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
                         failedRenames++;
-                        Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
                     }
                 }
-            } else if (function.getSignatureSource() != SourceType.USER_DEFINED) {
-                // RENAME_IF_DEFAULT preserves the long-standing behaviour that applying a signature
-                // also names a function still carrying Ghidra's placeholder, and leaves every other
-                // name alone.
-                var application = applyRemoteSignature(analysedProgram.program(), function,
-                        functionSignatureMessageOpt.get(), monitor, FunctionRenameOption.RENAME_IF_DEFAULT);
-                // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
-                if (application.success()) {
-                    renameResults.add(new RenameResult(
-                            function,
-                            ghidraMangledName,
-                            revEngDemangledName
-                    ));
-                } else {
-                    Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
-                    failedRenames++;
-                }
+
+
             }
-
-
+        } finally {
+            // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
+            analysedProgram.program().endTransaction(transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
         }
-        // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-        analysedProgram.program().endTransaction(transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
                     ("Failed to update %d functions from RevEng.AI. Please check the error log for details.").formatted(

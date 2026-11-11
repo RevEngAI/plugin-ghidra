@@ -90,10 +90,9 @@ public class RecentAnalysisDialog extends RevEngDialogComponentProvider {
         JButton pickMostRecentButton = new JButton("Pick most recent");
         pickMostRecentButton.setName("Pick most recent");
         pickMostRecentButton.addActionListener(e -> {
-            var mostRecent = recentAnalysesTable.getModel().getModelData().stream().max(
+            recentAnalysesTable.getModel().getModelData().stream().max(
                     Comparator.comparing(AnalysisRecordBody::getCreation)
-            ).orElseThrow();
-            pickAnalysis(mostRecent);
+            ).ifPresent(this::pickAnalysis);
         });
         addButton(pickMostRecentButton);
 

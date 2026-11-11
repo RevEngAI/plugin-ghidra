@@ -230,6 +230,34 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         }
     }
 
+    @Test
+    public void testPickMostRecentWithoutAnalysesDoesNothing() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
+                return List.of();
+            }
+        });
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+        waitForTasks();
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Pick most recent"));
+        waitForSwing();
+
+        assertTrue("dialog should stay open", foundDialog.isVisible());
+        close(foundDialog);
+    }
+
     /**
      * Mock API implementation for recent analysis dialog tests.
      * Provides necessary responses for the dialog to function without a real server.

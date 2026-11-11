@@ -262,4 +262,22 @@ public class ServerDataTypeDecoderTest extends RevEngMockableHeadedIntegrationTe
         assertEquals("x", ((Structure) decoder.typeFor(1L, 0)).getComponentAt(0).getFieldName());
         assertEquals(1L, ((Enum) decoder.typeFor(3L, 0)).getValue("A"));
     }
+
+    /// Names Ghidra rejects (control characters, empty namespace segments) must not fail the decode.
+    @Test
+    public void sanitisesNamesGhidraRejects() {
+        var decoder = ServerDataTypeDecoder.decode(types("""
+                {"items": [
+                  {"data_type_id": 1, "namespace": "ns::::inner", "name": "bad\\nname", "kind": "STRUCT",
+                   "size": 4, "source_type": "AUTO", "has_definition": false},
+                  {"data_type_id": 2, "namespace": "", "name": "::", "kind": "TYPEDEF",
+                   "size": 4, "source_type": "AUTO", "has_definition": false}
+                ]}
+                """));
+
+        DataType struct = decoder.typeFor(1L, 0);
+        assertEquals("bad_name", struct.getName());
+        assertEquals("/ns/inner", struct.getCategoryPath().getPath());
+        assertNotNull(decoder.typeFor(2L, 0));
+    }
 }
