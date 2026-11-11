@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public abstract class AbstractFunctionMatchingDialog extends RevEngDialogComponentProvider {
@@ -66,7 +67,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     /// The thread of the current matching run; null when idle or cancelled. A run whose thread is no
     /// longer this one has been superseded, and must not touch the UI.
     protected volatile Thread matchingThread;
-    protected JPanel renameButtonsPanel;
+    protected JPanel transferButtonsPanel;
 
     // Assembly comparison panel
     protected AssemblyDiffPanel assemblyDiffPanel;
@@ -343,11 +344,11 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 ? "%d match%s".formatted(totalMatchCount, totalMatchCount == 1 ? "" : "es")
                 : "%d of %d shown".formatted(displayedMatchCount, totalMatchCount));
 
-        // Show/hide rename buttons based on whether we have results
+        // Show/hide transfer buttons based on whether we have results
         boolean hasResults = displayedMatchCount > 0;
-        renameButtonsPanel.setVisible(hasResults);
+        transferButtonsPanel.setVisible(hasResults);
 
-        // Enable table selection model for rename operations
+        // Enable table selection model for transfer operations
         if (hasResults) {
             resultsTable.setSelectionMode(getTableSelectionMode());
             resultsTable.setRowSelectionAllowed(true);
@@ -532,7 +533,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         errorArea.setBorder(BorderFactory.createTitledBorder("Error Details"));
         errorScrollPane = new JScrollPane(errorArea);
 
-        // Results table with rename buttons container
+        // Results table with transfer buttons container
         JPanel resultsContainer = createResultsContainer();
         centerPanel.add(resultsContainer, BorderLayout.CENTER);
 
@@ -698,10 +699,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         resultsContainer.add(mainSplitPane, BorderLayout.CENTER);
 
-        // Rename buttons panel
-        renameButtonsPanel = createRenameButtonsPanel();
-        renameButtonsPanel.setVisible(false);
-        resultsContainer.add(renameButtonsPanel, BorderLayout.SOUTH);
+        // Transfer buttons panel
+        transferButtonsPanel = createTransferButtonsPanel();
+        transferButtonsPanel.setVisible(false);
+        resultsContainer.add(transferButtonsPanel, BorderLayout.SOUTH);
 
         return resultsContainer;
     }
@@ -744,19 +745,27 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         return selected.size() == 1 ? selected.get(0).functionMatch().nearest_neighbor_analysis_id() : null;
     }
 
-    protected JPanel createRenameButtonsPanel() {
+    protected JPanel createTransferButtonsPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
-
-        JButton renameAllButton = new JButton("Rename All");
-        renameAllButton.addActionListener(e -> onRenameAllButtonClicked());
-        panel.add(renameAllButton);
-
-        JButton renameSelectedButton = new JButton("Rename Selected");
-        renameSelectedButton.addActionListener(e -> onRenameSelectedButtonClicked());
-        panel.add(renameSelectedButton);
-
+        panel.add(createTransferButton("Transfer All", this::onTransferAll));
+        panel.add(createTransferButton("Transfer Selected", this::onTransferSelected));
         return panel;
+    }
+
+    /// A button that drops down the parts of a match that can be transferred, as the portal's
+    /// Transfer Symbol button does, and hands the chosen one to {@code onChosen}
+    protected static JButton createTransferButton(String text, Consumer<ApplyMatchCmd.Transfer> onChosen) {
+        JPopupMenu menu = new JPopupMenu();
+        for (ApplyMatchCmd.Transfer transfer : ApplyMatchCmd.Transfer.values()) {
+            JMenuItem item = new JMenuItem(transfer.label());
+            item.addActionListener(e -> onChosen.accept(transfer));
+            menu.add(item);
+        }
+
+        JButton button = new JButton(text + " \u25BE");
+        button.addActionListener(e -> menu.show(button, 0, button.getHeight()));
+        return button;
     }
 
     protected JPanel createCollectionSelectorPanel() {
@@ -1053,8 +1062,9 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     }
 
 
-    protected void onRenameAllButtonClicked() {
-        renameInBackground(functionMatchResults);
+    protected void onTransferAll(ApplyMatchCmd.Transfer transfer) {
+        hideError();
+        transferInBackground(functionMatchResults, transfer);
     }
 
     /// The results behind the currently selected table rows.
@@ -1074,22 +1084,27 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         return selectedMatches;
     }
 
-    protected void onRenameSelectedButtonClicked() {
+    protected void onTransferSelected(ApplyMatchCmd.Transfer transfer) {
         if (resultsTable.getSelectedRowCount() == 0) {
-            showError("Please select one or more rows to rename.");
+            showError("Please select one or more rows to transfer.");
             return;
         }
         hideError();
 
-        renameInBackground(getSelectedMatches());
+        transferInBackground(getSelectedMatches(), transfer);
     }
 
-    private void renameInBackground(List<GhidraFunctionMatchWithSignature> matches) {
-        var task = new Task("Applying Renames", true, false, false) {
+    private void transferInBackground(List<GhidraFunctionMatchWithSignature> matches, ApplyMatchCmd.Transfer transfer) {
+        var task = new Task("Transferring " + transfer.label(), true, false, false) {
             @Override
             public void run(TaskMonitor monitor) {
-                batchRenameFunctions(matches);
-                importFunctionNames(matches);
+                // The portal only stores names, so a signature-only transfer has nothing to push
+                if (transfer.includesName()) {
+                    batchRenameFunctions(matches);
+                }
+                int applied = applyMatches(matches, transfer);
+                SwingUtilities.invokeLater(() -> statusLabel.setText("Transferred %s to %d of %d function(s)"
+                        .formatted(transfer.label().toLowerCase(), applied, matches.size())));
             }
         };
         // Shown in a task dialog: the dialog's progress bar belongs to matching, and is hidden by now
@@ -1105,19 +1120,25 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         }
     }
 
-    protected void importFunctionNames(List<GhidraFunctionMatchWithSignature> functionMatches) {
+    /// Applies the matches to the program and returns how many functions were changed. Matches can be
+    /// skipped, e.g. a signature transfer for a match the portal has no signature for.
+    protected int applyMatches(List<GhidraFunctionMatchWithSignature> functionMatches, ApplyMatchCmd.Transfer transfer) {
         var program = analyzedProgram.program();
+        int[] applied = {0};
 
-        program.withTransaction("Apply Function Matching Renames", () -> {
+        program.withTransaction("Apply Function Matching " + transfer.label(), () -> {
                     for (GhidraFunctionMatchWithSignature match : functionMatches) {
                         // We don't pass a service, because we don't need to update individual functions on the portal
                         // batchRenameFunctions already does that for us
-                        var cmd = new ApplyMatchCmd(null, analyzedProgram, match, false);
-                        cmd.applyTo(program);
+                        var cmd = new ApplyMatchCmd(null, analyzedProgram, match, false, transfer);
+                        if (cmd.applyTo(program)) {
+                            applied[0]++;
+                        }
                     }
                 }
         );
         SwingUtilities.invokeLater(this::updateResultsTable);
+        return applied[0];
     }
 
     @Override
