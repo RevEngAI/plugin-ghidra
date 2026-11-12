@@ -52,10 +52,11 @@ public class LocalEditSyncAcrossProgramsTest extends RevEngMockableHeadedIntegra
         }
 
         @Override
-        public void batchRenameFunctions(BatchRenameInputBody request) {
+        public long batchRenameFunctions(BatchRenameInputBody request) {
             for (var item : request.getFunctions()) {
                 renamed.put(item.getFunctionId(), item.getNewName());
             }
+            return request.getFunctions().size();
         }
     }
 
@@ -96,7 +97,8 @@ public class LocalEditSyncAcrossProgramsTest extends RevEngMockableHeadedIntegra
         Function inA = analysedFunction(service, "a", 1);
         Function inB = analysedFunction(service, "b", 2);
 
-        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class));
+        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class),
+                (message, warning) -> {});
         sync.attach(inA.getProgram());
         sync.attach(inB.getProgram());
 

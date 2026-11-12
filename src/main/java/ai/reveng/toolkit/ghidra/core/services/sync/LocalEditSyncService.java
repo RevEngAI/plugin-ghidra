@@ -1,6 +1,5 @@
 package ai.reveng.toolkit.ghidra.core.services.sync;
 
-import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraDataTypeEncoder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
@@ -37,6 +36,9 @@ import java.util.function.BiConsumer;
  * coalesced per function (debounced) and pushes are suppressed while the plugin is applying
  * server-sourced changes locally (see {@link GhidraRevengService#isPushbackSuppressed()}), so
  * sync-applied changes are not echoed straight back.
+ *
+ * <p>A push that fails is reported in the plugin log and the status bar, and the edit stays marked in
+ * {@link UnpushedEdits} until a push succeeds, so "Sync with portal" sends it later.
  */
 public class LocalEditSyncService {
 
@@ -45,6 +47,8 @@ public class LocalEditSyncService {
 
     private final GhidraRevengService revengService;
     private final ReaiLoggingService loggingService;
+    /// Shows a message in the status bar; the flag marks it as a warning.
+    private final BiConsumer<String, Boolean> statusNotifier;
     private final ScheduledExecutorService scheduler;
     private final Map<Program, DomainObjectListener> listeners = new ConcurrentHashMap<>();
     private final Map<InProgram<Address>, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
@@ -56,9 +60,11 @@ public class LocalEditSyncService {
     /// address or type path alone would let an edit in one program cancel the other's pending push.
     private record InProgram<K>(Program program, K key) {}
 
-    public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService) {
+    public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService,
+                                BiConsumer<String, Boolean> statusNotifier) {
         this.revengService = revengService;
         this.loggingService = loggingService;
+        this.statusNotifier = statusNotifier;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "RevEng.AI-LocalEditSync");
             thread.setDaemon(true);
@@ -179,10 +185,12 @@ public class LocalEditSyncService {
     }
 
     private void scheduleRename(Program program, Address entryPoint) {
+        UnpushedEdits.mark(program, UnpushedEdits.Kind.NAME, entryPoint);
         schedule(pendingRenames, new InProgram<>(program, entryPoint), () -> pushRename(program, entryPoint));
     }
 
     private void scheduleTypes(Program program, Address entryPoint) {
+        UnpushedEdits.mark(program, UnpushedEdits.Kind.TYPES, entryPoint);
         schedule(pendingTypes, new InProgram<>(program, entryPoint), () -> pushTypes(program, entryPoint));
     }
 
@@ -199,7 +207,12 @@ public class LocalEditSyncService {
         }
         pending.put(key, scheduler.schedule(() -> {
             pending.remove(key);
-            task.run();
+            // Nothing reads the future, so anything thrown here would vanish with it.
+            try {
+                task.run();
+            } catch (Exception e) {
+                reportFailure("RevEng.AI: could not push a local edit to the portal", e);
+            }
         }, DEBOUNCE_MS, TimeUnit.MILLISECONDS));
     }
 
@@ -229,8 +242,12 @@ public class LocalEditSyncService {
                 revengService.pushFunctionRename(analysedProgram, function).ifPresent(pushedName ->
                         loggingService.info("Pushed rename of function at %s to \"%s\" to the RevEng.AI portal"
                                 .formatted(entryPoint, pushedName)));
-            } catch (ApiException e) {
-                Msg.warn(this, "Failed to push rename for %s to portal".formatted(function.getName()), e);
+                UnpushedEdits.clear(program, UnpushedEdits.Kind.NAME, entryPoint);
+            } catch (Exception e) {
+                // Marked again in case a push that started earlier succeeded and cleared it meanwhile.
+                UnpushedEdits.mark(program, UnpushedEdits.Kind.NAME, entryPoint);
+                reportFailure("RevEng.AI: could not push the rename of \"%s\" to the portal; it will be sent on the next Sync with portal"
+                        .formatted(function.getName()), e);
             }
         });
     }
@@ -253,10 +270,20 @@ public class LocalEditSyncService {
                         // Not part of the analysis, so there was nothing to push.
                     }
                 }
-            } catch (ApiException e) {
-                Msg.warn(this, "Failed to push types for %s to portal".formatted(function.getName()), e);
+                UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, entryPoint);
+            } catch (Exception e) {
+                UnpushedEdits.mark(program, UnpushedEdits.Kind.TYPES, entryPoint);
+                reportFailure("RevEng.AI: could not push the types of \"%s\" to the portal; they will be sent on the next Sync with portal"
+                        .formatted(function.getName()), e);
             }
         });
+    }
+
+    private void reportFailure(String message, Exception e) {
+        var reported = "%s: %s".formatted(message, e.getMessage() != null ? e.getMessage() : e);
+        Msg.warn(this, reported, e);
+        loggingService.warn(reported);
+        statusNotifier.accept(reported, true);
     }
 
     private void withAnalysedFunction(Program program, Address entryPoint,

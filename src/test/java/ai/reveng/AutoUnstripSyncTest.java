@@ -61,8 +61,9 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         }
 
         @Override
-        public void batchRenameFunctions(BatchRenameInputBody request) {
+        public long batchRenameFunctions(BatchRenameInputBody request) {
             renameCalls.add(request);
+            return request.getFunctions().size();
         }
 
         @Override

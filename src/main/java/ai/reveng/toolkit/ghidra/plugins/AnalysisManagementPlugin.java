@@ -46,6 +46,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.util.function.BiConsumer;
 
 /**
  * CorePlugin for accessing the RevEng.AI Platform
@@ -99,9 +100,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         tool.addComponentProvider(analysisLogComponent, false);
 
         revengService = Objects.requireNonNull(tool.getService(GhidraRevengService.class));
-        localEditSyncService = new LocalEditSyncService(revengService, loggingService);
-        autoUnstripSyncService = new AutoUnstripSyncService(revengService, loggingService,
-                (message, warning) -> SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, warning)));
+        BiConsumer<String, Boolean> statusNotifier =
+                (message, warning) -> SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, warning));
+        localEditSyncService = new LocalEditSyncService(revengService, loggingService, statusNotifier);
+        autoUnstripSyncService = new AutoUnstripSyncService(revengService, loggingService, statusNotifier);
 
         setupActions();
 
