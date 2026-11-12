@@ -1098,11 +1098,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         var task = new Task("Transferring " + transfer.label(), true, false, false) {
             @Override
             public void run(TaskMonitor monitor) {
-                // The portal only stores names, so a signature-only transfer has nothing to push
-                if (transfer.includesName()) {
-                    batchRenameFunctions(matches);
-                }
-                int applied = applyMatches(matches, transfer);
+                int applied = transferMatches(matches, transfer);
                 SwingUtilities.invokeLater(() -> statusLabel.setText("Transferred %s to %d of %d function(s)"
                         .formatted(transfer.label().toLowerCase(), applied, matches.size())));
             }
@@ -1111,34 +1107,49 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         TaskBuilder.withTask(task).setParent(getComponent()).launchModal();
     }
 
+    /// Applies the matches locally, then renames on the portal only the functions that were renamed
+    /// here. A match can be skipped locally (a name the analyst set, a thunk, ...), and pushing it
+    /// anyway would overwrite the portal's name for a function whose local name was kept.
+    /// Returns how many functions were changed.
+    protected int transferMatches(List<GhidraFunctionMatchWithSignature> matches, ApplyMatchCmd.Transfer transfer) {
+        var applied = applyMatches(matches, transfer);
+        // The portal only stores names, so a signature-only transfer has nothing to push
+        if (transfer.includesName() && !applied.isEmpty()) {
+            batchRenameFunctions(applied);
+        }
+        return applied.size();
+    }
+
     protected void batchRenameFunctions(List<GhidraFunctionMatchWithSignature> functionMatches) {
         try {
             revengService.batchRenamingGhidraMatchesWithSignatures(functionMatches);
         } catch (Exception e) {
-            Msg.error(this, "Failed to rename functions: " + e.getMessage(), e);
-            SwingUtilities.invokeLater(() -> showError("Failed to rename functions: " + e.getMessage()));
+            Msg.error(this, "Failed to rename functions on the portal: " + e.getMessage(), e);
+            SwingUtilities.invokeLater(() -> showError(
+                    "Renamed locally, but failed to rename the functions on the portal: " + e.getMessage()));
         }
     }
 
-    /// Applies the matches to the program and returns how many functions were changed. Matches can be
+    /// Applies the matches to the program and returns those that changed a function. Matches can be
     /// skipped, e.g. a signature transfer for a match the portal has no signature for.
-    protected int applyMatches(List<GhidraFunctionMatchWithSignature> functionMatches, ApplyMatchCmd.Transfer transfer) {
+    protected List<GhidraFunctionMatchWithSignature> applyMatches(List<GhidraFunctionMatchWithSignature> functionMatches,
+                                                                  ApplyMatchCmd.Transfer transfer) {
         var program = analyzedProgram.program();
-        int[] applied = {0};
+        List<GhidraFunctionMatchWithSignature> applied = new ArrayList<>();
 
         program.withTransaction("Apply Function Matching " + transfer.label(), () -> {
                     for (GhidraFunctionMatchWithSignature match : functionMatches) {
                         // We don't pass a service, because we don't need to update individual functions on the portal
-                        // batchRenameFunctions already does that for us
+                        // transferMatches renames the applied ones in one batch afterwards
                         var cmd = new ApplyMatchCmd(null, analyzedProgram, match, false, transfer);
                         if (cmd.applyTo(program)) {
-                            applied[0]++;
+                            applied.add(match);
                         }
                     }
                 }
         );
         SwingUtilities.invokeLater(this::updateResultsTable);
-        return applied[0];
+        return applied;
     }
 
     @Override

@@ -1,16 +1,19 @@
 package ai.reveng;
 
 import ai.reveng.model.*;
+import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
@@ -18,6 +21,7 @@ import javax.swing.*;
 import generic.theme.GColor;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -576,6 +580,83 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         close(foundDialog);
         waitForSwing();
+    }
+
+    /**
+     * Transferring a name must only rename on the portal the functions it renamed locally. A function
+     * whose name the analyst set is skipped locally, so pushing the matched name for it would leave the
+     * portal holding a different name from the one kept in Ghidra.
+     */
+    @Test
+    public void testTransferOnlyRenamesOnThePortalWhatItAppliedLocally() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new RenameRecordingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        var program = analysedProgram.program();
+        env.showTool(program);
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+        waitForMatchingIdle(foundDialog);
+
+        var match = new GhidraFunctionMatchWithSignature(testFunction, new FunctionMatch(
+                new TypedApiInterface.FunctionID(100),
+                new TypedApiInterface.FunctionID(200),
+                "similar_function",
+                "similar_function",
+                "libc.so",
+                new TypedApiInterface.BinaryHash("1".repeat(64)),
+                false,
+                BigDecimal.valueOf(0.95),
+                BigDecimal.valueOf(0.87),
+                null), null);
+        var transferArgs = new Class<?>[] {List.class, ApplyMatchCmd.Transfer.class};
+
+        // A name the analyst set is kept, so nothing about the match may reach the portal
+        program.withTransaction("analyst rename", () -> testFunction.setName("analyst_name", SourceType.USER_DEFINED));
+        var applied = invokeInstanceMethod("transferMatches", foundDialog, transferArgs,
+                new Object[] {List.of(match), ApplyMatchCmd.Transfer.NAME});
+        assertEquals(0, applied);
+        assertEquals("analyst_name", testFunction.getName());
+        assertFalse("The skipped match must not be renamed on the portal: " + mockApi.pushedNames,
+                mockApi.pushedNames.contains("similar_function"));
+
+        // A name the analyst did not set is replaced, and the portal gets the same name
+        program.withTransaction("analysis name", () -> testFunction.setName("analysis_name", SourceType.ANALYSIS));
+        applied = invokeInstanceMethod("transferMatches", foundDialog, transferArgs,
+                new Object[] {List.of(match), ApplyMatchCmd.Transfer.NAME});
+        assertEquals(1, applied);
+        assertEquals("similar_function", testFunction.getName());
+        assertTrue("The applied match should be renamed on the portal: " + mockApi.pushedNames,
+                mockApi.pushedNames.contains("similar_function"));
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    /// Records the names sent to the portal for function 100, the test function.
+    static class RenameRecordingMockApi extends FunctionMatchingMockApi {
+        final List<String> pushedNames = new CopyOnWriteArrayList<>();
+
+        @Override
+        public long batchRenameFunctions(BatchRenameInputBody request) {
+            request.getFunctions().stream()
+                    .filter(item -> item.getFunctionId() == 100L)
+                    .forEach(item -> pushedNames.add(item.getNewName()));
+            return request.getFunctions().size();
+        }
     }
 
     /**

@@ -369,14 +369,19 @@ public class GhidraRevengService {
     }
 
     /// The function name as the portal expects it: qualified with its namespace path (joined by
-    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace and the global
-    /// namespace. Ghidra stores only the leaf label on the symbol, so the namespace must be
-    /// re-attached when pushing a rename back — the portal's function names include the namespace.
+    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace, the namespaces
+    /// under it, and the global namespace. Ghidra stores only the leaf label on the symbol, so the
+    /// namespace must be re-attached when pushing a rename back — the portal's function names
+    /// include the namespace. Applying a match files the function under
+    /// {@code RevEng.AI::<matched binary>}, and that binary name is not part of the function's name.
     static String qualifiedServerName(Function function) {
         List<String> parts = new ArrayList<>();
         parts.add(function.getName());
         for (Namespace ns = function.getParentNamespace(); ns != null && !ns.isGlobal(); ns = ns.getParentNamespace()) {
-            if (!REVENG_AI_NAMESPACE.equals(ns.getName())) {
+            if (REVENG_AI_NAMESPACE.equals(ns.getName())) {
+                // Drop the namespaces collected so far: they are all inside RevEng.AI
+                parts.subList(0, parts.size() - 1).clear();
+            } else {
                 parts.add(0, ns.getName());
             }
         }

@@ -3,13 +3,17 @@ package ai.reveng;
 import ai.reveng.model.BatchRenameInputBody;
 import ai.reveng.model.CreateAnalysisDataTypesInputBody;
 import ai.reveng.model.UpdateFunctionSignatureInputBody;
+import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.BinaryHash;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ghidra.program.model.address.AddressSet;
@@ -25,6 +29,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -89,6 +94,7 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
     private Program program;
     private Function first;
     private LocalEditSyncService sync;
+    private GhidraRevengService.AnalysedProgram analysedProgram;
 
     @Before
     public void analyse() throws Exception {
@@ -106,6 +112,7 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
 
         var withId = service.registerAnalysisForProgram(program, new AnalysisID(1));
         service.registerFinishedAnalysisForProgram(withId, TaskMonitor.DUMMY);
+        analysedProgram = service.getAnalysedProgram(program).orElseThrow();
         sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class),
                 (message, warning) -> {});
         sync.attach(program);
@@ -145,6 +152,42 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
         var pushed = api.renameRequests.get(0).getFunctions().stream()
                 .collect(java.util.stream.Collectors.toMap(item -> item.getFunctionId(), item -> item.getNewName()));
         assertEquals(Map.of(1L, "renamed_0", 2L, "renamed_1", 3L, "renamed_2"), pushed);
+    }
+
+    /// "Apply Match" files the function under `RevEng.AI::<matched binary>`. That namespace only
+    /// organises the matches, so the rename it triggers must push the bare name, not
+    /// `<matched binary>::<name>`.
+    @Test
+    public void anAppliedMatchPushesItsNameWithoutTheMatchedBinary() throws Exception {
+        var match = new GhidraFunctionMatchWithSignature(first, new FunctionMatch(
+                new FunctionID(1),
+                new FunctionID(200),
+                "matched_name",
+                "matched_name",
+                "libfoo.so",
+                new BinaryHash("abc123"),
+                false,
+                BigDecimal.valueOf(0.9),
+                BigDecimal.valueOf(0.9),
+                null), null);
+        edit("apply match", () -> new ApplyMatchCmd(null, analysedProgram, match, true).applyTo(program));
+        assertEquals("RevEng.AI::libfoo.so", first.getParentNamespace().getName(true));
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("matched_name", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
+    /// A namespace the analyst made is part of the function's name on the portal.
+    @Test
+    public void aRenameInsideAnAnalystNamespaceKeepsTheNamespace() throws Exception {
+        edit("move and rename", () -> {
+            var namespace = program.getSymbolTable().createNameSpace(null, "MyClass", SourceType.USER_DEFINED);
+            first.setParentNamespace(namespace);
+            first.setName("method", SourceType.USER_DEFINED);
+        });
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("MyClass::method", api.renameRequests.get(0).getFunctions().get(0).getNewName());
     }
 
     @Test
