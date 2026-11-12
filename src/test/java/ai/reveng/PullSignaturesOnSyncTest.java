@@ -119,8 +119,9 @@ public class PullSignaturesOnSyncTest extends RevEngMockableHeadedIntegrationTes
         }
 
         @Override
-        public void batchRenameFunctions(BatchRenameInputBody request) {
+        public long batchRenameFunctions(BatchRenameInputBody request) {
             // A name pushback is not what these tests are about; accept and ignore it.
+            return request.getFunctions().size();
         }
 
         @Override

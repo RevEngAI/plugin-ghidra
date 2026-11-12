@@ -699,8 +699,10 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public void batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
-        this.functionsRenamingHistoryApi.batchRenameFunctions(request);
+    public long batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
+        var response = this.functionsRenamingHistoryApi.batchRenameFunctions(request);
+        Long renamedCount = response == null ? null : response.getRenamedCount();
+        return renamedCount == null ? 0 : renamedCount;
     }
 
     /// GET /v3/functions/{function_id}/blocks

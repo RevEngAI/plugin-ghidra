@@ -283,7 +283,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 	}
 
 	private static String formatSyncSummary(GhidraRevengService.SyncSummary summary) {
-		return ("Synced %d matched function(s) with the portal.\n" +
+		var text = new StringBuilder(("Synced %d matched function(s) with the portal.\n" +
 				"Applied %d remote name(s) and %d remote signature(s); canonicalized %d and de-duplicated %d.\n" +
 				"Pushed %d name(s) and %d type set(s) back to the portal.").formatted(
 				summary.matchedFunctions(),
@@ -292,7 +292,21 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				summary.canonicalizedNames(),
 				summary.dedupedNames(),
 				summary.pushedNames(),
-				summary.pushedTypeSets());
+				summary.pushedTypeSets()));
+		if (summary.pushedLocalEdits() > 0) {
+			text.append("\nPushed %d local edit(s) that had not reached the portal yet."
+					.formatted(summary.pushedLocalEdits()));
+		}
+		if (summary.failedLocalEdits() > 0) {
+			text.append("\n%d local edit(s) still could not be pushed; the RevEng.AI log says why, and they are kept for the next sync."
+					.formatted(summary.failedLocalEdits()));
+		}
+		if (summary.nameConflicts() > 0 || summary.signatureConflicts() > 0) {
+			text.append(("\n%d name(s) and %d signature(s) differ between Ghidra and the portal and were left "
+					+ "as they are locally; the RevEng.AI log lists them.")
+					.formatted(summary.nameConflicts(), summary.signatureConflicts()));
+		}
+		return text.toString();
 	}
 
 	@Override

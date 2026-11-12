@@ -14,6 +14,7 @@ import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.UnpushedEdits;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
 import ghidra.app.cmd.function.FunctionRenameOption;
@@ -334,6 +335,9 @@ public class GhidraRevengService {
     /// Push local function renames back to the portal in one request. Answers with the
     /// namespace-qualified name pushed for each function; functions not known on the server are left
     /// out, and when none is known nothing is sent.
+    ///
+    /// @throws IllegalStateException when the portal accepted the request but renamed fewer functions
+    ///                               than were sent; it does not say which, so none counts as pushed
     public Map<Function, String> pushFunctionRenames(AnalysedProgram analysedProgram, Collection<Function> functions)
             throws ApiException {
         Map<Function, String> pushed = new LinkedHashMap<>();
@@ -356,7 +360,11 @@ public class GhidraRevengService {
         }
         var request = new BatchRenameInputBody();
         request.setFunctions(items);
-        api.batchRenameFunctions(request);
+        long renamed = api.batchRenameFunctions(request);
+        if (renamed < items.size()) {
+            throw new IllegalStateException("The portal renamed %d of the %d function(s) sent"
+                    .formatted(renamed, items.size()));
+        }
         return pushed;
     }
 
@@ -441,8 +449,33 @@ public class GhidraRevengService {
             int canonicalizedNames,
             int dedupedNames,
             int pushedNames,
-            int pushedTypeSets
+            int pushedTypeSets,
+            int pushedLocalEdits,
+            int failedLocalEdits,
+            int nameConflicts,
+            int signatureConflicts
     ) {}
+
+    /// What sending the unpushed local edits achieved. Every edit that failed is still marked.
+    ///
+    /// @param pushed      the edits that reached the portal this time
+    /// @param unsent      the edits that failed for a reason that may pass — see {@link PushFailure}
+    /// @param unsentError why the last of those failed, or null when none did
+    /// @param rejected    the edits the portal turned down, or that failed for good, one entry each
+    public record LocalEditFlush(int pushed, int unsent, @Nullable Exception unsentError,
+                                 List<RejectedEdit> rejected) {
+        public int failed() {
+            return unsent + rejected.size();
+        }
+    }
+
+    /// @param edit  which edit, for the log: "rename of \"foo\" at 00401000"
+    /// @param error why it failed
+    public record RejectedEdit(String edit, Exception error) {
+        public PushFailure failure() {
+            return PushFailure.of(error);
+        }
+    }
 
     private record PendingNamePush(TypedApiInterface.FunctionID functionID, String newName, String newMangledName) {}
     private record InvalidRemoteName(Function function, TypedApiInterface.FunctionID functionID, String remoteName) {}
@@ -459,6 +492,19 @@ public class GhidraRevengService {
     public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         var program = analysedProgram.program();
         log.info("Starting bidirectional sync with the RevEng.AI portal");
+        // Before the remote names are read, so an edit that goes up now is not then reported as a
+        // conflict with the portal's stale copy of it.
+        var flush = pushUnpushedEdits(analysedProgram);
+        if (flush.pushed() > 0) {
+            log.info("Pushed %d local edit(s) that had not reached the RevEng.AI portal".formatted(flush.pushed()));
+        }
+        if (flush.unsent() > 0) {
+            log.warn("Could not push %d local edit(s) to the RevEng.AI portal: %s"
+                    .formatted(flush.unsent(), flush.unsentError()));
+        }
+        for (RejectedEdit rejected : flush.rejected()) {
+            log.warn("The RevEng.AI portal did not take the %s: %s".formatted(rejected.edit(), rejected.error()));
+        }
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
                 .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
 
@@ -469,6 +515,7 @@ public class GhidraRevengService {
         int namesModifiedRemotely = 0;
         int deduped = 0;
         int canonicalizedNames = 0;
+        int nameConflicts = 0;
 
         var transactionId = startServerTransaction(program, "RevEng.AI: Sync Analysis Updates");
         boolean commit = false;
@@ -496,8 +543,16 @@ public class GhidraRevengService {
                 if (remoteName == null || remoteName.isBlank() || remoteName.equals(function.getName())) {
                     continue;
                 }
-                // Do not overwrite names the user has explicitly set locally.
+                // Do not overwrite names the user has explicitly set locally. The portal holding a
+                // different name for one means both sides renamed it, unless the local rename is
+                // still waiting to go up.
                 if (function.getSymbol().getSource() == SourceType.USER_DEFINED) {
+                    if (!remoteName.equals(qualifiedServerName(function))
+                            && !UnpushedEdits.isMarked(program, UnpushedEdits.Kind.NAME, function.getEntryPoint())) {
+                        nameConflicts++;
+                        log.warn("Name conflict at %s: \"%s\" locally, \"%s\" in the portal; kept the local name"
+                                .formatted(function.getEntryPoint(), function.getName(), remoteName));
+                    }
                     continue;
                 }
                 if (isInvalidGhidraName(remoteName)) {
@@ -556,15 +611,124 @@ public class GhidraRevengService {
         }
         // Pull before pushing, so the back-fill below sees the signatures this sync just applied and
         // does not send the local placeholder back up for a function the portal already described.
-        int appliedSignatures = applyRemoteSignatures(analysedProgram, monitor, log);
+        var signatures = applyRemoteSignatures(analysedProgram, monitor, log);
+        int appliedSignatures = signatures.applied();
         int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor, log);
 
         log.info(("Sync complete: %d matched, %d name(s) applied, %d signature(s) applied, %d canonicalized, "
-                + "%d de-duplicated, %d name(s) and %d type set(s) pushed back")
+                + "%d de-duplicated, %d name(s) and %d type set(s) pushed back, %d unpushed local edit(s) "
+                + "pushed and %d still failing, %d name and %d signature conflict(s)")
                 .formatted(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
-                        pushedNames, pushedTypeSets));
+                        pushedNames, pushedTypeSets, flush.pushed(), flush.failed(), nameConflicts,
+                        signatures.conflicts()));
         return new SyncSummary(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
-                pushedNames, pushedTypeSets);
+                pushedNames, pushedTypeSets, flush.pushed(), flush.failed(), nameConflicts, signatures.conflicts());
+    }
+
+    /// Push the local edits whose reactive push failed or never ran — see {@link UnpushedEdits}. A
+    /// function that is gone, or not part of the analysis, has nothing left to push and is unmarked.
+    /// Failures are returned rather than logged, so a caller retrying in the background can report an
+    /// outage once instead of once per attempt.
+    ///
+    /// The renames go up as one batch and the type edits through one type pass. When the portal
+    /// turns a batch down, the edits are sent again one at a time, so a single edit it will never
+    /// take does not keep the others from going up.
+    public LocalEditFlush pushUnpushedEdits(AnalysedProgram analysedProgram) {
+        var program = analysedProgram.program();
+        var flush = new FlushTally();
+        Map<Function, Address> renamed = markedFunctions(program, UnpushedEdits.Kind.NAME);
+        sendIsolatingRejections(program, UnpushedEdits.Kind.NAME, renamed, flush,
+                functions -> pushFunctionRenames(analysedProgram, functions).size(),
+                function -> "rename of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
+
+        Map<Function, Address> retyped = markedFunctions(program, UnpushedEdits.Kind.TYPES);
+        // A function the analysis does not know has no types on the portal to update.
+        retyped.keySet().removeIf(function -> {
+            boolean unknown = analysedProgram.getIDForFunction(function).isEmpty();
+            if (unknown) {
+                UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, function.getEntryPoint());
+            }
+            return unknown;
+        });
+        // A signature the portal has no extraction for is declined, but its types went up, which is
+        // all this push can do.
+        sendIsolatingRejections(program, UnpushedEdits.Kind.TYPES, retyped, flush,
+                functions -> {
+                    pushFunctionTypes(analysedProgram, functions);
+                    return functions.size();
+                },
+                function -> "types of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
+        return new LocalEditFlush(flush.pushed, flush.unsent, flush.unsentError, List.copyOf(flush.rejected));
+    }
+
+    private static final class FlushTally {
+        int pushed;
+        int unsent;
+        Exception unsentError;
+        final List<RejectedEdit> rejected = new ArrayList<>();
+    }
+
+    @FunctionalInterface
+    private interface EditSender {
+        /// Send the edits of these functions and answer with how many went up.
+        int send(List<Function> functions) throws Exception;
+    }
+
+    /// The functions with a `kind` edit marked, each with the address it is marked at. A mark whose
+    /// function is gone is cleared, since nothing is left to send.
+    private static Map<Function, Address> markedFunctions(Program program, UnpushedEdits.Kind kind) {
+        Map<Function, Address> marked = new LinkedHashMap<>();
+        for (Address entryPoint : UnpushedEdits.marked(program, kind)) {
+            var function = program.getFunctionManager().getFunctionAt(entryPoint);
+            if (function == null) {
+                UnpushedEdits.clear(program, kind, entryPoint);
+            } else {
+                marked.put(function, entryPoint);
+            }
+        }
+        return marked;
+    }
+
+    /// Send `marked` as one batch and clear the marks of what went up. When the portal turns the
+    /// batch down, send each edit on its own to find the ones it will not take. A failure that may
+    /// pass leaves the rest for a later attempt instead, since sending them one by one would only
+    /// fail the same way more often.
+    private static void sendIsolatingRejections(Program program, UnpushedEdits.Kind kind,
+                                                Map<Function, Address> marked, FlushTally flush,
+                                                EditSender sender,
+                                                java.util.function.Function<Function, String> describe) {
+        if (marked.isEmpty()) {
+            return;
+        }
+        List<Function> functions = List.copyOf(marked.keySet());
+        try {
+            flush.pushed += sender.send(functions);
+            marked.values().forEach(entryPoint -> UnpushedEdits.clear(program, kind, entryPoint));
+            return;
+        } catch (Exception e) {
+            if (PushFailure.of(e) != PushFailure.REJECTED || functions.size() == 1) {
+                record(flush, functions, e, describe);
+                return;
+            }
+        }
+        for (Function function : functions) {
+            try {
+                flush.pushed += sender.send(List.of(function));
+                UnpushedEdits.clear(program, kind, marked.get(function));
+            } catch (Exception e) {
+                record(flush, List.of(function), e, describe);
+            }
+        }
+    }
+
+    private static void record(FlushTally flush, List<Function> functions, Exception e,
+                               java.util.function.Function<Function, String> describe) {
+        if (PushFailure.of(e) == PushFailure.TRANSIENT) {
+            flush.unsent += functions.size();
+            flush.unsentError = e;
+        } else {
+            functions.forEach(function -> flush.rejected.add(new RejectedEdit(describe.apply(function), e)));
+        }
     }
 
     /// Apply the signatures — and with them the data types they name — that the portal holds for this
@@ -581,15 +745,20 @@ public class GhidraRevengService {
     /// inferred. That is also what makes a second sync useful: an earlier pull stamps
     /// {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the first
     /// into a no-op.
-    private int applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) {
+    ///
+    /// A hand-written local signature that differs from the portal's is counted as a conflict rather
+    /// than applied, unless the local edit is still waiting to go up.
+    private SignaturePull applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor,
+                                                ReaiLoggingService log) {
         var functionMap = analysedProgram.getFunctionMap();
         if (functionMap.isEmpty()) {
-            return 0;
+            return new SignaturePull(0, 0);
         }
         var batch = signatures().getMany(List.copyOf(functionMap.keySet()));
         Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
         var program = analysedProgram.program();
         int applied = 0;
+        int conflicts = 0;
         var transactionId = startServerTransaction(program, "RevEng.AI: Apply Portal Signatures");
         try {
             for (BatchFunctionSignatureEntry entry : batch.items()) {
@@ -601,11 +770,20 @@ public class GhidraRevengService {
                 }
                 var function = functionMap.get(new TypedApiInterface.FunctionID(entry.getFunctionId()));
                 if (function == null || function.isExternal() || function.isThunk()
-                        || function.getSignatureSource() == SourceType.USER_DEFINED
                         || localSignatureOutranks(function, entry)) {
                     continue;
                 }
                 var signature = getFunctionSignature(entry, decoderFor(decoders, batch, entry));
+                if (function.getSignatureSource() == SourceType.USER_DEFINED) {
+                    if (!matchesLocalSignature(function, signature)
+                            && !UnpushedEdits.isMarked(program, UnpushedEdits.Kind.TYPES, function.getEntryPoint())) {
+                        conflicts++;
+                        log.warn("Signature conflict for \"%s\" at %s: the portal holds %s; kept the local signature"
+                                .formatted(function.getName(), function.getEntryPoint(),
+                                        signature.getPrototypeString()));
+                    }
+                    continue;
+                }
                 // The portal derives a signature for every function when the analysis completes, so
                 // most of them match what is already on the function. Applying those regardless would
                 // churn the type manager and fill the undo history on every sync.
@@ -629,8 +807,12 @@ public class GhidraRevengService {
         } finally {
             endServerTransaction(program, transactionId, applied > 0 && !monitor.isCancelled());
         }
-        return applied;
+        return new SignaturePull(applied, conflicts);
     }
+
+    /// @param applied   portal signatures that landed locally
+    /// @param conflicts hand-written local signatures the portal disagrees with
+    private record SignaturePull(int applied, int conflicts) {}
 
     /// Whether the function's own signature beats one the server extracted itself. A SYSTEM signature
     /// is what server-side Ghidra worked out, so it adds nothing over a signature imported from debug
@@ -725,8 +907,8 @@ public class GhidraRevengService {
         }).toList();
         var request = new BatchRenameInputBody();
         request.setFunctions(items);
-        api.batchRenameFunctions(request);
-        return namePushbacks.size();
+        // The count the portal reports, not the number asked for: a rename it skipped did not happen.
+        return Math.toIntExact(api.batchRenameFunctions(request));
     }
 
     /// Push local types for matched functions whose remote types are absent or could not be applied,

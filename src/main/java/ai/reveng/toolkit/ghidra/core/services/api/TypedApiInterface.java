@@ -241,7 +241,9 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getFunctionsMatches not implemented yet");
     }
 
-    default void batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
+    /// Answers with the number of functions the server actually renamed, which can be fewer than were
+    /// asked for even though the request succeeded.
+    default long batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
         throw new UnsupportedOperationException("batchRenameFunctions not implemented yet");
     }
 
