@@ -65,47 +65,25 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
     private final ApiClient apiClient;
+    private final ApiClient uploadClient;
+    private final AnalysesCoreApi uploadApi;
+
+    /// Ordinary requests: a page of functions or a batch of signatures, which the server answers quickly.
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
+
+    /// Uploading a large binary, and the server hashing and storing it before it answers, takes far
+    /// longer than any other request.
+    private static final Duration UPLOAD_TIMEOUT = Duration.ofMinutes(5);
 
     /// Every instance owns its client. The SDK's default client is process-global, so configuring it
     /// here let the setup wizard's throwaway validation instance re-target the running session, and
     /// stacked one more logging interceptor onto it per instance.
     public TypedApiImplementation(String baseUrl, String apiKey) {
-        var apiClient = new ApiClient();
+        var userAgent = userAgent();
+        var apiClient = newClient(baseUrl, apiKey, userAgent, REQUEST_TIMEOUT);
         this.apiClient = apiClient;
-        apiClient.setBasePath(baseUrl);
-
-        String pluginVersion = "unknown";
-        try {
-            // This file comes from the release.yml running in the CI
-            var inputStream = ResourceManager.getResourceAsStream("reai_ghidra_plugin_version.txt");
-            if (inputStream != null) {
-                pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
-                inputStream.close();
-            }
-        } catch (IOException e) {
-            // ignore — fall back to "unknown"
-        }
-        // Looks like:
-        // Ghidra/11.3.2-PUBLIC (LINUX(Linux) X86_64(amd64)) RevEng.AI_Plugin/v0.15
-        var userAgent = "%s/%s-%s (%s) RevEng.AI_Plugin/%s".formatted(Application.getName(), Application.getApplicationVersion(), Platform.CURRENT_PLATFORM, Application.getApplicationReleaseName(), pluginVersion);
-
-        apiClient.setUserAgent(userAgent);
-        apiClient.addDefaultHeader("X-RevEng-Application", userAgent);
-
-        // Use a custom HTTP client to add Ghidra specific logging
-        // Set withResponseBody to true if debugging issues with the API to see the full response body
-        // Bound DNS too: the connect timeout below doesn't cover it, and offline it can hang for minutes
-        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder()
-                .addInterceptor(ghidraLogger(false))
-                .dns(new TimeoutDns(Dns.SYSTEM, Duration.ofSeconds(5)))
-                .build());
-
-        apiClient.setConnectTimeout(5000);
-        apiClient.setReadTimeout(15000);
-        apiClient.setWriteTimeout(15000);
-
-        ApiKeyAuth APIKey = (ApiKeyAuth) apiClient.getAuthentication("APIKey");
-        APIKey.setApiKey(apiKey);
+        this.uploadClient = newClient(baseUrl, apiKey, userAgent, UPLOAD_TIMEOUT);
+        this.uploadApi = new AnalysesCoreApi(uploadClient);
 
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
@@ -129,13 +107,60 @@ public class TypedApiImplementation implements TypedApiInterface {
         return apiClient;
     }
 
+    /// The client uploads go through, with a longer timeout than {@link #apiClient()}.
+    ApiClient uploadClient() {
+        return uploadClient;
+    }
+
+    private static String userAgent() {
+        String pluginVersion = "unknown";
+        try {
+            // This file comes from the release.yml running in the CI
+            var inputStream = ResourceManager.getResourceAsStream("reai_ghidra_plugin_version.txt");
+            if (inputStream != null) {
+                pluginVersion = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8).trim();
+                inputStream.close();
+            }
+        } catch (IOException e) {
+            // ignore — fall back to "unknown"
+        }
+        // Looks like:
+        // Ghidra/11.3.2-PUBLIC (LINUX(Linux) X86_64(amd64)) RevEng.AI_Plugin/v0.15
+        return "%s/%s-%s (%s) RevEng.AI_Plugin/%s".formatted(Application.getName(), Application.getApplicationVersion(), Platform.CURRENT_PLATFORM, Application.getApplicationReleaseName(), pluginVersion);
+    }
+
+    private static ApiClient newClient(String baseUrl, String apiKey, String userAgent, Duration timeout) {
+        var apiClient = new ApiClient();
+        apiClient.setBasePath(baseUrl);
+        apiClient.setUserAgent(userAgent);
+        apiClient.addDefaultHeader("X-RevEng-Application", userAgent);
+
+        // Use a custom HTTP client to add Ghidra specific logging
+        // Set withResponseBody to true if debugging issues with the API to see the full response body
+        // Bound DNS too: the connect timeout below doesn't cover it, and offline it can hang for minutes
+        // Retry sits ahead of the logger so that every attempt is logged
+        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder()
+                .addInterceptor(RetryInterceptor.standard())
+                .addInterceptor(ghidraLogger(false))
+                .dns(new TimeoutDns(Dns.SYSTEM, Duration.ofSeconds(5)))
+                .build());
+
+        apiClient.setConnectTimeout(5000);
+        apiClient.setReadTimeout(Math.toIntExact(timeout.toMillis()));
+        apiClient.setWriteTimeout(Math.toIntExact(timeout.toMillis()));
+
+        ApiKeyAuth APIKey = (ApiKeyAuth) apiClient.getAuthentication("APIKey");
+        APIKey.setApiKey(apiKey);
+        return apiClient;
+    }
+
     public BinaryHash upload(Path binPath) throws FileNotFoundException, ApiException {
         File bin = binPath.toFile();
 
         if (!bin.exists())
             throw new FileNotFoundException("Binary to upload does not exist");
 
-        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
+        var result = this.uploadApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
 
         if (result.getData() == null) {
             throw new ApiException("Upload response carried no data");

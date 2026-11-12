@@ -82,6 +82,28 @@ public class ApiClientIsolationTest extends AbstractStubServerTest {
         assertEquals(1, loggers);
     }
 
+    /// Uploads used to share the 15 s limit of every other request.
+    @Test
+    public void uploadsGetALongerTimeoutThanOtherRequests() {
+        var api = api();
+
+        assertEquals(15_000, api.apiClient().getHttpClient().readTimeoutMillis());
+        assertEquals(300_000, api.uploadClient().getHttpClient().readTimeoutMillis());
+        assertEquals(300_000, api.uploadClient().getHttpClient().writeTimeoutMillis());
+        assertEquals(stubUrl(), api.uploadClient().getBasePath());
+    }
+
+    @Test
+    public void bothClientsRetry() {
+        var api = api();
+
+        for (var client : List.of(api.apiClient(), api.uploadClient())) {
+            assertEquals(1, client.getHttpClient().interceptors().stream()
+                    .filter(RetryInterceptor.class::isInstance)
+                    .count());
+        }
+    }
+
     @Test
     public void reconfiguringTheServiceSwitchesItsCredentials() {
         var service = new GhidraRevengService(new ApiInfo(stubUrl(), "http://portal.invalid", "old-key"));
