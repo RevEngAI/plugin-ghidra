@@ -98,10 +98,11 @@ public class LocalEditsDuringSyncTest extends RevEngMockableHeadedIntegrationTes
         }
 
         @Override
-        public void batchRenameFunctions(BatchRenameInputBody request) {
+        public long batchRenameFunctions(BatchRenameInputBody request) {
             for (var item : request.getFunctions()) {
                 renamed.put(item.getFunctionId(), item.getNewName());
             }
+            return request.getFunctions().size();
         }
 
         @Override
@@ -155,7 +156,8 @@ public class LocalEditsDuringSyncTest extends RevEngMockableHeadedIntegrationTes
     }
 
     private void listenTo(Function... functions) {
-        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class));
+        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class),
+                (message, warning) -> {});
         for (Function function : functions) {
             sync.attach(function.getProgram());
         }

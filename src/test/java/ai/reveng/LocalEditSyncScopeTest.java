@@ -59,8 +59,9 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
         }
 
         @Override
-        public void batchRenameFunctions(BatchRenameInputBody request) {
+        public long batchRenameFunctions(BatchRenameInputBody request) {
             renameRequests.add(request);
+            return request.getFunctions().size();
         }
 
         @Override
@@ -105,7 +106,8 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
 
         var withId = service.registerAnalysisForProgram(program, new AnalysisID(1));
         service.registerFinishedAnalysisForProgram(withId, TaskMonitor.DUMMY);
-        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class));
+        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class),
+                (message, warning) -> {});
         sync.attach(program);
     }
 
