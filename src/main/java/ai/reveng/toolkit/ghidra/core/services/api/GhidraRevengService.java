@@ -51,7 +51,7 @@ import java.util.*;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -84,10 +84,10 @@ public class GhidraRevengService {
     private volatile TypedApiInterface api;
     private volatile ApiInfo apiInfo;
 
-    /// Set while the plugin is applying server-sourced changes locally (pull / analysis-sync), so the
-    /// reactive listener does not echo those changes straight back to the portal. Mirrors the IDA
-    /// plugin's {@code analysis_sync_service.is_worker_running()} guard.
-    private final AtomicBoolean pushbackSuppressed = new AtomicBoolean(false);
+    /// The programs the plugin is writing server-sourced changes into right now, each with how many
+    /// such writes overlap, so the reactive listener does not echo those changes straight back to the
+    /// portal. See {@link #startServerTransaction}.
+    private final Map<Program, Integer> applyingServerChanges = new ConcurrentHashMap<>();
 
     /// dedicated functions on the GhidraRevengService should be used instead to enforce assumptions via
     /// type level guarantees
@@ -429,15 +429,6 @@ public class GhidraRevengService {
     /// for matched functions whose remote types are absent or could not be applied. Mirrors the IDA
     /// plugin's {@code analysis_sync.py}.
     public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
-        pushbackSuppressed.set(true);
-        try {
-            return syncAnalysisUpdatesInternal(analysedProgram, monitor, log);
-        } finally {
-            pushbackSuppressed.set(false);
-        }
-    }
-
-    private SyncSummary syncAnalysisUpdatesInternal(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         var program = analysedProgram.program();
         log.info("Starting bidirectional sync with the RevEng.AI portal");
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
@@ -451,7 +442,7 @@ public class GhidraRevengService {
         int deduped = 0;
         int canonicalizedNames = 0;
 
-        var transactionId = program.startTransaction("RevEng.AI: Sync Analysis Updates");
+        var transactionId = startServerTransaction(program, "RevEng.AI: Sync Analysis Updates");
         boolean commit = false;
         try {
             // Creating the RevEng.AI namespace is a DB write, so it must happen inside the transaction.
@@ -526,7 +517,7 @@ public class GhidraRevengService {
             commit = !namePushbacks.isEmpty() || namesModifiedRemotely > 0;
             canonicalizedNames = canonicalized;
         } finally {
-            program.endTransaction(transactionId, commit && !monitor.isCancelled());
+            endServerTransaction(program, transactionId, commit && !monitor.isCancelled());
         }
 
         // Push back over the network only after the local transaction has closed, so we don't hold a
@@ -551,7 +542,7 @@ public class GhidraRevengService {
     /// Apply the signatures — and with them the data types they name — that the portal holds for this
     /// analysis' functions, and answer with how many landed.
     ///
-    /// Names are deliberately left alone. {@link #syncAnalysisUpdatesInternal} owns that decision,
+    /// Names are deliberately left alone. {@link #syncAnalysisUpdates} owns that decision,
     /// including canonicalising names Ghidra rejects and de-duplicating the ones it has already
     /// applied this run, so the command is given {@link FunctionRenameOption#NO_CHANGE} and nothing
     /// here competes with it.
@@ -571,7 +562,7 @@ public class GhidraRevengService {
         Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
         var program = analysedProgram.program();
         int applied = 0;
-        var transactionId = program.startTransaction("RevEng.AI: Apply Portal Signatures");
+        var transactionId = startServerTransaction(program, "RevEng.AI: Apply Portal Signatures");
         try {
             for (BatchFunctionSignatureEntry entry : batch.items()) {
                 if (monitor.isCancelled()) {
@@ -608,7 +599,7 @@ public class GhidraRevengService {
                 }
             }
         } finally {
-            program.endTransaction(transactionId, applied > 0 && !monitor.isCancelled());
+            endServerTransaction(program, transactionId, applied > 0 && !monitor.isCancelled());
         }
         return applied;
     }
@@ -759,6 +750,47 @@ public class GhidraRevengService {
         }
     }
 
+    /// Start a transaction that writes server-sourced changes into `program`, during which the reactive
+    /// listener ignores that program's type and variable events. Close it with
+    /// {@link #endServerTransaction}.
+    ///
+    /// The window is this one write, not the whole sync: a sync spends most of its time on network
+    /// calls, and suppressing for all of it dropped every edit the analyst made meanwhile, in every
+    /// open program. Ghidra delivers change events later, from a timer, so the window is bounded by
+    /// flushing them: once before, so edits made up to now are delivered as the analyst's, and once
+    /// after, so this write's own events are delivered while they are still recognisably ours.
+    /// Function and variable renames are never suppressed — see
+    /// {@link ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService}.
+    private int startServerTransaction(Program program, String description) {
+        program.flushEvents();
+        applyingServerChanges.merge(program, 1, Integer::sum);
+        try {
+            return program.startTransaction(description);
+        } catch (RuntimeException e) {
+            releaseServerChanges(program);
+            throw e;
+        }
+    }
+
+    private void endServerTransaction(Program program, int transactionId, boolean commit) {
+        try {
+            program.endTransaction(transactionId, commit);
+            program.flushEvents();
+        } finally {
+            releaseServerChanges(program);
+        }
+    }
+
+    private void releaseServerChanges(Program program) {
+        applyingServerChanges.computeIfPresent(program, (p, writes) -> writes > 1 ? writes - 1 : null);
+    }
+
+    /// True while the plugin is writing server-sourced changes into `program`; the reactive listener
+    /// uses this to avoid pushing those changes back to the portal.
+    public boolean isApplyingServerChanges(Program program) {
+        return applyingServerChanges.containsKey(program);
+    }
+
     private boolean applyRemoteName(Program program, Function function, Namespace revEngNamespace, String name) {
         try {
             function.setParentNamespace(revEngNamespace);
@@ -800,22 +832,7 @@ public class GhidraRevengService {
     /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
     ///
     public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
-        pushbackSuppressed.set(true);
-        try {
-            return pullFunctionInfoFromAnalysisInternal(analysedProgram, monitor);
-        } finally {
-            pushbackSuppressed.set(false);
-        }
-    }
-
-    /// True while the plugin is applying server-sourced changes locally; the reactive listener uses
-    /// this to avoid pushing those changes back to the portal.
-    public boolean isPushbackSuppressed() {
-        return pushbackSuppressed.get();
-    }
-
-    private List<RenameResult> pullFunctionInfoFromAnalysisInternal(AnalysedProgram analysedProgram, TaskMonitor monitor) {
-        var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
+        var transactionId = startServerTransaction(analysedProgram.program(), "RevEng.AI: Pull Function Info from Analysis");
 
         List<RenameResult> renameResults = new ArrayList<>();
 
@@ -954,7 +971,7 @@ public class GhidraRevengService {
             }
         } finally {
             // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-            analysedProgram.program().endTransaction(transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
+            endServerTransaction(analysedProgram.program(), transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
         }
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
