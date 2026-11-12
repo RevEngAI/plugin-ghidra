@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
@@ -369,14 +368,19 @@ public class GhidraRevengService {
     }
 
     /// The function name as the portal expects it: qualified with its namespace path (joined by
-    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace and the global
-    /// namespace. Ghidra stores only the leaf label on the symbol, so the namespace must be
-    /// re-attached when pushing a rename back — the portal's function names include the namespace.
+    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace, the namespaces
+    /// under it, and the global namespace. Ghidra stores only the leaf label on the symbol, so the
+    /// namespace must be re-attached when pushing a rename back — the portal's function names
+    /// include the namespace. Applying a match files the function under
+    /// {@code RevEng.AI::<matched binary>}, and that binary name is not part of the function's name.
     static String qualifiedServerName(Function function) {
         List<String> parts = new ArrayList<>();
         parts.add(function.getName());
         for (Namespace ns = function.getParentNamespace(); ns != null && !ns.isGlobal(); ns = ns.getParentNamespace()) {
-            if (!REVENG_AI_NAMESPACE.equals(ns.getName())) {
+            if (REVENG_AI_NAMESPACE.equals(ns.getName())) {
+                // Drop the namespaces collected so far: they are all inside RevEng.AI
+                parts.subList(0, parts.size() - 1).clear();
+            } else {
                 parts.add(0, ns.getName());
             }
         }
@@ -1646,31 +1650,6 @@ public class GhidraRevengService {
     public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
         return api.getFunctionsMatches(functionIds);
     }
-
-    public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
-        // Pushing types to the portal is not supported yet, so we just extract the function matches and call the other method
-        batchRenameMatches(functionsList.stream()
-                .map(GhidraFunctionMatchWithSignature::functionMatch)
-                .toList());
-
-    }
-
-    public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
-        var items = functionsList.stream()
-                .map(result -> {
-                    var item = new BatchRenameItem();
-                    item.setFunctionId(result.origin_function_id().value());
-                    item.setNewName(result.nearest_neighbor_function_name());
-                    item.setNewMangledName(result.nearest_neighbor_mangled_function_name());
-                    return item;
-                })
-                .toList();
-
-        var request = new BatchRenameInputBody();
-        request.setFunctions(items);
-        api.batchRenameFunctions(request);
-    }
-
 
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished

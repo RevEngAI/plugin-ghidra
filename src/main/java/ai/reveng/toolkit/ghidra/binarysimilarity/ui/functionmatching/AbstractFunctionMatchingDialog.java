@@ -1098,10 +1098,6 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         var task = new Task("Transferring " + transfer.label(), true, false, false) {
             @Override
             public void run(TaskMonitor monitor) {
-                // The portal only stores names, so a signature-only transfer has nothing to push
-                if (transfer.includesName()) {
-                    batchRenameFunctions(matches);
-                }
                 int applied = applyMatches(matches, transfer);
                 SwingUtilities.invokeLater(() -> statusLabel.setText("Transferred %s to %d of %d function(s)"
                         .formatted(transfer.label().toLowerCase(), applied, matches.size())));
@@ -1111,25 +1107,17 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
         TaskBuilder.withTask(task).setParent(getComponent()).launchModal();
     }
 
-    protected void batchRenameFunctions(List<GhidraFunctionMatchWithSignature> functionMatches) {
-        try {
-            revengService.batchRenamingGhidraMatchesWithSignatures(functionMatches);
-        } catch (Exception e) {
-            Msg.error(this, "Failed to rename functions: " + e.getMessage(), e);
-            SwingUtilities.invokeLater(() -> showError("Failed to rename functions: " + e.getMessage()));
-        }
-    }
-
     /// Applies the matches to the program and returns how many functions were changed. Matches can be
-    /// skipped, e.g. a signature transfer for a match the portal has no signature for.
+    /// skipped, e.g. a signature transfer for a match the portal has no signature for, or a name
+    /// transfer to a function the analyst named.
     protected int applyMatches(List<GhidraFunctionMatchWithSignature> functionMatches, ApplyMatchCmd.Transfer transfer) {
         var program = analyzedProgram.program();
         int[] applied = {0};
 
         program.withTransaction("Apply Function Matching " + transfer.label(), () -> {
                     for (GhidraFunctionMatchWithSignature match : functionMatches) {
-                        // We don't pass a service, because we don't need to update individual functions on the portal
-                        // batchRenameFunctions already does that for us
+                        // We don't pass a service, because we don't need to update individual functions on the portal:
+                        // LocalEditSyncService pushes the renames applied here, and only those, in one batch
                         var cmd = new ApplyMatchCmd(null, analyzedProgram, match, false, transfer);
                         if (cmd.applyTo(program)) {
                             applied[0]++;
