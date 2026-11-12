@@ -456,10 +456,26 @@ public class GhidraRevengService {
             int signatureConflicts
     ) {}
 
-    /// @param pushed the unpushed local edits that reached the portal this time
-    /// @param failed the ones that failed again and are still marked
-    /// @param error  why the last of those failed, or null when none did
-    public record LocalEditFlush(int pushed, int failed, @Nullable Exception error) {}
+    /// What sending the unpushed local edits achieved. Every edit that failed is still marked.
+    ///
+    /// @param pushed      the edits that reached the portal this time
+    /// @param unsent      the edits that failed for a reason that may pass — see {@link PushFailure}
+    /// @param unsentError why the last of those failed, or null when none did
+    /// @param rejected    the edits the portal turned down, or that failed for good, one entry each
+    public record LocalEditFlush(int pushed, int unsent, @Nullable Exception unsentError,
+                                 List<RejectedEdit> rejected) {
+        public int failed() {
+            return unsent + rejected.size();
+        }
+    }
+
+    /// @param edit  which edit, for the log: "rename of \"foo\" at 00401000"
+    /// @param error why it failed
+    public record RejectedEdit(String edit, Exception error) {
+        public PushFailure failure() {
+            return PushFailure.of(error);
+        }
+    }
 
     private record PendingNamePush(TypedApiInterface.FunctionID functionID, String newName, String newMangledName) {}
     private record InvalidRemoteName(Function function, TypedApiInterface.FunctionID functionID, String remoteName) {}
@@ -482,8 +498,12 @@ public class GhidraRevengService {
         if (flush.pushed() > 0) {
             log.info("Pushed %d local edit(s) that had not reached the RevEng.AI portal".formatted(flush.pushed()));
         }
-        if (flush.failed() > 0) {
-            log.warn("Could not push %d local edit(s) to the RevEng.AI portal: %s".formatted(flush.failed(), flush.error()));
+        if (flush.unsent() > 0) {
+            log.warn("Could not push %d local edit(s) to the RevEng.AI portal: %s"
+                    .formatted(flush.unsent(), flush.unsentError()));
+        }
+        for (RejectedEdit rejected : flush.rejected()) {
+            log.warn("The RevEng.AI portal did not take the %s: %s".formatted(rejected.edit(), rejected.error()));
         }
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
                 .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
@@ -609,53 +629,106 @@ public class GhidraRevengService {
     /// function that is gone, or not part of the analysis, has nothing left to push and is unmarked.
     /// Failures are returned rather than logged, so a caller retrying in the background can report an
     /// outage once instead of once per attempt.
+    ///
+    /// The renames go up as one batch and the type edits through one type pass. When the portal
+    /// turns a batch down, the edits are sent again one at a time, so a single edit it will never
+    /// take does not keep the others from going up.
     public LocalEditFlush pushUnpushedEdits(AnalysedProgram analysedProgram) {
         var program = analysedProgram.program();
-        int pushed = 0;
-        int failed = 0;
-        Exception error = null;
-        List<Address> nameMarks = UnpushedEdits.marked(program, UnpushedEdits.Kind.NAME);
-        List<Function> renamed = new ArrayList<>();
-        for (Address entryPoint : nameMarks) {
-            var function = program.getFunctionManager().getFunctionAt(entryPoint);
-            if (function != null) {
-                renamed.add(function);
-            }
-        }
-        if (!nameMarks.isEmpty()) {
-            try {
-                // One request for them all, as the reactive push sends them.
-                pushed += pushFunctionRenames(analysedProgram, renamed).size();
-                nameMarks.forEach(entryPoint -> UnpushedEdits.clear(program, UnpushedEdits.Kind.NAME, entryPoint));
-            } catch (Exception e) {
-                failed += renamed.size();
-                error = e;
-            }
-        }
+        var flush = new FlushTally();
+        Map<Function, Address> renamed = markedFunctions(program, UnpushedEdits.Kind.NAME);
+        sendIsolatingRejections(program, UnpushedEdits.Kind.NAME, renamed, flush,
+                functions -> pushFunctionRenames(analysedProgram, functions).size(),
+                function -> "rename of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
 
-        List<Address> typeMarks = UnpushedEdits.marked(program, UnpushedEdits.Kind.TYPES);
-        List<Function> typeEdits = new ArrayList<>();
-        for (Address entryPoint : typeMarks) {
+        Map<Function, Address> retyped = markedFunctions(program, UnpushedEdits.Kind.TYPES);
+        // A function the analysis does not know has no types on the portal to update.
+        retyped.keySet().removeIf(function -> {
+            boolean unknown = analysedProgram.getIDForFunction(function).isEmpty();
+            if (unknown) {
+                UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, function.getEntryPoint());
+            }
+            return unknown;
+        });
+        // A signature the portal has no extraction for is declined, but its types went up, which is
+        // all this push can do.
+        sendIsolatingRejections(program, UnpushedEdits.Kind.TYPES, retyped, flush,
+                functions -> {
+                    pushFunctionTypes(analysedProgram, functions);
+                    return functions.size();
+                },
+                function -> "types of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
+        return new LocalEditFlush(flush.pushed, flush.unsent, flush.unsentError, List.copyOf(flush.rejected));
+    }
+
+    private static final class FlushTally {
+        int pushed;
+        int unsent;
+        Exception unsentError;
+        final List<RejectedEdit> rejected = new ArrayList<>();
+    }
+
+    @FunctionalInterface
+    private interface EditSender {
+        /// Send the edits of these functions and answer with how many went up.
+        int send(List<Function> functions) throws Exception;
+    }
+
+    /// The functions with a `kind` edit marked, each with the address it is marked at. A mark whose
+    /// function is gone is cleared, since nothing is left to send.
+    private static Map<Function, Address> markedFunctions(Program program, UnpushedEdits.Kind kind) {
+        Map<Function, Address> marked = new LinkedHashMap<>();
+        for (Address entryPoint : UnpushedEdits.marked(program, kind)) {
             var function = program.getFunctionManager().getFunctionAt(entryPoint);
-            if (function != null && analysedProgram.getIDForFunction(function).isPresent()) {
-                typeEdits.add(function);
+            if (function == null) {
+                UnpushedEdits.clear(program, kind, entryPoint);
+            } else {
+                marked.put(function, entryPoint);
             }
         }
-        if (!typeMarks.isEmpty()) {
+        return marked;
+    }
+
+    /// Send `marked` as one batch and clear the marks of what went up. When the portal turns the
+    /// batch down, send each edit on its own to find the ones it will not take. A failure that may
+    /// pass leaves the rest for a later attempt instead, since sending them one by one would only
+    /// fail the same way more often.
+    private static void sendIsolatingRejections(Program program, UnpushedEdits.Kind kind,
+                                                Map<Function, Address> marked, FlushTally flush,
+                                                EditSender sender,
+                                                java.util.function.Function<Function, String> describe) {
+        if (marked.isEmpty()) {
+            return;
+        }
+        List<Function> functions = List.copyOf(marked.keySet());
+        try {
+            flush.pushed += sender.send(functions);
+            marked.values().forEach(entryPoint -> UnpushedEdits.clear(program, kind, entryPoint));
+            return;
+        } catch (Exception e) {
+            if (PushFailure.of(e) != PushFailure.REJECTED || functions.size() == 1) {
+                record(flush, functions, e, describe);
+                return;
+            }
+        }
+        for (Function function : functions) {
             try {
-                // One type pass for them all, as in the back-fill below. A signature the portal has no
-                // extraction for is declined, but its types went up, which is all this push can do.
-                if (!typeEdits.isEmpty()) {
-                    pushFunctionTypes(analysedProgram, typeEdits);
-                }
-                pushed += typeEdits.size();
-                typeMarks.forEach(entryPoint -> UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, entryPoint));
+                flush.pushed += sender.send(List.of(function));
+                UnpushedEdits.clear(program, kind, marked.get(function));
             } catch (Exception e) {
-                failed += typeEdits.size();
-                error = e;
+                record(flush, List.of(function), e, describe);
             }
         }
-        return new LocalEditFlush(pushed, failed, error);
+    }
+
+    private static void record(FlushTally flush, List<Function> functions, Exception e,
+                               java.util.function.Function<Function, String> describe) {
+        if (PushFailure.of(e) == PushFailure.TRANSIENT) {
+            flush.unsent += functions.size();
+            flush.unsentError = e;
+        } else {
+            functions.forEach(function -> flush.rejected.add(new RejectedEdit(describe.apply(function), e)));
+        }
     }
 
     /// Apply the signatures — and with them the data types they name — that the portal holds for this

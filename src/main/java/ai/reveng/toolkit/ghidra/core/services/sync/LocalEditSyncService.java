@@ -3,6 +3,7 @@ package ai.reveng.toolkit.ghidra.core.services.sync;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraDataTypeEncoder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
+import ai.reveng.toolkit.ghidra.core.services.api.PushFailure;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
@@ -49,11 +50,20 @@ import java.util.function.BiConsumer;
  * ever writes {@link SourceType#ANALYSIS} names, and only {@link SourceType#USER_DEFINED} ones are
  * pushed, so an analyst's rename is pushed even when it lands in the middle of a sync.
  *
- * <p>A push that fails leaves the edit marked in {@link UnpushedEdits} until a push succeeds. The
- * marked edits of that program are then retried in the background, backing off from
- * {@link #RETRY_DELAYS}, and "Sync with portal" sends them too. A failing portal is reported once,
- * in the plugin log and the status bar, however many pushes fail, and once more when the edits have
- * gone up; each failure is logged only to Ghidra's console.
+ * <p>A push that fails leaves the edit marked in {@link UnpushedEdits} until a push succeeds, and
+ * "Sync with portal" sends whatever is marked. What happens in between depends on the failure — see
+ * {@link PushFailure}:
+ * <ul>
+ * <li>When the portal could not be reached, the program's marked edits are retried in the background,
+ * backing off through {@link #RETRY_DELAYS}. The outage is reported once, in the plugin log and the
+ * status bar, however many pushes fail, and once more when the edits have gone up.</li>
+ * <li>When the portal turned an edit down, the marked edits are sent again at once, one at a time
+ * where a batch was refused, so the ones it does take go up. Each edit it will not take is reported
+ * once and not retried automatically.</li>
+ * <li>When the portal refused the API key, that is reported once and nothing is retried until a
+ * push succeeds again.</li>
+ * </ul>
+ * Each failure is also logged to Ghidra's console.
  */
 public class LocalEditSyncService {
 
@@ -85,6 +95,12 @@ public class LocalEditSyncService {
     private boolean outageReported;
     /// Edits the retries have pushed since the outage was reported.
     private int pushedSinceOutage;
+    /// Whether the analyst has been told the API key was refused; cleared when a push succeeds.
+    private boolean authReported;
+    /// The programs whose retries stopped on a refused API key, to resume when a push succeeds.
+    private final Set<Program> stoppedOnAuth = ConcurrentHashMap.newKeySet();
+    /// The rejected edits already reported, per program, so each is reported once.
+    private final Map<Program, Set<String>> reportedRejections = new ConcurrentHashMap<>();
 
     /// A debounce key. One service handles every open program, and two programs can have functions at
     /// the same address (two versions of one binary, or any two PEs with code at `0x140001000`), so an
@@ -131,6 +147,8 @@ public class LocalEditSyncService {
             retry.cancel(false);
         }
         failedRetries.remove(program);
+        stoppedOnAuth.remove(program);
+        reportedRejections.remove(program);
         scheduler.execute(() -> {
             if (pendingRetries.isEmpty()) {
                 outageReported = false;
@@ -376,26 +394,34 @@ public class LocalEditSyncService {
 
     // Everything from here on runs on the scheduler thread.
 
-    /// Log the failure to Ghidra's console, tell the analyst once per outage, and retry the program's
-    /// unpushed edits later.
+    /// Log the failure to Ghidra's console and decide what comes next: a retry after a wait when the
+    /// portal could not be reached, and otherwise a retry straight away, which sends the marked edits
+    /// one at a time where needed and finds out which ones the portal will not take.
     private void onPushFailed(Program program, String detail, Exception e) {
         Msg.warn(this, "%s: %s".formatted(detail, reasonOf(e)), e);
-        if (!outageReported) {
-            outageReported = true;
-            announce(("RevEng.AI: could not push local edits to the portal (%s). They are kept and will be "
-                    + "retried automatically.").formatted(reasonOf(e)), true);
+        if (PushFailure.of(e) == PushFailure.TRANSIENT) {
+            reportOutage(e);
+            scheduleRetry(program, nextDelay(program));
+        } else {
+            scheduleRetry(program, Duration.ZERO);
         }
-        scheduleRetry(program, retryDelays.get(Math.min(failedRetries.getOrDefault(program, 0), retryDelays.size() - 1)));
     }
 
-    /// A push got through, so the portal is likely back: retry the program's other edits now rather
-    /// than at the end of the current wait.
+    /// A push got through, so the portal is likely back and the key good: retry the program's other
+    /// edits now rather than at the end of the current wait.
     private void onPushSucceeded(Program program) {
+        authReported = false;
         var waiting = pendingRetries.get(program);
         if (waiting != null && waiting.cancel(false)) {
             pendingRetries.remove(program);
             scheduleRetry(program, Duration.ZERO);
+        } else if (stoppedOnAuth.remove(program)) {
+            scheduleRetry(program, Duration.ZERO);
         }
+    }
+
+    private Duration nextDelay(Program program) {
+        return retryDelays.get(Math.min(failedRetries.getOrDefault(program, 0), retryDelays.size() - 1));
     }
 
     private void scheduleRetry(Program program, Duration delay) {
@@ -417,29 +443,80 @@ public class LocalEditSyncService {
         try {
             flush = revengService.pushUnpushedEdits(analysedProgram.get());
         } catch (Exception e) {
-            flush = new GhidraRevengService.LocalEditFlush(0, 1, e);
+            flush = PushFailure.of(e) == PushFailure.TRANSIENT
+                    ? new GhidraRevengService.LocalEditFlush(0, 1, e, List.of())
+                    : new GhidraRevengService.LocalEditFlush(0, 0, null,
+                            List.of(new GhidraRevengService.RejectedEdit("local edits", e)));
         }
         pushedSinceOutage += flush.pushed();
-        if (flush.failed() > 0) {
+        if (flush.pushed() > 0) {
+            authReported = false;
+        }
+        if (flush.unsent() > 0) {
             Msg.warn(this, "Retry of %d unpushed local edit(s) failed: %s"
-                    .formatted(flush.failed(), reasonOf(flush.error())), flush.error());
-            int failed = failedRetries.merge(program, 1, Integer::sum);
-            scheduleRetry(program, retryDelays.get(Math.min(failed, retryDelays.size() - 1)));
+                    .formatted(flush.unsent(), reasonOf(flush.unsentError())), flush.unsentError());
+            reportOutage(flush.unsentError());
+            failedRetries.merge(program, 1, Integer::sum);
+            scheduleRetry(program, nextDelay(program));
             return;
         }
         failedRetries.remove(program);
+        reportRejections(program, flush.rejected());
         endOutageIfOver();
     }
 
-    /// Once no program has edits waiting, say so, once.
+    private void reportOutage(Exception e) {
+        if (!outageReported) {
+            outageReported = true;
+            announce(("RevEng.AI: could not push local edits to the portal (%s). They are kept and will be "
+                    + "retried automatically.").formatted(reasonOf(e)), true);
+        }
+    }
+
+    /// Report the edits that will not be retried automatically: a refused API key once until a push
+    /// succeeds, and each edit the portal turned down once.
+    private void reportRejections(Program program, List<GhidraRevengService.RejectedEdit> rejected) {
+        var refusedKey = rejected.stream().filter(edit -> edit.failure() == PushFailure.AUTH).findFirst();
+        if (refusedKey.isPresent()) {
+            stoppedOnAuth.add(program);
+            if (!authReported) {
+                authReported = true;
+                announce(("RevEng.AI: the portal refused the API key (%s), so local edits are not being pushed. "
+                        + "Check the key in the RevEng.AI settings; the edits are kept and will be sent on the next "
+                        + "Sync with portal.").formatted(reasonOf(refusedKey.get().error())), true);
+            }
+        }
+        List<GhidraRevengService.RejectedEdit> turnedDown = rejected.stream()
+                .filter(edit -> edit.failure() != PushFailure.AUTH)
+                .toList();
+        // Every marked edit was just sent, so this is the whole set the portal will not take; one that
+        // has since gone up drops out of it.
+        Set<String> reported = reportedRejections.computeIfAbsent(program, p -> ConcurrentHashMap.newKeySet());
+        Set<String> current = new LinkedHashSet<>();
+        turnedDown.forEach(edit -> current.add(edit.edit()));
+        reported.retainAll(current);
+        var fresh = turnedDown.stream().filter(edit -> !reported.contains(edit.edit())).toList();
+        if (fresh.isEmpty()) {
+            return;
+        }
+        for (var edit : fresh) {
+            reported.add(edit.edit());
+            loggingService.warn("RevEng.AI: the portal did not take the %s: %s".formatted(edit.edit(), reasonOf(edit.error())));
+        }
+        announce(("RevEng.AI: the portal did not take %d local edit(s) (%s). They will not be retried "
+                + "automatically; the RevEng.AI log lists them, and they are kept for the next Sync with portal.")
+                .formatted(fresh.size(), reasonOf(fresh.get(0).error())), true);
+    }
+
+    /// Once no program has edits waiting for a retry, say that the outage is over, once.
     private void endOutageIfOver() {
         if (!outageReported || !pendingRetries.isEmpty()) {
             return;
         }
         outageReported = false;
-        announce(pushedSinceOutage > 0
-                ? "RevEng.AI: pushed %d local edit(s) that had failed earlier.".formatted(pushedSinceOutage)
-                : "RevEng.AI: local edits are reaching the portal again.", false);
+        if (pushedSinceOutage > 0) {
+            announce("RevEng.AI: pushed %d local edit(s) that had failed earlier.".formatted(pushedSinceOutage), false);
+        }
         pushedSinceOutage = 0;
     }
 
