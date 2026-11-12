@@ -49,13 +49,28 @@ public class StatusPollerTest {
         assertEquals(1, polls.get());
     }
 
+    /// A clock that only moves when the poller sleeps, so waits are exact on any machine.
+    private static final class FakeClock {
+        long nanos;
+        final List<Long> sleeps = new ArrayList<>();
+
+        <S> StatusPoller<S> drive(StatusPoller<S> poller) {
+            return poller.withClock(() -> nanos, millis -> {
+                sleeps.add(millis);
+                nanos += millis * 1_000_000;
+            });
+        }
+    }
+
     @Test
     public void endsAtTheTimeLimit() throws Exception {
-        var result = new StatusPoller<String>(Duration.ofMillis(5), Duration.ofMillis(5), Duration.ofMillis(100))
+        var clock = new FakeClock();
+        var result = clock.drive(new StatusPoller<String>(Duration.ofMillis(5), Duration.ofMillis(5), Duration.ofMillis(100)))
                 .poll(sequence("RUNNING"), StatusPollerTest::classify, () -> false);
         assertEquals(Ending.TIMED_OUT, result.ending());
         assertEquals("RUNNING", result.status());
-        assertTrue(result.waited().toMillis() <= 100);
+        assertEquals(Duration.ofMillis(100), result.waited());
+        assertEquals(20, clock.sleeps.size());
     }
 
     @Test
@@ -86,23 +101,13 @@ public class StatusPollerTest {
 
     @Test
     public void backsOffWhileTheStatusIsUnchangedAndResetsOnChange() throws Exception {
-        List<Long> pollTimes = new ArrayList<>();
-        var result = new StatusPoller<String>(Duration.ofMillis(20), Duration.ofMillis(80), Duration.ofSeconds(10))
-                .poll(sequence("RUNNING", "RUNNING", "RUNNING", "RUNNING", "STEP1", "STEP2", "DONE"), s -> {
-                    pollTimes.add(System.nanoTime() / 1_000_000);
-                    return classify(s);
-                }, () -> false);
+        var clock = new FakeClock();
+        var result = clock.drive(new StatusPoller<String>(Duration.ofMillis(20), Duration.ofMillis(80), Duration.ofSeconds(10)))
+                .poll(sequence("RUNNING", "RUNNING", "RUNNING", "RUNNING", "STEP1", "STEP2", "DONE"),
+                        StatusPollerTest::classify, () -> false);
         assertEquals(Ending.DONE, result.ending());
-        List<Long> gaps = new ArrayList<>();
-        for (int i = 1; i < pollTimes.size(); i++) {
-            gaps.add(pollTimes.get(i) - pollTimes.get(i - 1));
-        }
-        // RUNNING x4: 20, then 40, then 80 (capped); after a change it is back to 20
-        assertTrue("gaps: " + gaps, gaps.get(0) >= 20 && gaps.get(0) < 40);
-        assertTrue("gaps: " + gaps, gaps.get(1) >= 40);
-        assertTrue("gaps: " + gaps, gaps.get(2) >= 80);
-        assertTrue("gaps: " + gaps, gaps.get(4) < 40);
-        assertTrue("gaps: " + gaps, gaps.get(5) < 40);
+        // RUNNING x4: 20, then 40, then 80, then 80 (capped); after each change it is back to 20
+        assertEquals(List.of(20L, 40L, 80L, 80L, 20L, 20L), clock.sleeps);
     }
 
     @Test

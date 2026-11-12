@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 
 /// Polls a server-side job until it reaches a final status, for every job the plugin waits on
@@ -40,6 +41,11 @@ public final class StatusPoller<S> {
         S get() throws E;
     }
 
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(long millis) throws InterruptedException;
+    }
+
     /// Longest single sleep, so a cancellation is noticed promptly even during a long backoff.
     private static final long CANCEL_CHECK_MS = 200;
 
@@ -49,6 +55,8 @@ public final class StatusPoller<S> {
     private Predicate<Exception> retryable = e -> false;
     private int maxConsecutiveFailures = 1;
     private Duration maxRetryBackoff;
+    private LongSupplier nanoClock = System::nanoTime;
+    private Sleeper sleeper = Thread::sleep;
 
     public StatusPoller(Duration interval, Duration maxInterval, Duration timeLimit) {
         this.interval = interval;
@@ -72,9 +80,17 @@ public final class StatusPoller<S> {
     ///
     /// @throws E                   the fetch failed, and was not retryable or failed too often in a row
     /// @throws InterruptedException the polling thread was interrupted while waiting
+    /// Use {@code nanoClock} and {@code sleeper} instead of the system clock, so tests can check the
+    /// waits without depending on how fast the machine runs.
+    StatusPoller<S> withClock(LongSupplier nanoClock, Sleeper sleeper) {
+        this.nanoClock = nanoClock;
+        this.sleeper = sleeper;
+        return this;
+    }
+
     public <E extends Exception> Result<S> poll(Fetch<S, E> fetch, Function<S, Verdict> classify,
                                                 BooleanSupplier cancelled) throws E, InterruptedException {
-        long start = System.nanoTime();
+        long start = nanoClock.getAsLong();
         S last = null;
         boolean fetched = false;
         long delay = interval.toMillis();
@@ -133,23 +149,23 @@ public final class StatusPoller<S> {
     /// @return false, without sleeping, if the sleep would run past the time limit; false if
     ///     cancelled while sleeping; true otherwise
     private boolean sleepWithinLimit(long millis, long start, BooleanSupplier cancelled) throws InterruptedException {
-        long elapsed = (System.nanoTime() - start) / 1_000_000;
+        long elapsed = (nanoClock.getAsLong() - start) / 1_000_000;
         if (elapsed + millis > timeLimit.toMillis()) {
             return false;
         }
-        long deadline = System.nanoTime() + millis * 1_000_000;
+        long deadline = nanoClock.getAsLong() + millis * 1_000_000;
         long remaining;
-        while ((remaining = (deadline - System.nanoTime()) / 1_000_000) > 0) {
+        while ((remaining = (deadline - nanoClock.getAsLong()) / 1_000_000) > 0) {
             if (cancelled.getAsBoolean()) {
                 return false;
             }
-            Thread.sleep(Math.min(remaining, CANCEL_CHECK_MS));
+            sleeper.sleep(Math.min(remaining, CANCEL_CHECK_MS));
         }
         return !cancelled.getAsBoolean();
     }
 
-    private static <S> Result<S> result(Ending ending, @Nullable S status, long start) {
-        return new Result<>(ending, status, Duration.ofNanos(System.nanoTime() - start));
+    private Result<S> result(Ending ending, @Nullable S status, long start) {
+        return new Result<>(ending, status, Duration.ofNanos(nanoClock.getAsLong() - start));
     }
 
     /// "3 hours" / "30 minute(s)" / "45 second(s)", rounded, for messages that say how long the plugin
