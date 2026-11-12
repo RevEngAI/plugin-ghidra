@@ -4,6 +4,7 @@ import ai.reveng.model.GetMatchesOutputBody;
 import ai.reveng.model.GetMatchesStatusOutputBody;
 import ai.reveng.model.StartMatchingForFunctionsInputBody;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatch;
@@ -37,6 +38,7 @@ import javax.swing.*;
 import javax.swing.event.ListSelectionEvent;
 import java.awt.*;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -437,6 +439,11 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
      * Task to fetch similar functions from the API
      */
     private class FetchSimilarFunctionsTask extends Task {
+        // Matching one function is quick: poll every half second, slowing to every 5 while nothing changes, for at most 5 minutes
+        private static final Duration POLL_INTERVAL = Duration.ofMillis(500);
+        private static final Duration MAX_POLL_INTERVAL = Duration.ofSeconds(5);
+        private static final Duration MAX_MATCHING_WAIT = Duration.ofMinutes(5);
+
         private final GhidraRevengService.AnalysedProgram program;
         private final GhidraRevengService.FunctionWithID functionWithID;
 
@@ -461,21 +468,27 @@ public class SimilarFunctionsWindow extends ComponentProviderAdapter {
                 monitor.setMessage("Fetching matches from RevEng.AI...");
                 service.startFunctionsMatching(request);
 
-                while (true) {
-                    if (monitor.isCancelled()) {
+                var polled = new StatusPoller<GetMatchesStatusOutputBody>(POLL_INTERVAL, MAX_POLL_INTERVAL, MAX_MATCHING_WAIT).poll(
+                        () -> service.getFunctionsMatchingStatus(functionIds),
+                        statusResponse -> AbstractFunctionMatchingDialog.classifyMatchingStatus(
+                                statusResponse.getStatus() == null ? null : statusResponse.getStatus().getValue()),
+                        monitor::isCancelled);
+                switch (polled.ending()) {
+                    case CANCELLED -> {
                         return;
                     }
-                    GetMatchesStatusOutputBody statusResponse = service.getFunctionsMatchingStatus(functionIds);
-                    String status = statusResponse.getStatus() == null ? null : statusResponse.getStatus().getValue();
-                    if ("COMPLETED".equals(status)) {
-                        break;
+                    case UNRECOGNISED -> throw new RuntimeException(
+                            "function matching reported a status this plugin does not recognise (it may have been cancelled)");
+                    case TIMED_OUT -> throw new RuntimeException("function matching has not finished after %s"
+                            .formatted(StatusPoller.describe(polled.waited())));
+                    case DONE -> {
+                        var statusResponse = polled.status();
+                        if (statusResponse.getStatus() == GetMatchesStatusOutputBody.StatusEnum.FAILED) {
+                            String errorMsg = AbstractFunctionMatchingDialog.errorTextFrom(statusResponse.getMessages());
+                            throw new RuntimeException(errorMsg == null || errorMsg.isEmpty()
+                                    ? "Function matching failed" : errorMsg);
+                        }
                     }
-                    if ("FAILED".equals(status)) {
-                        String errorMsg = AbstractFunctionMatchingDialog.errorTextFrom(statusResponse.getMessages());
-                        throw new RuntimeException(errorMsg == null || errorMsg.isEmpty()
-                                ? "Function matching failed" : errorMsg);
-                    }
-                    Thread.sleep(100);
                 }
 
                 GetMatchesOutputBody response = service.getFunctionsMatches(functionIds);

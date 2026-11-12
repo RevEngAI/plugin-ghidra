@@ -318,7 +318,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                                                 knownProgram.get(),
                                                 status));
                             }
-                            case Queued, Processing -> {
+                            case Uploaded, Queued, Processing -> {
                                 // This is the same code as above, but it has the implicit assumption that someone
                                 /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
                                 tool.firePluginEvent(
@@ -333,6 +333,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                                 // The analysis failed on the server side
                                 Msg.showError(AnalysisManagementPlugin.this, null, "Analysis Error",
                                         "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                            }
+                            case Unknown -> {
+                                // Not waited on: an unrecognised status might never change into one that ends the wait
+                                var message = unknownStatusOnOpenMessage(knownProgram.get());
+                                tool.getService(ReaiLoggingService.class).warn(message);
+                                SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, true));
                             }
                         }
                     }
@@ -403,6 +409,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 }, 0);
             }
         }
+    }
+
+    static String unknownStatusOnOpenMessage(GhidraRevengService.ProgramWithID program) {
+        return ("RevEng.AI: analysis %d of %s reports a status this plugin does not recognise; not waiting for it. "
+                + "Reopen the program to check it again, or use View in portal.")
+                .formatted(program.analysisID().id(), program.program().getName());
     }
 
     static String checkStatusMessage(AnalysisStatus status) {

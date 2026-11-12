@@ -727,6 +727,57 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     /// The function-level dialog matches by itself when it opens, and its Match button reads Cancel while
     /// a run is going. Waits for that first run to finish, so that pressing Match starts a new run rather
     /// than, on a slow machine, cancelling the one that started after the button was looked up.
+    /// A status the SDK does not model (the server's CANCELLED) ends the wait instead of polling for ever
+    @Test
+    public void testUnrecognisedMatchingStatusStopsPolling() throws Exception {
+        var tool = env.getTool();
+        var statusPolls = new java.util.concurrent.atomic.AtomicInteger();
+        var mockApi = new FunctionMatchingMockApi() {
+            @Override
+            public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
+                super.startFunctionsMatching(request);
+                var response = new StartMatchingOutputBody();
+                response.setStatus(StartMatchingOutputBody.StatusEnum.RUNNING);
+                return response;
+            }
+
+            @Override
+            public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) {
+                statusPolls.incrementAndGet();
+                var response = new GetMatchesStatusOutputBody();
+                response.setStatus(GetMatchesStatusOutputBody.StatusEnum.fromValue("CANCELLED"));
+                return response;
+            }
+        };
+        var service = addMockedService(tool, mockApi);
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+        );
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        JButton matchButton = (JButton) getInstanceField("matchButton", foundDialog);
+        waitForCondition(() -> runSwing(() -> statusLabel.getText().equals("Stopped waiting for function matching")
+                        && getInstanceField("matchingThread", foundDialog) == null
+                        && matchButton.getText().equals("Match Functions")),
+                "An unrecognised status should end the matching run");
+        JTextArea errorArea = (JTextArea) getInstanceField("errorArea", foundDialog);
+        assertTrue(errorArea.getText(), errorArea.getText().contains("does not recognise"));
+        assertEquals(1, statusPolls.get());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
     private void waitForMatchingIdle(FunctionLevelFunctionMatchingDialog dialog) {
         JLabel statusLabel = (JLabel) getInstanceField("statusLabel", dialog);
         JButton matchButton = (JButton) getInstanceField("matchButton", dialog);

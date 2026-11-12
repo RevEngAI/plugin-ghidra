@@ -429,6 +429,165 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         assertEquals("summary trigger must be retried after a 409", 2, summaryTriggers.get());
     }
 
+    /// A summary trigger that fails with anything but 409 ends the wait: the summary will never arrive
+    @Test
+    public void testSummaryTriggerFailureStopsPolling() throws Exception {
+        var tool = env.getTool();
+        var summaryTriggers = new AtomicInteger();
+        var polls = new AtomicInteger();
+
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 10));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                polls.incrementAndGet();
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.COMPLETED,
+                        "void func1() { return; }",
+                        null,
+                        null,
+                        WorkflowProgress.StatusEnum.UNINITIALISED,
+                        WorkflowProgress.StatusEnum.UNINITIALISED,
+                        List.of(),
+                        null);
+            }
+
+            @Override
+            public void triggerAIDecompilationSummary(FunctionID functionID) {
+                summaryTriggers.incrementAndGet();
+                throw new RuntimeException("Failed to trigger AI decompilation summary",
+                        new ApiException(402, "Insufficient credits"));
+            }
+        });
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program();
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+        RSyntaxTextArea textArea = (RSyntaxTextArea) getInstanceField("textArea", aiDecompComponent);
+
+        var action = getAction(tool, "AI Decompilation");
+        var context = new ProgramLocationActionContext(
+                null,
+                programWithID.program(),
+                new ProgramLocation(programWithID.program(), func1.getEntryPoint()),
+                null, null);
+        performAction(action, context, true);
+        waitForTasks();
+        waitForSwing();
+
+        assertEquals(1, summaryTriggers.get());
+        // The status check before triggering, and the one poll that saw the decompilation completed
+        assertEquals(2, polls.get());
+        assertEquals("void func1() { return; }", textArea.getText());
+    }
+
+    /// A FAILED decompilation can be run again with the Regenerate action; Refresh alone only re-reads the failure
+    @Test
+    public void testRegenerateFailedDecompilation() throws Exception {
+        var tool = env.getTool();
+        var triggers = new AtomicInteger();
+
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 10));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                if (triggers.get() == 0) {
+                    return new AIDecompilationStatus(
+                            DecompilationData.StatusEnum.FAILED, "", null, null, null, null, List.of(), null);
+                }
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.COMPLETED,
+                        "void func1() { return; }",
+                        "Mocked Description Summary",
+                        null,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        List.of(),
+                        null);
+            }
+
+            @Override
+            public boolean triggerAIDecompilationForFunctionID(FunctionID functionID) {
+                triggers.incrementAndGet();
+                return true;
+            }
+        });
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program();
+        var func1 = builder.createEmptyFunction(null, "0x1000", 10, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(programWithID.program());
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        aiDecompComponent.setVisible(true);
+        RSyntaxTextArea textArea = (RSyntaxTextArea) getInstanceField("textArea", aiDecompComponent);
+        javax.swing.JEditorPane descriptionArea =
+                (javax.swing.JEditorPane) getInstanceField("descriptionArea", aiDecompComponent);
+
+        var action = getAction(tool, "AI Decompilation");
+        var context = new ProgramLocationActionContext(
+                null,
+                programWithID.program(),
+                new ProgramLocation(programWithID.program(), func1.getEntryPoint()),
+                null, null);
+        performAction(action, context, true);
+        waitForTasks();
+        waitForSwing();
+
+        assertEquals("a FAILED decompilation must not be re-triggered on its own", 0, triggers.get());
+        assertTrue(descriptionArea.getText(), descriptionArea.getText().contains("Regenerate"));
+
+        performAction(getLocalAction(aiDecompComponent, "Refresh AI Decompilation"));
+        waitForTasks();
+        waitForSwing();
+        assertEquals("Refresh only re-reads the result", 0, triggers.get());
+
+        var regenerate = getLocalAction(aiDecompComponent, "Regenerate AI Decompilation");
+        assertTrue(runSwing(() -> regenerate.isEnabledForContext(aiDecompComponent.getActionContext(null))));
+        performAction(regenerate);
+        waitForTasks();
+        waitForSwing();
+
+        assertEquals(1, triggers.get());
+        assertEquals("void func1() { return; }", textArea.getText());
+        assertFalse("Regenerate is only offered for a failed decompilation",
+                runSwing(() -> regenerate.isEnabledForContext(aiDecompComponent.getActionContext(null))));
+    }
+
     static class RatingsAPI extends UnimplementedAPI {
         String lastFeedback;
         String lastReason;
