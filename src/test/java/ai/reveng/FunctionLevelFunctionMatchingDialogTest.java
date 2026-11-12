@@ -10,6 +10,8 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
@@ -583,9 +585,9 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     }
 
     /**
-     * Transferring a name must only rename on the portal the functions it renamed locally. A function
-     * whose name the analyst set is skipped locally, so pushing the matched name for it would leave the
-     * portal holding a different name from the one kept in Ghidra.
+     * Transferring names must rename on the portal exactly the functions it renamed locally, once each.
+     * A function whose name the analyst set is skipped locally, so pushing the matched name for it would
+     * leave the portal holding a different name from the one kept in Ghidra.
      */
     @Test
     public void testTransferOnlyRenamesOnThePortalWhatItAppliedLocally() throws Exception {
@@ -598,63 +600,82 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         var builder = newX64Program("test_binary");
         var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var otherFunction = builder.createEmptyFunction("other_function", "0x2000", 50, Undefined.getUndefinedDataType(4));
 
         var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
         var program = analysedProgram.program();
         env.showTool(program);
         waitForSwing();
 
-        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
-        );
-        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
-        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
-        waitForMatchingIdle(foundDialog);
+        // A name the analyst set is kept, so nothing about its match may reach the portal
+        program.withTransaction("analyst rename", () -> testFunction.setName("analyst_name", SourceType.USER_DEFINED));
+        program.withTransaction("analysis name", () -> otherFunction.setName("analysis_name", SourceType.ANALYSIS));
 
-        var match = new GhidraFunctionMatchWithSignature(testFunction, new FunctionMatch(
-                new TypedApiInterface.FunctionID(100),
-                new TypedApiInterface.FunctionID(200),
-                "similar_function",
-                "similar_function",
+        var sync = new LocalEditSyncService(service, tool.getService(ReaiLoggingService.class), (message, warning) -> {});
+        sync.attach(program);
+        try {
+            FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            );
+            runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+            var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+            waitForMatchingIdle(foundDialog);
+
+            var matches = List.of(
+                    matchFor(testFunction, 100, "similar_function"),
+                    matchFor(otherFunction, 101, "other_similar_function"));
+            var applied = invokeInstanceMethod("applyMatches", foundDialog,
+                    new Class<?>[] {List.class, ApplyMatchCmd.Transfer.class},
+                    new Object[] {matches, ApplyMatchCmd.Transfer.NAME});
+            assertEquals(1, applied);
+            assertEquals("analyst_name", testFunction.getName());
+            assertEquals("other_similar_function", otherFunction.getName());
+
+            waitForCondition(() -> !mockApi.renameRequests.isEmpty(), "the applied rename should be pushed");
+            Thread.sleep(1000);
+            assertEquals("Each applied rename should be pushed once: " + mockApi.renameRequests,
+                    1, mockApi.renameRequests.size());
+            var pushed = mockApi.renameRequests.get(0).getFunctions();
+            assertEquals(1, pushed.size());
+            assertEquals(Long.valueOf(101), pushed.get(0).getFunctionId());
+            assertEquals("other_similar_function", pushed.get(0).getNewName());
+
+            close(foundDialog);
+            waitForSwing();
+        } finally {
+            sync.dispose();
+        }
+    }
+
+    private static GhidraFunctionMatchWithSignature matchFor(ghidra.program.model.listing.Function function,
+                                                             long functionId, String matchedName) {
+        return new GhidraFunctionMatchWithSignature(function, new FunctionMatch(
+                new TypedApiInterface.FunctionID(functionId),
+                new TypedApiInterface.FunctionID(functionId + 100),
+                matchedName,
+                matchedName,
                 "libc.so",
                 new TypedApiInterface.BinaryHash("1".repeat(64)),
                 false,
                 BigDecimal.valueOf(0.95),
                 BigDecimal.valueOf(0.87),
                 null), null);
-        var transferArgs = new Class<?>[] {List.class, ApplyMatchCmd.Transfer.class};
-
-        // A name the analyst set is kept, so nothing about the match may reach the portal
-        program.withTransaction("analyst rename", () -> testFunction.setName("analyst_name", SourceType.USER_DEFINED));
-        var applied = invokeInstanceMethod("transferMatches", foundDialog, transferArgs,
-                new Object[] {List.of(match), ApplyMatchCmd.Transfer.NAME});
-        assertEquals(0, applied);
-        assertEquals("analyst_name", testFunction.getName());
-        assertFalse("The skipped match must not be renamed on the portal: " + mockApi.pushedNames,
-                mockApi.pushedNames.contains("similar_function"));
-
-        // A name the analyst did not set is replaced, and the portal gets the same name
-        program.withTransaction("analysis name", () -> testFunction.setName("analysis_name", SourceType.ANALYSIS));
-        applied = invokeInstanceMethod("transferMatches", foundDialog, transferArgs,
-                new Object[] {List.of(match), ApplyMatchCmd.Transfer.NAME});
-        assertEquals(1, applied);
-        assertEquals("similar_function", testFunction.getName());
-        assertTrue("The applied match should be renamed on the portal: " + mockApi.pushedNames,
-                mockApi.pushedNames.contains("similar_function"));
-
-        close(foundDialog);
-        waitForSwing();
     }
 
-    /// Records the names sent to the portal for function 100, the test function.
+    /// Knows a second function, and records the renames sent to the portal.
     static class RenameRecordingMockApi extends FunctionMatchingMockApi {
-        final List<String> pushedNames = new CopyOnWriteArrayList<>();
+        final List<BatchRenameInputBody> renameRequests = new CopyOnWriteArrayList<>();
+
+        @Override
+        public List<FunctionInfo> getFunctionInfo(TypedApiInterface.AnalysisID analysisID) {
+            return List.of(
+                    new FunctionInfo(new TypedApiInterface.FunctionID(100), "test_function", "test_function", 0x1000L, 50),
+                    new FunctionInfo(new TypedApiInterface.FunctionID(101), "other_function", "other_function", 0x2000L, 50));
+        }
 
         @Override
         public long batchRenameFunctions(BatchRenameInputBody request) {
-            request.getFunctions().stream()
-                    .filter(item -> item.getFunctionId() == 100L)
-                    .forEach(item -> pushedNames.add(item.getNewName()));
+            renameRequests.add(request);
             return request.getFunctions().size();
         }
     }

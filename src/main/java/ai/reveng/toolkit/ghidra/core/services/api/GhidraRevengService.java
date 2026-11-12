@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
@@ -1617,31 +1616,6 @@ public class GhidraRevengService {
     public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
         return api.getFunctionsMatches(functionIds);
     }
-
-    public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
-        // Pushing types to the portal is not supported yet, so we just extract the function matches and call the other method
-        batchRenameMatches(functionsList.stream()
-                .map(GhidraFunctionMatchWithSignature::functionMatch)
-                .toList());
-
-    }
-
-    public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
-        var items = functionsList.stream()
-                .map(result -> {
-                    var item = new BatchRenameItem();
-                    item.setFunctionId(result.origin_function_id().value());
-                    item.setNewName(result.nearest_neighbor_function_name());
-                    item.setNewMangledName(result.nearest_neighbor_mangled_function_name());
-                    return item;
-                })
-                .toList();
-
-        var request = new BatchRenameInputBody();
-        request.setFunctions(items);
-        api.batchRenameFunctions(request);
-    }
-
 
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished

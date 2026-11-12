@@ -190,6 +190,23 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
         assertEquals("MyClass::method", api.renameRequests.get(0).getFunctions().get(0).getNewName());
     }
 
+    /// Every namespace inside RevEng.AI is dropped, while one the analyst made above it is kept.
+    @Test
+    public void aRenameDropsOnlyTheNamespacesInsideRevEngAi() throws Exception {
+        edit("move and rename", () -> {
+            var symbols = program.getSymbolTable();
+            var outer = symbols.createNameSpace(null, "Outer", SourceType.USER_DEFINED);
+            var reveng = symbols.createNameSpace(outer, "RevEng.AI", SourceType.USER_DEFINED);
+            var binary = symbols.createNameSpace(reveng, "libfoo.so", SourceType.USER_DEFINED);
+            var inner = symbols.createNameSpace(binary, "Inner", SourceType.USER_DEFINED);
+            first.setParentNamespace(inner);
+            first.setName("name", SourceType.USER_DEFINED);
+        });
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("Outer::name", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
     @Test
     public void localVariableEditsPushNothingButAParameterRenameDoes() throws Exception {
         edit("add a local", () -> first.addLocalVariable(
