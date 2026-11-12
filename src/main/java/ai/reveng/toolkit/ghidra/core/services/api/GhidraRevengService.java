@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
+import ai.reveng.invoker.ApiClient;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
@@ -80,8 +81,8 @@ public class GhidraRevengService {
     private static final String REVENG_BOOKMARK_CATEGORY = "Analysed Function";
     private final Map<TypedApiInterface.AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
-    private TypedApiInterface api;
-    private ApiInfo apiInfo;
+    private volatile TypedApiInterface api;
+    private volatile ApiInfo apiInfo;
 
     /// Set while the plugin is applying server-sourced changes locally (pull / analysis-sync), so the
     /// reactive listener does not echo those changes straight back to the portal. Mirrors the IDA
@@ -139,6 +140,30 @@ public class GhidraRevengService {
 
     public URI getServer() {
         return this.apiInfo.hostURI();
+    }
+
+    /// Points the running service at new credentials, as the setup wizard does when it finishes.
+    /// Swapped in place rather than replaced, because every plugin holds the instance it was handed
+    /// as a service. Returns false when nothing changed.
+    public synchronized boolean reconfigure(ApiInfo newApiInfo) {
+        if (newApiInfo.equals(apiInfo)) {
+            return false;
+        }
+        this.api = new TypedApiImplementation(newApiInfo);
+        this.apiInfo = newApiInfo;
+        // Both wrap the old API, and analysis ids from the old host mean nothing on the new one.
+        this.signatureService = null;
+        this.analysisDataTypesService = null;
+        statusCache.clear();
+        return true;
+    }
+
+    /// The HTTP client behind the API, for SDK APIs that {@link TypedApiInterface} does not wrap.
+    public ApiClient apiClient() {
+        if (api instanceof TypedApiImplementation impl) {
+            return impl.apiClient();
+        }
+        throw new IllegalStateException("The configured API is not backed by an HTTP client");
     }
 
     public ProgramWithID registerAnalysisForProgram(Program program, TypedApiInterface.AnalysisID analysisID) {

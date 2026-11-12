@@ -24,7 +24,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import ai.reveng.invoker.Configuration;
+import ai.reveng.invoker.ApiClient;
 import ai.reveng.invoker.JSON;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -64,8 +64,14 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
+    private final ApiClient apiClient;
+
+    /// Every instance owns its client. The SDK's default client is process-global, so configuring it
+    /// here let the setup wizard's throwaway validation instance re-target the running session, and
+    /// stacked one more logging interceptor onto it per instance.
     public TypedApiImplementation(String baseUrl, String apiKey) {
-        var apiClient = Configuration.getDefaultApiClient();
+        var apiClient = new ApiClient();
+        this.apiClient = apiClient;
         apiClient.setBasePath(baseUrl);
 
         String pluginVersion = "unknown";
@@ -116,6 +122,11 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     public TypedApiImplementation(ApiInfo info){
         this(info.hostURI().toString(), info.apiKey());
+    }
+
+    /// The configured client this instance talks through, for SDK APIs it does not wrap.
+    public ApiClient apiClient() {
+        return apiClient;
     }
 
     public BinaryHash upload(Path binPath) throws FileNotFoundException, ApiException {
