@@ -34,9 +34,11 @@ import java.util.function.BiConsumer;
  * pushes that change back to the portal in the background.
  *
  * <p>Mirrors the IDA plugin's {@code hooks/reactive.py} + {@code hooks/artifacts.py}: edits are
- * coalesced per function (debounced) and pushes are suppressed while the plugin is applying
- * server-sourced changes locally (see {@link GhidraRevengService#isPushbackSuppressed()}), so
- * sync-applied changes are not echoed straight back.
+ * coalesced per function (debounced), and type edits are ignored while the plugin is writing
+ * server-sourced changes into that program (see {@link GhidraRevengService#isApplyingServerChanges}),
+ * so sync-applied changes are not echoed straight back. Renames need no such guard: the plugin only
+ * ever writes {@link SourceType#ANALYSIS} names, and only {@link SourceType#USER_DEFINED} ones are
+ * pushed, so an analyst's rename is pushed even when it lands in the middle of a sync.
  */
 public class LocalEditSyncService {
 
@@ -91,7 +93,6 @@ public class LocalEditSyncService {
 
     private DomainObjectListener buildListener(Program program) {
         return new DomainObjectListenerBuilder(this)
-                .ignoreWhen(revengService::isPushbackSuppressed)
                 .each(ProgramEvent.SYMBOL_RENAMED).call(record -> onSymbolRenamed(program, record))
                 // Renaming a decompiler-inferred variable commits it to the database as a new symbol,
                 // which fires SYMBOL_ADDED rather than SYMBOL_RENAMED, so we react to both.
@@ -121,6 +122,10 @@ public class LocalEditSyncService {
     }
 
     private void onVariableSymbolChanged(Program program, DomainObjectChangeRecord record) {
+        // Applying a portal signature adds parameter symbols.
+        if (revengService.isApplyingServerChanges(program)) {
+            return;
+        }
         var symbol = symbolOf(record);
         if (symbol != null) {
             scheduleTypesForVariable(program, symbol);
@@ -150,12 +155,11 @@ public class LocalEditSyncService {
             return;
         }
         var function = functionChange.getFunction();
-        if (!isSyncable(function)) {
+        if (!isSyncable(function) || revengService.isApplyingServerChanges(program)) {
             return;
         }
         // Modifier-only changes (inline/no-return/thunk/...) carry no type information to sync.
-        // Everything else (return type, parameters, variable types) is pushed; sync-applied changes
-        // are already excluded by the ignoreWhen(isPushbackSuppressed) guard on the listener.
+        // Everything else (return type, parameters, variable types) is pushed.
         if (functionChange.isFunctionModifierChange()) {
             return;
         }
@@ -163,6 +167,10 @@ public class LocalEditSyncService {
     }
 
     private void onDataTypeChanged(Program program, DomainObjectChangeRecord record) {
+        // Applying a portal signature updates the data types it names in place.
+        if (revengService.isApplyingServerChanges(program)) {
+            return;
+        }
         DataType dataType = null;
         if (record.getNewValue() instanceof DataType changed) {
             dataType = changed;
