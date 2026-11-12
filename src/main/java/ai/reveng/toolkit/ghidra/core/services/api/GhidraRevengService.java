@@ -1436,15 +1436,40 @@ public class GhidraRevengService {
         // Check the status of the analysis every 500ms
         // TODO: In the future this can be made smarter and e.g. wait longer if the analysis log hasn't changed
         AnalysisStatus lastStatus = null;
+        long delay = pollIntervalMs;
+        int failures = 0;
         while (true) {
-            AnalysisStatus currentStatus = this.status(programWithID);
+            AnalysisStatus currentStatus;
+            try {
+                currentStatus = api.status(programWithID.analysisID());
+                delay = pollIntervalMs;
+                failures = 0;
+            } catch (ApiException e) {
+                if (!isTransient(e) || ++failures >= MAX_POLL_ATTEMPTS) {
+                    throw new RuntimeException(e);
+                }
+                Msg.warn(this, "Transient error polling analysis status, retrying in %dms".formatted(delay), e);
+                monitor.checkCancelled();
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    return lastStatus;
+                }
+                delay = Math.min(delay * 2, maxPollBackoffMs);
+                continue;
+            }
             if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
                 // Analysis log endpoint only starts to return data after the analysis is processing
-                String logs = this.getAnalysisLog(programWithID.analysisID());
-                if (logger != null) {
-                    logger.consumeLogs(logs, programWithID);
+                try {
+                    String logs = this.getAnalysisLog(programWithID.analysisID());
+                    if (logger != null) {
+                        logger.consumeLogs(logs, programWithID);
+                    }
+                    logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
+                } catch (RuntimeException e) {
+                    // Logs are cosmetic; a failed fetch must not end the wait
+                    Msg.warn(this, "Failed to fetch analysis logs", e);
                 }
-                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
             }
             if (currentStatus != lastStatus) {
                 lastStatus = currentStatus;
@@ -1459,11 +1484,20 @@ public class GhidraRevengService {
             }
             monitor.checkCancelled();
             try {
-                Thread.sleep(500);
+                Thread.sleep(pollIntervalMs);
             } catch (InterruptedException e) {
                 return lastStatus;
             }
         }
+    }
+
+    private long pollIntervalMs = 500;
+    private long maxPollBackoffMs = 30_000;
+    private static final int MAX_POLL_ATTEMPTS = 10;
+
+    /// 5xx, or no response at all (code 0: connection or timeout failure)
+    private static boolean isTransient(ApiException e) {
+        return e.getCode() == 0 || e.getCode() >= 500;
     }
 
     public ProgramWithID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {

@@ -130,12 +130,15 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         public void run(TaskMonitor monitor) throws CancelledException {
             // Wait for the analysis
             var service = tool.getService(GhidraRevengService.class);
-            service.waitForFinishedAnalysis(monitor, program, this.logConsumer, tool);
-            ///  waitForFinishedAnalysis has already sent the completion event to all plugins
-            /// so this task just needs to clean up the tracked programs map
-            // Remove ourselves from the tracked programs when done
-            trackedPrograms.remove(program.program());
-            taskMonitorComponent.setVisible(false);
+            try {
+                service.waitForFinishedAnalysis(monitor, program, this.logConsumer, tool);
+            } finally {
+                ///  waitForFinishedAnalysis has already sent the completion event to all plugins
+                /// so this task just needs to clean up the tracked programs map
+                // Remove ourselves from the tracked programs when done
+                trackedPrograms.remove(program.program());
+                taskMonitorComponent.setVisible(false);
+            }
         }
     }
 

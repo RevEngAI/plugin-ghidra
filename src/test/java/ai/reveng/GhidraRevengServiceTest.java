@@ -15,6 +15,7 @@ import org.junit.Test;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest {
@@ -40,6 +41,27 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
                 freshService.getAnalysedProgram(program).isPresent());
         assertEquals("navigation/enablement lookups must not call status()",
                 statusCallsBefore, mock.statusCalls);
+    }
+
+    @Test
+    public void testStatusPollingGivesUpAfterTenFailures() throws Exception {
+        var statusCalls = new int[1];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
+                if (++statusCalls[0] > 20) {
+                    return AnalysisStatus.Complete;
+                }
+                throw new ApiException(503, "Service Unavailable");
+            }
+        });
+        setInstanceField("pollIntervalMs", service, 1L);
+        setInstanceField("maxPollBackoffMs", service, 1L);
+        var programWithID = new GhidraRevengService.ProgramWithID(newX64Program().getProgram(), new AnalysisID(1));
+
+        assertThrows(RuntimeException.class,
+                () -> service.waitForFinishedAnalysis(TaskMonitor.DUMMY, programWithID, null, null));
+        assertEquals(10, statusCalls[0]);
     }
 
     static class OfflineAfterSetupAPI extends UnimplementedAPI {
