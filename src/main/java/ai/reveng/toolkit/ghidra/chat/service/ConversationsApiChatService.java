@@ -3,7 +3,6 @@ package ai.reveng.toolkit.ghidra.chat.service;
 import ai.reveng.api.ConversationsApi;
 import ai.reveng.invoker.ApiClient;
 import ai.reveng.invoker.ApiException;
-import ai.reveng.invoker.Configuration;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.model.ConfirmToolInputBody;
 import ai.reveng.model.Conversation;
@@ -28,12 +27,14 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
- * {@link ChatService} backed by the SDK's {@link ConversationsApi}. Short requests reuse the shared,
- * already-authenticated {@link Configuration#getDefaultApiClient() default client}; the SSE stream
- * uses a dedicated client cloned from it with a long read timeout, since the default 15s read timeout
- * would cut a live agent run short.
+ * {@link ChatService} backed by the SDK's {@link ConversationsApi}. Short requests reuse the
+ * already-authenticated client of the running {@code GhidraRevengService}; the SSE stream uses a
+ * dedicated client cloned from it with a long read timeout, since the default 15s read timeout would
+ * cut a live agent run short. The client is looked up per call, so re-running the setup wizard
+ * re-targets chat along with everything else.
  */
 public class ConversationsApiChatService implements ChatService {
 
@@ -43,13 +44,19 @@ public class ConversationsApiChatService implements ChatService {
 
     private volatile okhttp3.Call activeStreamCall;
 
+    private final Supplier<ApiClient> client;
+
+    public ConversationsApiChatService(Supplier<ApiClient> client) {
+        this.client = client;
+    }
+
     private ConversationsApi shortCallApi() {
-        return new ConversationsApi(Configuration.getDefaultApiClient());
+        return new ConversationsApi(client.get());
     }
 
     /// A conversations client whose HTTP read timeout is long enough to hold a live SSE stream open.
     private ConversationsApi streamingApi() {
-        ApiClient shared = Configuration.getDefaultApiClient();
+        ApiClient shared = client.get();
         ApiClient streamClient = new ApiClient();
         streamClient.setBasePath(shared.getBasePath());
         streamClient.setHttpClient(shared.getHttpClient().newBuilder()

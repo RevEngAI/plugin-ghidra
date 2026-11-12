@@ -40,7 +40,9 @@ public class AgentChatPlugin extends ProgramPlugin {
     protected void init() {
         // Required services are only resolved by now
         super.init();
-        chatWindow = new AgentChatWindow(tool, getName(), new ConversationsApiChatService());
+        var revengService = tool.getService(GhidraRevengService.class);
+        chatWindow = new AgentChatWindow(tool, getName(),
+                new ConversationsApiChatService(revengService::apiClient));
         chatWindow.addToTool();
         setupActions();
     }

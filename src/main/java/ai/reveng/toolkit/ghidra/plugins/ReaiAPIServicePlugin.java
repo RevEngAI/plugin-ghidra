@@ -215,6 +215,17 @@ public class ReaiAPIServicePlugin extends Plugin {
         SetupWizardManager setupManager = new SetupWizardManager(wizardState, getTool());
         WizardManager wizardManager = new WizardManager("RevEng.AI: Configuration", true, setupManager);
         wizardManager.showWizard(tool.getToolFrame());
+
+        // The wizard is modal, so it has finished or been cancelled by now. Finishing stores the new
+        // credentials in the tool options; the running service has to follow them, or it keeps
+        // talking to the old host with the old key until Ghidra restarts.
+        if (revengService != null) {
+            getApiInfoFromToolOptions().ifPresent(apiInfo -> {
+                if (revengService.reconfigure(apiInfo)) {
+                    Msg.info(this, "RevEng.AI service now uses " + apiInfo.hostURI());
+                }
+            });
+        }
     }
 
 }
