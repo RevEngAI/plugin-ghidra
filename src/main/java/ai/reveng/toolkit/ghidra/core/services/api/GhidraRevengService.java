@@ -34,6 +34,7 @@ import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
+import ghidra.util.Swing;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
@@ -304,6 +305,22 @@ public class GhidraRevengService {
 
     }
 
+    /// Put the synced tag back on a function at an address the analysis still maps to a server
+    /// function, as after the function was deleted and created again. Does nothing otherwise.
+    public void restoreSyncedTag(Function function) {
+        var program = function.getProgram();
+        var analysedProgram = getAnalysedProgram(program);
+        if (analysedProgram.isEmpty() || analysedProgram.get().getIDForFunction(function).isEmpty()) {
+            return;
+        }
+        boolean tagged = function.getTags().stream()
+                .anyMatch(tag -> REVENGAI_FUNCTION_TAG.equals(tag.getName()));
+        if (!tagged) {
+            program.withTransaction("RevEng.AI: Tag re-created function",
+                    () -> function.addTag(REVENGAI_FUNCTION_TAG));
+        }
+    }
+
     private void markFunctionAsRevEng(BookmarkManager bookmarkManager, Function function, FunctionInfo info) {
         function.addTag(REVENGAI_FUNCTION_TAG);
         bookmarkManager.setBookmark(function.getEntryPoint(), REVENG_BOOKMARK_TYPE, REVENG_BOOKMARK_CATEGORY,
@@ -314,22 +331,33 @@ public class GhidraRevengService {
     public record RenameResult(Function func, String originalName, String newName) {
     }
 
-    /// Push a local function rename back to the portal. Returns the namespace-qualified name that was
-    /// pushed, or empty if the function is not known on the server.
-    public Optional<String> pushFunctionRename(AnalysedProgram analysedProgram, Function function) throws ApiException {
-        var withId = analysedProgram.getIDForFunction(function);
-        if (withId.isEmpty()) {
-            return Optional.empty();
+    /// Push local function renames back to the portal in one request. Answers with the
+    /// namespace-qualified name pushed for each function; functions not known on the server are left
+    /// out, and when none is known nothing is sent.
+    public Map<Function, String> pushFunctionRenames(AnalysedProgram analysedProgram, Collection<Function> functions)
+            throws ApiException {
+        Map<Function, String> pushed = new LinkedHashMap<>();
+        List<BatchRenameItem> items = new ArrayList<>();
+        for (Function function : functions) {
+            var withId = analysedProgram.getIDForFunction(function);
+            if (withId.isEmpty()) {
+                continue;
+            }
+            String qualifiedName = qualifiedServerName(function);
+            var item = new BatchRenameItem();
+            item.setFunctionId(withId.get().functionID().value());
+            item.setNewName(qualifiedName);
+            item.setNewMangledName(qualifiedName);
+            items.add(item);
+            pushed.put(function, qualifiedName);
         }
-        String qualifiedName = qualifiedServerName(function);
-        var item = new BatchRenameItem();
-        item.setFunctionId(withId.get().functionID().value());
-        item.setNewName(qualifiedName);
-        item.setNewMangledName(qualifiedName);
+        if (items.isEmpty()) {
+            return pushed;
+        }
         var request = new BatchRenameInputBody();
-        request.setFunctions(List.of(item));
+        request.setFunctions(items);
         api.batchRenameFunctions(request);
-        return Optional.of(qualifiedName);
+        return pushed;
     }
 
     /// The function name as the portal expects it: qualified with its namespace path (joined by
@@ -762,7 +790,7 @@ public class GhidraRevengService {
     /// Function and variable renames are never suppressed — see
     /// {@link ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService}.
     private int startServerTransaction(Program program, String description) {
-        program.flushEvents();
+        deliverPendingEvents(program);
         applyingServerChanges.merge(program, 1, Integer::sum);
         try {
             return program.startTransaction(description);
@@ -775,10 +803,21 @@ public class GhidraRevengService {
     private void endServerTransaction(Program program, int transactionId, boolean commit) {
         try {
             program.endTransaction(transactionId, commit);
-            program.flushEvents();
+            deliverPendingEvents(program);
         } finally {
             releaseServerChanges(program);
         }
+    }
+
+    /// Deliver every change event `program` has queued, and wait until the listeners have seen them.
+    ///
+    /// {@link Program#flushEvents} alone does not wait. Ghidra's event timer runs on the Swing thread
+    /// and takes the queued events and delivers them in one Swing task; when it has just taken them,
+    /// a flush from another thread finds the queue empty and returns while they are still being
+    /// delivered. Queuing an empty task behind it waits that delivery out.
+    private static void deliverPendingEvents(Program program) {
+        program.flushEvents();
+        Swing.runNow(() -> {});
     }
 
     private void releaseServerChanges(Program program) {
