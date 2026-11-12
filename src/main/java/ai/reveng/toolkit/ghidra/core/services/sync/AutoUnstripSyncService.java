@@ -8,7 +8,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AutoUnstripStatus;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.util.Msg;
-import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorAdapter;
 
 import java.time.Duration;
 import java.util.Map;
@@ -30,14 +30,19 @@ import java.util.function.BiConsumer;
  * completion, runs the same reconciliation the "Sync With Portal" action uses.
  *
  * <p>Polling stops when auto-unstrip completes or fails, when {@link #stopPolling} is called (even
- * if a poll is running at that moment), after {@link #DEFAULT_MAX_POLL_DURATION}, or on an error a
- * retry cannot fix. A transient error (no connection, timeout, 5xx) backs off and retries within
- * that time limit. Every way of giving up is reported in the log and the status bar.
+ * if a poll or the sync is running at that moment), after {@link #DEFAULT_MAX_POLL_DURATION}, or on
+ * an error a retry cannot fix. A transient error (no connection, timeout, 5xx) backs off and retries
+ * within that time limit. Every way of giving up is reported in the log and the status bar, except
+ * for an analysis whose auto-unstrip never starts within {@link #NOT_STARTED_GRACE}: that is not a
+ * failure, so polling ends quietly.
  */
 public class AutoUnstripSyncService {
 
     public static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_MAX_POLL_DURATION = Duration.ofMinutes(30);
+    /// How long an analysis may report auto-unstrip as not started (UNINITIALISED or UNKNOWN) before
+    /// polling assumes it will never run. Capped by the overall time limit.
+    public static final Duration NOT_STARTED_GRACE = Duration.ofMinutes(5);
     /// Longest wait between polls while the status endpoint keeps failing transiently.
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(60);
 
@@ -47,6 +52,7 @@ public class AutoUnstripSyncService {
     private final BiConsumer<String, Boolean> statusNotifier;
     private final long pollIntervalMillis;
     private final Duration maxPollDuration;
+    private final Duration notStartedGrace;
     private final ScheduledExecutorService scheduler;
     private final Map<AnalysisID, Poller> pollers = new ConcurrentHashMap<>();
 
@@ -63,6 +69,7 @@ public class AutoUnstripSyncService {
         this.statusNotifier = statusNotifier;
         this.pollIntervalMillis = pollInterval.toMillis();
         this.maxPollDuration = maxPollDuration;
+        this.notStartedGrace = NOT_STARTED_GRACE.compareTo(maxPollDuration) < 0 ? NOT_STARTED_GRACE : maxPollDuration;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "RevEng.AI-AutoUnstripSync");
             thread.setDaemon(true);
@@ -89,7 +96,7 @@ public class AutoUnstripSyncService {
     }
 
     /// Stop polling for the given analysis. A poll that is running right now neither reschedules
-    /// nor starts a sync afterwards.
+    /// nor starts a sync afterwards, and a sync that is running is cancelled and rolls back.
     ///
     /// @return whether polling was still active for the analysis
     public boolean stopPolling(AnalysisID analysisID) {
@@ -113,8 +120,12 @@ public class AutoUnstripSyncService {
         private final AnalysedProgram analysedProgram;
         private final boolean resyncIfAlreadyComplete;
         private final long startNanos = System.nanoTime();
+        /// Cancelled together with the poller, so a sync that is running stops and rolls back.
+        private final TaskMonitorAdapter syncMonitor = new TaskMonitorAdapter(true);
         private boolean firstPoll = true;
+        private boolean started = false;
         private int consecutiveFailures = 0;
+        private String lastFailure;
         /// Guarded by {@code this}
         private boolean cancelled = false;
         /// Guarded by {@code this}
@@ -127,6 +138,7 @@ public class AutoUnstripSyncService {
 
         synchronized void cancel() {
             cancelled = true;
+            syncMonitor.cancel();
             if (future != null) {
                 future.cancel(false);
             }
@@ -168,21 +180,27 @@ public class AutoUnstripSyncService {
             AutoUnstripStatus status;
             try {
                 status = revengService.getAutoUnstripStatus(analysedProgram.analysisID());
-            } catch (ApiException e) {
+            } catch (ApiException | RuntimeException e) {
+                // The typed API wraps some ApiExceptions in a RuntimeException; PushFailure finds them.
                 if (isCancelled()) {
                     return;
                 }
-                if (PushFailure.of(e) != PushFailure.TRANSIENT) {
+                var failure = PushFailure.of(e);
+                if (failure != PushFailure.TRANSIENT) {
                     finish();
+                    var remedy = failure == PushFailure.AUTH
+                            ? "Check the RevEng.AI API key in the plugin configuration."
+                            : "Use Sync With Portal to pull the recovered names later.";
                     announce("RevEng.AI: stopped waiting for auto-unstrip, the status check failed (%s). "
-                            .formatted(describe(e)) + "Use Sync With Portal to pull the recovered names later.", true);
+                            .formatted(describe(e)) + remedy, true);
                     return;
                 }
                 consecutiveFailures++;
+                lastFailure = describe(e);
                 if (consecutiveFailures == 1) {
                     // Logged once per outage, so a portal that is down for a while does not flood the log.
                     loggingService.warn("Checking the auto-unstrip status failed (%s); retrying with back-off."
-                            .formatted(describe(e)));
+                            .formatted(lastFailure));
                 }
                 rescheduleOrGiveUp(backoffMillis());
                 return;
@@ -197,11 +215,16 @@ public class AutoUnstripSyncService {
 
             switch (status) {
                 case COMPLETED -> {
-                    finish();
                     if (firstPoll && !resyncIfAlreadyComplete) {
+                        finish();
                         return;
                     }
-                    runSync();
+                    // Stays in the map while syncing, so stopPolling (e.g. Detach) can still cancel it.
+                    try {
+                        runSync();
+                    } finally {
+                        finish();
+                    }
                 }
                 case FAILED -> {
                     finish();
@@ -209,11 +232,23 @@ public class AutoUnstripSyncService {
                         announce("RevEng.AI auto-unstrip failed; recovered names were not synced.", true);
                     }
                 }
+                case UNINITIALISED, UNKNOWN -> {
+                    firstPoll = false;
+                    if (!started && Duration.ofNanos(System.nanoTime() - startNanos).compareTo(notStartedGrace) >= 0) {
+                        // Auto-unstrip never started for this analysis; there is nothing to wait for or report.
+                        finish();
+                        loggingService.info("Auto-unstrip has not started for analysis %d; not waiting for it."
+                                .formatted(analysedProgram.analysisID().id()));
+                        return;
+                    }
+                    rescheduleOrGiveUp(pollIntervalMillis);
+                }
                 default -> {
-                    if (firstPoll) {
+                    if (!started) {
                         announce("RevEng.AI: waiting for auto-unstrip to finish before syncing recovered "
                                 + "function names and data types…", false);
                     }
+                    started = true;
                     firstPoll = false;
                     rescheduleOrGiveUp(pollIntervalMillis);
                 }
@@ -230,9 +265,11 @@ public class AutoUnstripSyncService {
             if (elapsed.plusMillis(delayMillis).compareTo(maxPollDuration) > 0) {
                 finish();
                 if (!isCancelled()) {
-                    announce(("RevEng.AI: auto-unstrip has not finished after %s; stopped waiting. "
-                            + "Use Sync With Portal to pull the recovered names later.")
-                            .formatted(describe(maxPollDuration)), true);
+                    var cause = consecutiveFailures > 0
+                            ? "the auto-unstrip status could not be checked for %s (%s)".formatted(describe(maxPollDuration), lastFailure)
+                            : "auto-unstrip has not finished after %s".formatted(describe(maxPollDuration));
+                    announce("RevEng.AI: %s; stopped waiting. Use Sync With Portal to pull the recovered names later."
+                            .formatted(cause), true);
                 }
                 return;
             }
@@ -242,15 +279,24 @@ public class AutoUnstripSyncService {
         private void runSync() {
             // The program may have been detached, or attached to another analysis, since polling began.
             var current = revengService.getAnalysedProgram(analysedProgram.program());
-            if (isCancelled() || current.isEmpty()
-                    || !current.get().analysisID().equals(analysedProgram.analysisID())) {
+            if (isCancelled()) {
+                loggingService.info("Auto-unstrip finished for analysis %d, but polling for it was stopped; not syncing."
+                        .formatted(analysedProgram.analysisID().id()));
+                return;
+            }
+            if (current.isEmpty() || !current.get().analysisID().equals(analysedProgram.analysisID())) {
                 loggingService.info("Auto-unstrip finished for analysis %d, but the program is no longer attached to it; not syncing."
                         .formatted(analysedProgram.analysisID().id()));
                 return;
             }
             announce("RevEng.AI: auto-unstrip finished; syncing recovered function names and data types…", false);
             try {
-                var summary = revengService.syncAnalysisUpdates(current.get(), TaskMonitor.DUMMY, loggingService);
+                var summary = revengService.syncAnalysisUpdates(current.get(), syncMonitor, loggingService);
+                if (isCancelled()) {
+                    loggingService.info("Stopped the auto-unstrip sync for analysis %d; its changes were rolled back."
+                            .formatted(analysedProgram.analysisID().id()));
+                    return;
+                }
                 announce(("RevEng.AI: auto-unstrip sync applied %d recovered name(s) and %d signature(s), "
                         + "and pushed %d local type set(s).")
                         .formatted(summary.namesModifiedRemotely(), summary.appliedSignatures(),
@@ -258,7 +304,7 @@ public class AutoUnstripSyncService {
             } catch (Exception e) {
                 Msg.warn(AutoUnstripSyncService.this, "Failed to sync analysis after auto-unstrip", e);
                 if (isCancelled()) {
-                    // Detached mid-sync; the failure is a consequence of that, not something to report.
+                    // Stopped mid-sync (e.g. detached); the failure is a consequence of that, not something to report.
                     return;
                 }
                 announce("RevEng.AI: failed to sync analysis after auto-unstrip: " + e.getMessage(), true);
@@ -266,8 +312,11 @@ public class AutoUnstripSyncService {
         }
     }
 
-    private static String describe(ApiException e) {
-        return e.getCode() > 0 ? "HTTP " + e.getCode() : String.valueOf(e.getMessage());
+    private static String describe(Exception e) {
+        if (e instanceof ApiException api && api.getCode() > 0) {
+            return "HTTP " + api.getCode();
+        }
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     private static String describe(Duration duration) {

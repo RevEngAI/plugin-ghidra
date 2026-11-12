@@ -49,7 +49,10 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         final List<BatchRenameInputBody> renameCalls = new ArrayList<>();
         final Deque<AutoUnstripStatus> unstripStatuses = new ArrayDeque<>();
         List<FunctionInfo> functions = List.of();
-        int getFunctionInfoCalls = 0;
+        volatile int getFunctionInfoCalls = 0;
+        /// When set, a function info fetch (the start of a sync) blocks until it is released.
+        volatile CountDownLatch inSync;
+        volatile CountDownLatch releaseSync;
 
         @Override
         public AnalysisStatus status(TypedApiInterface.AnalysisID analysisID) {
@@ -59,6 +62,14 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
         @Override
         public List<FunctionInfo> getFunctionInfo(TypedApiInterface.AnalysisID analysisID) {
             getFunctionInfoCalls++;
+            if (inSync != null) {
+                inSync.countDown();
+                try {
+                    releaseSync.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             return functions;
         }
 
@@ -332,6 +343,111 @@ public class AutoUnstripSyncTest extends RevEngMockableHeadedIntegrationTest {
             Thread.sleep(500);
             assertEquals("a detached program is not synced", 0, api.getFunctionInfoCalls);
             assertTrue("nothing is reported as failed", announcements.warnings.isEmpty());
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void detachDuringTheSyncCancelsItWithoutAWarning() throws Exception {
+        var api = new UnstripApi();
+        api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
+        var fixture = setUp(api);
+        api.inSync = new CountDownLatch(1);
+        api.releaseSync = new CountDownLatch(1);
+        var announcements = new Announcements();
+
+        var syncService = fastService(fixture, announcements, Duration.ofMinutes(1));
+        try {
+            syncService.pollAndSync(fixture.analysed(), true);
+            assertTrue(api.inSync.await(5, TimeUnit.SECONDS));
+            // What the Detach action does while the sync is running.
+            assertTrue("a running sync can still be stopped", syncService.stopPolling(fixture.analysed().analysisID()));
+            var program = fixture.analysed().program();
+            program.withTransaction("detach", () -> fixture.service().removeProgramAssociation(program));
+            api.releaseSync.countDown();
+            Thread.sleep(500);
+            assertTrue("a sync stopped by Detach is not reported as failed", announcements.warnings.isEmpty());
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void doesNotSyncAProgramReattachedToAnotherAnalysisWhilePolling() throws Exception {
+        var api = new UnstripApi();
+        api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
+        api.inPoll = new CountDownLatch(1);
+        api.releasePoll = new CountDownLatch(1);
+        var fixture = setUp(api);
+
+        var syncService = fastService(fixture, (m, w) -> {}, Duration.ofMinutes(1));
+        try {
+            syncService.pollAndSync(fixture.analysed(), true);
+            assertTrue(api.inPoll.await(5, TimeUnit.SECONDS));
+            var program = fixture.analysed().program();
+            program.withTransaction("detach", () -> fixture.service().removeProgramAssociation(program));
+            var reattached = fixture.service().registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(2));
+            fixture.service().registerFinishedAnalysisForProgram(reattached, TaskMonitor.DUMMY);
+            api.getFunctionInfoCalls = 0;
+            api.releasePoll.countDown();
+            Thread.sleep(500);
+            assertEquals("the old analysis is not synced into the re-attached program", 0, api.getFunctionInfoCalls);
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void stopsQuietlyWhenUnstripNeverStarts() throws Exception {
+        var api = new UnstripApi();
+        api.unstripStatuses.add(AutoUnstripStatus.UNINITIALISED);
+        var fixture = setUp(api);
+        var announcements = new Announcements();
+
+        var syncService = fastService(fixture, announcements, Duration.ofMillis(400));
+        try {
+            syncService.pollAndSync(fixture.analysed(), false);
+            assertTrue("polling ends", waitUntil(() -> !syncService.stopPolling(fixture.analysed().analysisID()), 5000));
+            assertTrue("an unstrip that never started is neither announced nor reported", announcements.all.isEmpty());
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void pointsAtTheApiKeyWhenTheStatusCheckIsRefused() throws Exception {
+        var api = new UnstripApi();
+        api.failures.add(new WrappedApiException(401));
+        var fixture = setUp(api);
+        var announcements = new Announcements();
+
+        var syncService = fastService(fixture, announcements, Duration.ofMinutes(1));
+        try {
+            syncService.pollAndSync(fixture.analysed(), true);
+            assertTrue(waitUntil(() -> !announcements.warnings.isEmpty(), 5000));
+            assertTrue(announcements.warnings.get(0).contains("API key"));
+        } finally {
+            syncService.dispose();
+        }
+    }
+
+    @Test
+    public void namesTheOutageWhenTheTimeLimitIsSpentRetrying() throws Exception {
+        var api = new UnstripApi();
+        for (int i = 0; i < 100; i++) {
+            api.failures.add(new WrappedApiException(503));
+        }
+        api.unstripStatuses.add(AutoUnstripStatus.COMPLETED);
+        var fixture = setUp(api);
+        var announcements = new Announcements();
+
+        var syncService = fastService(fixture, announcements, Duration.ofMillis(400));
+        try {
+            syncService.pollAndSync(fixture.analysed(), true);
+            assertTrue(waitUntil(() -> !announcements.warnings.isEmpty(), 5000));
+            assertTrue(announcements.warnings.get(0).contains("could not be checked"));
+            assertTrue(announcements.warnings.get(0).contains("HTTP 503"));
         } finally {
             syncService.dispose();
         }
