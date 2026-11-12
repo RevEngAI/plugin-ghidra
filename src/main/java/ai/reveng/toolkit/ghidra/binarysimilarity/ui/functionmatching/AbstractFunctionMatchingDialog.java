@@ -177,7 +177,7 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
             String stopped = switch (result.ending()) {
                 case UNRECOGNISED -> "The server reported a function matching status this plugin does not recognise "
                         + "(the matching may have been cancelled). Press Match Functions to start it again.";
-                case TIMED_OUT -> "Function matching has not finished after %s; stopped waiting. Press Match Functions to check again."
+                case TIMED_OUT -> "Function matching has not finished after %s; stopped waiting. Press Match Functions to start it again."
                         .formatted(StatusPoller.describe(result.waited()));
                 default -> null;
             };

@@ -413,7 +413,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
     static String unknownStatusOnOpenMessage(GhidraRevengService.ProgramWithID program) {
         return ("RevEng.AI: analysis %d of %s reports a status this plugin does not recognise; not waiting for it. "
-                + "Use Check status or View in portal to follow it.")
+                + "Reopen the program to check it again, or use View in portal.")
                 .formatted(program.analysisID().id(), program.program().getName());
     }
 

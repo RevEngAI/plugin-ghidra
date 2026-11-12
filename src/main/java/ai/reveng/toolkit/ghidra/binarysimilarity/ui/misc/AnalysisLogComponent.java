@@ -125,7 +125,7 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
                                         GhidraRevengService.ProgramWithID program) {
         return switch (result.ending()) {
             case UNRECOGNISED -> ("RevEng.AI: analysis %d of %s reports a status this plugin does not recognise; "
-                    + "stopped waiting for it. Use Check status or View in portal to follow it.")
+                    + "stopped waiting for it. Reopen the program to check it again, or use View in portal.")
                     .formatted(program.analysisID().id(), program.program().getName());
             case TIMED_OUT -> ("RevEng.AI: analysis %d of %s has not finished after %s (status: %s); stopped waiting. "
                     + "It keeps running on the server: reopen the program to resume waiting, or use View in portal.")

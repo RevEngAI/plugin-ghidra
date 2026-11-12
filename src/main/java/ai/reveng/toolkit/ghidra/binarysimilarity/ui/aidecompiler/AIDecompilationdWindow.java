@@ -58,7 +58,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     private JComponent component;
     private Function function;
     private TaskMonitorComponent taskMonitorComponent;
-    private final Map<Function, AIDecompilationStatus> cache = new java.util.HashMap<>();
+    private final Map<Function, AIDecompilationStatus> cache = new java.util.concurrent.ConcurrentHashMap<>();
 
     /// Function IDs with a decompilation task currently running. Several functions can decompile
     /// concurrently in the background; this guards against launching a second task for a function
@@ -1076,8 +1076,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 case UNRECOGNISED -> {
                     // Not cached, so selecting the function again checks the server afresh.
                     cache.remove(function);
-                    reportDecompStopped(function, "the server reported a status this plugin does not recognise (%s)"
-                            .formatted(result.status().status()));
+                    reportDecompStopped(function, "the server reported a status this plugin does not recognise");
                 }
                 case TIMED_OUT -> {
                     cache.remove(function);
