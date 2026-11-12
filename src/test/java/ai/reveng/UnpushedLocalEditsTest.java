@@ -23,10 +23,12 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -44,6 +46,7 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         volatile boolean renameThrows;
         volatile boolean renameSkipped;
         volatile boolean typesThrow;
+        final AtomicInteger renameAttempts = new AtomicInteger();
 
         @Override
         public AnalysisStatus status(AnalysisID analysisID) {
@@ -71,6 +74,7 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
 
         @Override
         public long batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
+            renameAttempts.incrementAndGet();
             if (renameThrows) {
                 throw new ApiException(503, "Service Unavailable");
             }
@@ -95,6 +99,7 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
     private final FlakyApi api = new FlakyApi();
     private final RecordingLog log = new RecordingLog();
     private final List<String> statusWarnings = new CopyOnWriteArrayList<>();
+    private final List<String> statusInfos = new CopyOnWriteArrayList<>();
     private GhidraRevengService service;
     private Function function;
     private Program program;
@@ -118,12 +123,14 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         }
     }
 
+    /// With retries far enough off that they never run during the test.
     private void listen() {
-        sync = new LocalEditSyncService(service, log, (message, warning) -> {
-            if (warning) {
-                statusWarnings.add(message);
-            }
-        });
+        listen(List.of(Duration.ofHours(1)));
+    }
+
+    private void listen(List<Duration> retryDelays) {
+        sync = new LocalEditSyncService(service, log,
+                (message, warning) -> (warning ? statusWarnings : statusInfos).add(message), retryDelays);
         sync.attach(program);
     }
 
@@ -147,7 +154,7 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         rename("mine");
 
         waitForCondition(() -> !statusWarnings.isEmpty(), "the failed push should reach the status bar");
-        assertTrue(statusWarnings.get(0), statusWarnings.get(0).contains("mine"));
+        assertTrue(statusWarnings.get(0), statusWarnings.get(0).contains("retried automatically"));
         assertTrue(log.warnings.contains(statusWarnings.get(0)));
         assertTrue(api.renamed.isEmpty());
         assertTrue(nameMarked());
@@ -160,6 +167,28 @@ public class UnpushedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         assertEquals(0, summary.failedLocalEdits());
         assertEquals("the edit went up first, so it is no conflict", 0, summary.nameConflicts());
         assertFalse(nameMarked());
+    }
+
+    @Test
+    public void failuresAreReportedOnceAndRetriedUntilTheyGoUp() throws Exception {
+        listen(List.of(Duration.ofMillis(300)));
+        api.renameThrows = true;
+        rename("first");
+        waitForCondition(() -> !statusWarnings.isEmpty(), "the outage should be reported");
+        rename("second");
+
+        // The second rename's own push, then at least one automatic retry, all failing.
+        waitForCondition(() -> api.renameAttempts.get() >= 3, "the failed edit should be retried");
+        assertEquals("one report however many pushes fail: " + statusWarnings, 1, statusWarnings.size());
+        assertEquals(1, log.warnings.size());
+        assertTrue(nameMarked());
+
+        api.renameThrows = false;
+        waitForCondition(() -> !statusInfos.isEmpty(), "the recovery should be reported");
+        assertEquals(Map.of(FUNCTION_ID, "second"), api.renamed);
+        assertFalse(nameMarked());
+        assertTrue(statusInfos.get(0), statusInfos.get(0).contains("pushed 1 local edit"));
+        assertEquals(1, statusWarnings.size());
     }
 
     @Test

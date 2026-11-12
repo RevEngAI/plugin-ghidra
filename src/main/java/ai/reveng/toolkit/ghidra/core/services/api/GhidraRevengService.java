@@ -458,7 +458,8 @@ public class GhidraRevengService {
 
     /// @param pushed the unpushed local edits that reached the portal this time
     /// @param failed the ones that failed again and are still marked
-    private record LocalEditFlush(int pushed, int failed) {}
+    /// @param error  why the last of those failed, or null when none did
+    public record LocalEditFlush(int pushed, int failed, @Nullable Exception error) {}
 
     private record PendingNamePush(TypedApiInterface.FunctionID functionID, String newName, String newMangledName) {}
     private record InvalidRemoteName(Function function, TypedApiInterface.FunctionID functionID, String remoteName) {}
@@ -477,7 +478,13 @@ public class GhidraRevengService {
         log.info("Starting bidirectional sync with the RevEng.AI portal");
         // Before the remote names are read, so an edit that goes up now is not then reported as a
         // conflict with the portal's stale copy of it.
-        var flush = pushUnpushedEdits(analysedProgram, log);
+        var flush = pushUnpushedEdits(analysedProgram);
+        if (flush.pushed() > 0) {
+            log.info("Pushed %d local edit(s) that had not reached the RevEng.AI portal".formatted(flush.pushed()));
+        }
+        if (flush.failed() > 0) {
+            log.warn("Could not push %d local edit(s) to the RevEng.AI portal: %s".formatted(flush.failed(), flush.error()));
+        }
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
                 .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
 
@@ -600,10 +607,13 @@ public class GhidraRevengService {
 
     /// Push the local edits whose reactive push failed or never ran — see {@link UnpushedEdits}. A
     /// function that is gone, or not part of the analysis, has nothing left to push and is unmarked.
-    private LocalEditFlush pushUnpushedEdits(AnalysedProgram analysedProgram, ReaiLoggingService log) {
+    /// Failures are returned rather than logged, so a caller retrying in the background can report an
+    /// outage once instead of once per attempt.
+    public LocalEditFlush pushUnpushedEdits(AnalysedProgram analysedProgram) {
         var program = analysedProgram.program();
         int pushed = 0;
         int failed = 0;
+        Exception error = null;
         List<Address> nameMarks = UnpushedEdits.marked(program, UnpushedEdits.Kind.NAME);
         List<Function> renamed = new ArrayList<>();
         for (Address entryPoint : nameMarks) {
@@ -619,7 +629,7 @@ public class GhidraRevengService {
                 nameMarks.forEach(entryPoint -> UnpushedEdits.clear(program, UnpushedEdits.Kind.NAME, entryPoint));
             } catch (Exception e) {
                 failed += renamed.size();
-                log.warn("Could not push the local names of %d function(s): %s".formatted(renamed.size(), e));
+                error = e;
             }
         }
 
@@ -642,13 +652,10 @@ public class GhidraRevengService {
                 typeMarks.forEach(entryPoint -> UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, entryPoint));
             } catch (Exception e) {
                 failed += typeEdits.size();
-                log.warn("Could not push the local types of %d function(s): %s".formatted(typeEdits.size(), e));
+                error = e;
             }
         }
-        if (pushed > 0) {
-            log.info("Pushed %d local edit(s) that had not reached the RevEng.AI portal".formatted(pushed));
-        }
-        return new LocalEditFlush(pushed, failed);
+        return new LocalEditFlush(pushed, failed, error);
     }
 
     /// Apply the signatures — and with them the data types they name — that the portal holds for this

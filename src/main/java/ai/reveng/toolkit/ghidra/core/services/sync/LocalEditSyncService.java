@@ -19,6 +19,8 @@ import ghidra.program.util.ProgramChangeRecord;
 import ghidra.program.util.ProgramEvent;
 import ghidra.util.Msg;
 
+import javax.annotation.Nullable;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -47,13 +49,20 @@ import java.util.function.BiConsumer;
  * ever writes {@link SourceType#ANALYSIS} names, and only {@link SourceType#USER_DEFINED} ones are
  * pushed, so an analyst's rename is pushed even when it lands in the middle of a sync.
  *
- * <p>A push that fails is reported in the plugin log and the status bar, and the edit stays marked in
- * {@link UnpushedEdits} until a push succeeds, so "Sync with portal" sends it later.
+ * <p>A push that fails leaves the edit marked in {@link UnpushedEdits} until a push succeeds. The
+ * marked edits of that program are then retried in the background, backing off from
+ * {@link #RETRY_DELAYS}, and "Sync with portal" sends them too. A failing portal is reported once,
+ * in the plugin log and the status bar, however many pushes fail, and once more when the edits have
+ * gone up; each failure is logged only to Ghidra's console.
  */
 public class LocalEditSyncService {
 
     /// Coalesce rapid successive edits to the same function before pushing, matching IDA's debounce.
     private static final long DEBOUNCE_MS = 400;
+
+    /// The waits before each automatic retry of a program's unpushed edits; the last one repeats.
+    public static final List<Duration> RETRY_DELAYS = List.of(
+            Duration.ofSeconds(30), Duration.ofMinutes(1), Duration.ofMinutes(2), Duration.ofMinutes(5));
 
     private final GhidraRevengService revengService;
     private final ReaiLoggingService loggingService;
@@ -66,6 +75,16 @@ public class LocalEditSyncService {
     private final Map<Program, Set<Address>> dueRenames = new HashMap<>();
     private final Map<InProgram<Address>, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
     private final Map<InProgram<String>, ScheduledFuture<?>> pendingDataTypeScans = new ConcurrentHashMap<>();
+    private final List<Duration> retryDelays;
+    /// The programs whose unpushed edits wait for an automatic retry.
+    private final Map<Program, ScheduledFuture<?>> pendingRetries = new ConcurrentHashMap<>();
+    /// How many retries have failed in a row, per program, which picks the next wait.
+    private final Map<Program, Integer> failedRetries = new ConcurrentHashMap<>();
+    // The outage state below is only touched on the scheduler thread.
+    /// Whether the analyst has been told that pushes are failing.
+    private boolean outageReported;
+    /// Edits the retries have pushed since the outage was reported.
+    private int pushedSinceOutage;
 
     /// A debounce key. One service handles every open program, and two programs can have functions at
     /// the same address (two versions of one binary, or any two PEs with code at `0x140001000`), so an
@@ -74,9 +93,16 @@ public class LocalEditSyncService {
 
     public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService,
                                 BiConsumer<String, Boolean> statusNotifier) {
+        this(revengService, loggingService, statusNotifier, RETRY_DELAYS);
+    }
+
+    /// @param retryDelays the waits before each automatic retry; the last one repeats
+    public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService,
+                                BiConsumer<String, Boolean> statusNotifier, List<Duration> retryDelays) {
         this.revengService = revengService;
         this.loggingService = loggingService;
         this.statusNotifier = statusNotifier;
+        this.retryDelays = List.copyOf(retryDelays);
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "RevEng.AI-LocalEditSync");
             thread.setDaemon(true);
@@ -99,6 +125,18 @@ public class LocalEditSyncService {
         if (listener != null) {
             program.removeListener(listener);
         }
+        // Its edits stay marked, so the next sync of it still sends them.
+        var retry = pendingRetries.remove(program);
+        if (retry != null) {
+            retry.cancel(false);
+        }
+        failedRetries.remove(program);
+        scheduler.execute(() -> {
+            if (pendingRetries.isEmpty()) {
+                outageReported = false;
+                pushedSinceOutage = 0;
+            }
+        });
     }
 
     public void dispose() {
@@ -220,21 +258,21 @@ public class LocalEditSyncService {
         synchronized (dueRenames) {
             dueRenames.computeIfAbsent(program, p -> new LinkedHashSet<>()).add(entryPoint);
         }
-        schedule(pendingRenames, program, () -> pushRenames(program));
+        schedule(pendingRenames, program, program, () -> pushRenames(program));
     }
 
     private void scheduleTypes(Program program, Address entryPoint) {
         UnpushedEdits.mark(program, UnpushedEdits.Kind.TYPES, entryPoint);
-        schedule(pendingTypes, new InProgram<>(program, entryPoint), () -> pushTypes(program, entryPoint));
+        schedule(pendingTypes, new InProgram<>(program, entryPoint), program, () -> pushTypes(program, entryPoint));
     }
 
     private void scheduleDataTypeScan(Program program, DataType dataType) {
         var typeName = dataType.getName();
-        schedule(pendingDataTypeScans, new InProgram<>(program, dataType.getPathName()),
+        schedule(pendingDataTypeScans, new InProgram<>(program, dataType.getPathName()), program,
                 () -> pushFunctionsReferencingType(program, typeName));
     }
 
-    private <K> void schedule(Map<K, ScheduledFuture<?>> pending, K key, Runnable task) {
+    private <K> void schedule(Map<K, ScheduledFuture<?>> pending, K key, Program program, Runnable task) {
         var existing = pending.get(key);
         if (existing != null) {
             existing.cancel(false);
@@ -245,7 +283,7 @@ public class LocalEditSyncService {
             try {
                 task.run();
             } catch (Exception e) {
-                reportFailure("RevEng.AI: could not push a local edit to the portal", e);
+                onPushFailed(program, "Could not push a local edit", e);
             }
         }, DEBOUNCE_MS, TimeUnit.MILLISECONDS));
     }
@@ -298,14 +336,14 @@ public class LocalEditSyncService {
             }
             // Every one, including those that were gone or unknown to the portal: nothing is left to send.
             entryPoints.forEach(entryPoint -> UnpushedEdits.clear(program, UnpushedEdits.Kind.NAME, entryPoint));
+            onPushSucceeded(program);
         } catch (Exception e) {
             // Marked again in case a push that started earlier succeeded and cleared them meanwhile.
             entryPoints.forEach(entryPoint -> UnpushedEdits.mark(program, UnpushedEdits.Kind.NAME, entryPoint));
             var what = functions.size() == 1
                     ? "the rename of \"%s\"".formatted(functions.get(0).getName())
                     : "the renames of %d functions".formatted(functions.size());
-            reportFailure("RevEng.AI: could not push %s to the portal; it will be sent on the next Sync with portal"
-                    .formatted(what), e);
+            onPushFailed(program, "Could not push " + what, e);
         }
     }
 
@@ -328,19 +366,97 @@ public class LocalEditSyncService {
                     }
                 }
                 UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, entryPoint);
+                onPushSucceeded(program);
             } catch (Exception e) {
                 UnpushedEdits.mark(program, UnpushedEdits.Kind.TYPES, entryPoint);
-                reportFailure("RevEng.AI: could not push the types of \"%s\" to the portal; they will be sent on the next Sync with portal"
-                        .formatted(function.getName()), e);
+                onPushFailed(program, "Could not push the types of \"%s\"".formatted(function.getName()), e);
             }
         });
     }
 
-    private void reportFailure(String message, Exception e) {
-        var reported = "%s: %s".formatted(message, e.getMessage() != null ? e.getMessage() : e);
-        Msg.warn(this, reported, e);
-        loggingService.warn(reported);
-        statusNotifier.accept(reported, true);
+    // Everything from here on runs on the scheduler thread.
+
+    /// Log the failure to Ghidra's console, tell the analyst once per outage, and retry the program's
+    /// unpushed edits later.
+    private void onPushFailed(Program program, String detail, Exception e) {
+        Msg.warn(this, "%s: %s".formatted(detail, reasonOf(e)), e);
+        if (!outageReported) {
+            outageReported = true;
+            announce(("RevEng.AI: could not push local edits to the portal (%s). They are kept and will be "
+                    + "retried automatically.").formatted(reasonOf(e)), true);
+        }
+        scheduleRetry(program, retryDelays.get(Math.min(failedRetries.getOrDefault(program, 0), retryDelays.size() - 1)));
+    }
+
+    /// A push got through, so the portal is likely back: retry the program's other edits now rather
+    /// than at the end of the current wait.
+    private void onPushSucceeded(Program program) {
+        var waiting = pendingRetries.get(program);
+        if (waiting != null && waiting.cancel(false)) {
+            pendingRetries.remove(program);
+            scheduleRetry(program, Duration.ZERO);
+        }
+    }
+
+    private void scheduleRetry(Program program, Duration delay) {
+        if (pendingRetries.containsKey(program) || !listeners.containsKey(program)) {
+            return;
+        }
+        pendingRetries.put(program, scheduler.schedule(() -> retry(program), delay.toMillis(), TimeUnit.MILLISECONDS));
+    }
+
+    private void retry(Program program) {
+        pendingRetries.remove(program);
+        var analysedProgram = revengService.getAnalysedProgram(program);
+        if (!listeners.containsKey(program) || analysedProgram.isEmpty()) {
+            failedRetries.remove(program);
+            endOutageIfOver();
+            return;
+        }
+        GhidraRevengService.LocalEditFlush flush;
+        try {
+            flush = revengService.pushUnpushedEdits(analysedProgram.get());
+        } catch (Exception e) {
+            flush = new GhidraRevengService.LocalEditFlush(0, 1, e);
+        }
+        pushedSinceOutage += flush.pushed();
+        if (flush.failed() > 0) {
+            Msg.warn(this, "Retry of %d unpushed local edit(s) failed: %s"
+                    .formatted(flush.failed(), reasonOf(flush.error())), flush.error());
+            int failed = failedRetries.merge(program, 1, Integer::sum);
+            scheduleRetry(program, retryDelays.get(Math.min(failed, retryDelays.size() - 1)));
+            return;
+        }
+        failedRetries.remove(program);
+        endOutageIfOver();
+    }
+
+    /// Once no program has edits waiting, say so, once.
+    private void endOutageIfOver() {
+        if (!outageReported || !pendingRetries.isEmpty()) {
+            return;
+        }
+        outageReported = false;
+        announce(pushedSinceOutage > 0
+                ? "RevEng.AI: pushed %d local edit(s) that had failed earlier.".formatted(pushedSinceOutage)
+                : "RevEng.AI: local edits are reaching the portal again.", false);
+        pushedSinceOutage = 0;
+    }
+
+    private void announce(String message, boolean warning) {
+        if (warning) {
+            loggingService.warn(message);
+        } else {
+            loggingService.info(message);
+        }
+        statusNotifier.accept(message, warning);
+    }
+
+    private static String reasonOf(@Nullable Exception e) {
+        if (e == null) {
+            return "unknown error";
+        }
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     private void withAnalysedFunction(Program program, Address entryPoint,
