@@ -20,7 +20,12 @@ import ghidra.program.util.ProgramChangeRecord;
 import ghidra.program.util.ProgramEvent;
 import ghidra.util.Msg;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,11 +35,14 @@ import java.util.function.BiConsumer;
 
 /**
  * Reactive push-back of local edits to the portal (PLU-322). Registers a {@link DomainObjectListener}
- * on analysed programs and, when the user renames a function or edits its signature / variables,
- * pushes that change back to the portal in the background.
+ * on analysed programs and, when the user renames a function or edits its signature (return type,
+ * parameters, calling convention, or a data type those use), pushes that change back to the portal
+ * in the background. Local variables are not pushed: the portal's signature holds only the
+ * parameters and return type, so an edit to a local has nothing to send.
  *
  * <p>Mirrors the IDA plugin's {@code hooks/reactive.py} + {@code hooks/artifacts.py}: edits are
- * coalesced per function (debounced), and type edits are ignored while the plugin is writing
+ * debounced, renames per program and sent as one batch (a script renaming hundreds of functions makes
+ * one request, not hundreds), signature edits per function. Type edits are ignored while the plugin is writing
  * server-sourced changes into that program (see {@link GhidraRevengService#isApplyingServerChanges}),
  * so sync-applied changes are not echoed straight back. Renames need no such guard: the plugin only
  * ever writes {@link SourceType#ANALYSIS} names, and only {@link SourceType#USER_DEFINED} ones are
@@ -49,7 +57,9 @@ public class LocalEditSyncService {
     private final ReaiLoggingService loggingService;
     private final ScheduledExecutorService scheduler;
     private final Map<Program, DomainObjectListener> listeners = new ConcurrentHashMap<>();
-    private final Map<InProgram<Address>, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
+    private final Map<Program, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
+    /// The functions renamed in each program since its last rename push. Guarded by itself.
+    private final Map<Program, Set<Address>> dueRenames = new HashMap<>();
     private final Map<InProgram<Address>, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
     private final Map<InProgram<String>, ScheduledFuture<?>> pendingDataTypeScans = new ConcurrentHashMap<>();
 
@@ -98,6 +108,7 @@ public class LocalEditSyncService {
                 // which fires SYMBOL_ADDED rather than SYMBOL_RENAMED, so we react to both.
                 .each(ProgramEvent.SYMBOL_ADDED).call(record -> onVariableSymbolChanged(program, record))
                 .each(ProgramEvent.FUNCTION_CHANGED).call(record -> onFunctionChanged(program, record))
+                .each(ProgramEvent.FUNCTION_ADDED).call(record -> onFunctionAdded(program, record))
                 // Editing a data type definition (rename a struct, change its fields, ...) does not
                 // fire a function event, so we react to the data-type events and push every server-known
                 // function that references the edited type — the portal stores types per function.
@@ -132,9 +143,9 @@ public class LocalEditSyncService {
         }
     }
 
-    /// Push the containing function's types when a local variable or parameter symbol changed.
+    /// Push the containing function's signature when one of its parameter symbols changed.
     private void scheduleTypesForVariable(Program program, Symbol symbol) {
-        if (symbol.getSymbolType() != SymbolType.LOCAL_VAR && symbol.getSymbolType() != SymbolType.PARAMETER) {
+        if (symbol.getSymbolType() != SymbolType.PARAMETER) {
             return;
         }
         if (symbol.getParentNamespace() instanceof Function function && isSyncable(function)) {
@@ -158,12 +169,24 @@ public class LocalEditSyncService {
         if (!isSyncable(function) || revengService.isApplyingServerChanges(program)) {
             return;
         }
-        // Modifier-only changes (inline/no-return/thunk/...) carry no type information to sync.
-        // Everything else (return type, parameters, variable types) is pushed.
-        if (functionChange.isFunctionModifierChange()) {
+        // Only the return type and parameters reach the portal. Ghidra reports any other change —
+        // a local variable added, removed or retyped, the stack frame, an inline or no-return flag —
+        // without one of these two types, and pushing for it would resend an unchanged signature.
+        if (!functionChange.isFunctionSignatureChange()) {
             return;
         }
         scheduleTypes(program, function.getEntryPoint());
+    }
+
+    /// A function deleted and created again keeps its server id, because the id map is keyed by
+    /// address, but not its tag; put the tag back so it still shows as synced.
+    private void onFunctionAdded(Program program, DomainObjectChangeRecord record) {
+        if (record instanceof ProgramChangeRecord programChange) {
+            var function = program.getFunctionManager().getFunctionAt(programChange.getStart());
+            if (isSyncable(function)) {
+                revengService.restoreSyncedTag(function);
+            }
+        }
     }
 
     private void onDataTypeChanged(Program program, DomainObjectChangeRecord record) {
@@ -187,7 +210,10 @@ public class LocalEditSyncService {
     }
 
     private void scheduleRename(Program program, Address entryPoint) {
-        schedule(pendingRenames, new InProgram<>(program, entryPoint), () -> pushRename(program, entryPoint));
+        synchronized (dueRenames) {
+            dueRenames.computeIfAbsent(program, p -> new LinkedHashSet<>()).add(entryPoint);
+        }
+        schedule(pendingRenames, program, () -> pushRenames(program));
     }
 
     private void scheduleTypes(Program program, Address entryPoint) {
@@ -231,16 +257,35 @@ public class LocalEditSyncService {
         }
     }
 
-    private void pushRename(Program program, Address entryPoint) {
-        withAnalysedFunction(program, entryPoint, (analysedProgram, function) -> {
-            try {
-                revengService.pushFunctionRename(analysedProgram, function).ifPresent(pushedName ->
-                        loggingService.info("Pushed rename of function at %s to \"%s\" to the RevEng.AI portal"
-                                .formatted(entryPoint, pushedName)));
-            } catch (ApiException e) {
-                Msg.warn(this, "Failed to push rename for %s to portal".formatted(function.getName()), e);
+    /// Push every rename made in `program` since its last push, in one request.
+    private void pushRenames(Program program) {
+        Set<Address> entryPoints;
+        synchronized (dueRenames) {
+            entryPoints = dueRenames.remove(program);
+        }
+        var analysedProgram = revengService.getAnalysedProgram(program);
+        if (entryPoints == null || analysedProgram.isEmpty()) {
+            return;
+        }
+        List<Function> functions = new ArrayList<>();
+        for (Address entryPoint : entryPoints) {
+            var function = program.getFunctionManager().getFunctionAt(entryPoint);
+            if (isSyncable(function)) {
+                functions.add(function);
             }
-        });
+        }
+        try {
+            var pushed = revengService.pushFunctionRenames(analysedProgram.get(), functions);
+            if (pushed.size() == 1) {
+                var only = pushed.entrySet().iterator().next();
+                loggingService.info("Pushed rename of function at %s to \"%s\" to the RevEng.AI portal"
+                        .formatted(only.getKey().getEntryPoint(), only.getValue()));
+            } else if (!pushed.isEmpty()) {
+                loggingService.info("Pushed renames of %d functions to the RevEng.AI portal".formatted(pushed.size()));
+            }
+        } catch (ApiException e) {
+            Msg.warn(this, "Failed to push renames of %d function(s) to portal".formatted(functions.size()), e);
+        }
     }
 
     private void pushTypes(Program program, Address entryPoint) {
