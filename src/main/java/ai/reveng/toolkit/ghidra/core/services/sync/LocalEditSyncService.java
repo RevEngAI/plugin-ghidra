@@ -91,7 +91,7 @@ public class LocalEditSyncService {
     /// How many retries have failed in a row, per program, which picks the next wait.
     private final Map<Program, Integer> failedRetries = new ConcurrentHashMap<>();
     // The outage state below is only touched on the scheduler thread.
-    /// Whether the analyst has been told that pushes are failing.
+    /// Whether the analyst has been told that pushes are failing, for want of an answer or a key.
     private boolean outageReported;
     /// Edits the retries have pushed since the outage was reported.
     private int pushedSinceOutage;
@@ -150,7 +150,7 @@ public class LocalEditSyncService {
         stoppedOnAuth.remove(program);
         reportedRejections.remove(program);
         scheduler.execute(() -> {
-            if (pendingRetries.isEmpty()) {
+            if (pendingRetries.isEmpty() && stoppedOnAuth.isEmpty()) {
                 outageReported = false;
                 pushedSinceOutage = 0;
             }
@@ -481,6 +481,8 @@ public class LocalEditSyncService {
             stoppedOnAuth.add(program);
             if (!authReported) {
                 authReported = true;
+                // So the edits that go up once the key works are reported, as after an outage.
+                outageReported = true;
                 announce(("RevEng.AI: the portal refused the API key (%s), so local edits are not being pushed. "
                         + "Check the key in the RevEng.AI settings; the edits are kept and will be sent on the next "
                         + "Sync with portal.").formatted(reasonOf(refusedKey.get().error())), true);
@@ -508,9 +510,10 @@ public class LocalEditSyncService {
                 .formatted(fresh.size(), reasonOf(fresh.get(0).error())), true);
     }
 
-    /// Once no program has edits waiting for a retry, say that the outage is over, once.
+    /// Once no program has edits waiting for a retry or a working key, say that the outage is over,
+    /// once.
     private void endOutageIfOver() {
-        if (!outageReported || !pendingRetries.isEmpty()) {
+        if (!outageReported || !pendingRetries.isEmpty() || !stoppedOnAuth.isEmpty()) {
             return;
         }
         outageReported = false;

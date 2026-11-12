@@ -298,7 +298,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 					.formatted(summary.pushedLocalEdits()));
 		}
 		if (summary.failedLocalEdits() > 0) {
-			text.append("\n%d local edit(s) still could not be pushed; they will be retried on the next sync."
+			text.append("\n%d local edit(s) still could not be pushed; the RevEng.AI log says why, and they are kept for the next sync."
 					.formatted(summary.failedLocalEdits()));
 		}
 		if (summary.nameConflicts() > 0 || summary.signatureConflicts() > 0) {

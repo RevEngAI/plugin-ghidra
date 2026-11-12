@@ -78,6 +78,7 @@ public class RejectedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
     private final PickyApi api = new PickyApi();
     private final RecordingLog log = new RecordingLog();
     private final List<String> statusWarnings = new CopyOnWriteArrayList<>();
+    private final List<String> statusInfos = new CopyOnWriteArrayList<>();
     private Program program;
     private Function first;
     private Function second;
@@ -95,11 +96,9 @@ public class RejectedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         service.registerFinishedAnalysisForProgram(withId, TaskMonitor.DUMMY);
         // A retry after a wait only happens when the portal cannot be reached, which these tests
         // never do; one that came anyway would show up as an extra request.
-        sync = new LocalEditSyncService(service, log, (message, warning) -> {
-            if (warning) {
-                statusWarnings.add(message);
-            }
-        }, List.of(Duration.ofHours(1)));
+        sync = new LocalEditSyncService(service, log,
+                (message, warning) -> (warning ? statusWarnings : statusInfos).add(message),
+                List.of(Duration.ofHours(1)));
         sync.attach(program);
     }
 
@@ -171,5 +170,7 @@ public class RejectedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         waitForCondition(() -> api.renamed.size() == 2, "the earlier rename should follow the one that got through");
         assertEquals(Map.of(1L, "first_name_again", 2L, "second_name"), api.renamed);
         assertFalse(marked(first));
+        waitForCondition(() -> !statusInfos.isEmpty(), "the edits that followed should be reported");
+        assertTrue(statusInfos.get(0), statusInfos.get(0).contains("pushed 1 local edit"));
     }
 }
