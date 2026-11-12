@@ -180,20 +180,26 @@ public class GhidraRevengService {
         }
         statusCache.put(programWithID.analysisID, AnalysisStatus.Complete);
 
-        var association = associateFunctionInfo(programWithID);
-        var analysedProgram = association.analysedProgram();
+        // The function ids alone make the program count as analysed, though none of the portal's names or types
+        // may have arrived. One transaction around the whole load is rolled back when any part of it fails, so the
+        // program is left as it was, the load can be retried, and the undo history holds nothing to bring it back.
+        var program = programWithID.program();
+        var transactionId = program.startTransaction("RevEng.AI: Load analysis results");
+        boolean loaded = false;
+        FunctionAssociation association;
         try {
-            pullFunctionInfoFromAnalysis(analysedProgram, monitor);
+            association = associateFunctionInfo(programWithID);
+            pullFunctionInfoFromAnalysis(association.analysedProgram(), monitor);
             monitor.checkCancelled();
-        } catch (RuntimeException | CancelledException e) {
-            // The function ids alone make the program count as analysed, though none of the portal's names or
-            // types arrived. Take them out again so the program is left as it was and the load can be retried.
-            var program = programWithID.program();
-            program.withTransaction("RevEng.AI: Undo incomplete load", () -> clearFunctionAssociation(program));
-            throw e;
+            loaded = true;
+        } finally {
+            // A program closed during the load takes no more transactions, and must not hide why the load failed
+            if (!program.isClosed()) {
+                program.endTransaction(transactionId, loaded);
+            }
         }
         Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary", association.summary());
-        return analysedProgram;
+        return association.analysedProgram();
     }
 
     /// What {@link #associateFunctionInfo(ProgramWithID)} produced, with the summary to show once the
@@ -1207,8 +1213,9 @@ public class GhidraRevengService {
 
             }
         } finally {
-            // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-            endServerTransaction(analysedProgram.program(), transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
+            // Done iterating over all functions. A transaction that changed nothing leaves no undo entry, and
+            // aborting it would abort the load it runs inside too, so it is discarded only when cancelled
+            endServerTransaction(analysedProgram.program(), transactionId, !monitor.isCancelled());
         }
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",

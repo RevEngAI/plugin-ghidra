@@ -404,6 +404,8 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
     private void loadAnalysisResults(GhidraRevengService.ProgramWithID program) {
         failedLoads.remove(program.program());
+        // Disables the Retry action straight away, so a second click cannot start a second load
+        tool.contextChanged(null);
         // Events arrive on the Swing thread, and loading the results makes several requests
         tool.execute(new Task("Load RevEng.AI analysis results", true, false, false) {
             @Override
@@ -428,12 +430,17 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     /// The service leaves the program as it was before the load, so it can simply be loaded again: from the
     /// dialog straight away, or later from the Retry action.
     private void reportFailedLoad(GhidraRevengService.ProgramWithID program, String message, @Nullable Exception error) {
-        failedLoads.add(program.program());
         var loggingService = tool.getService(ReaiLoggingService.class);
         if (loggingService != null) {
             loggingService.error(message);
         }
+        // On the Swing thread, like programClosed, so a program closed during the load cannot be added after it
         SwingUtilities.invokeLater(() -> {
+            if (program.program().isClosed()) {
+                // Closed during the load, which is likely why it failed. There is nothing left to retry on.
+                return;
+            }
+            failedLoads.add(program.program());
             tool.setStatusInfo(message, true);
             tool.contextChanged(null);
             if (error == null) {
@@ -450,7 +457,11 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     }
 
     private static String loadFailedMessage(GhidraRevengService.ProgramWithID program, Exception error) {
-        var reason = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
+        // The API wraps its exceptions as `new RuntimeException(cause)`, whose message is the cause's class name
+        // followed by its message. The analyst only needs the message.
+        Throwable shown = error.getCause() != null && Objects.equals(error.getMessage(), error.getCause().toString())
+                ? error.getCause() : error;
+        var reason = shown.getMessage() != null ? shown.getMessage() : shown.getClass().getSimpleName();
         return "Could not load the results of RevEng.AI analysis %d into %s: %s"
                 .formatted(program.analysisID().id(), program.program().getName(), reason);
     }

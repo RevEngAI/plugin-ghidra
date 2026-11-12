@@ -8,7 +8,9 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.Function;
+import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorAdapter;
 import org.junit.Test;
 
 import java.util.List;
@@ -102,6 +104,49 @@ public class IncompleteLoadTest extends RevEngMockableHeadedIntegrationTest {
         assertEquals("the function should carry exactly one RevEng bookmark",
                 1, program.getBookmarkManager().getBookmarks(function.getEntryPoint(), REVENG_BOOKMARK_TYPE).length);
         assertTrue(hasRevEngTag(function));
+    }
+
+    @Test
+    public void failedPullLeavesNothingToUndo() throws Exception {
+        var portal = new FlakyPortal();
+        var service = new GhidraRevengService(portal);
+        var builder = newX64Program();
+        builder.createMemory("matched", "0x4000", 0x100);
+        Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        var program = builder.getProgram();
+
+        var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(1));
+        var undoNames = program.getAllUndoNames();
+        assertThrows(RuntimeException.class,
+                () -> service.registerFinishedAnalysisForProgram(programWithID, TaskMonitor.DUMMY));
+
+        assertEquals("a failed load should leave no undo entry that brings the association back",
+                undoNames, program.getAllUndoNames());
+        assertTrue(service.getAnalysedProgram(program).isEmpty());
+        assertFalse(hasRevEngTag(function));
+    }
+
+    @Test
+    public void cancelledLoadLeavesProgramUnattached() throws Exception {
+        var portal = new FlakyPortal();
+        portal.portalDown = false;
+        var service = new GhidraRevengService(portal);
+        var builder = newX64Program();
+        builder.createMemory("matched", "0x4000", 0x100);
+        Function function = builder.createEmptyFunction(null, "0x4000", 0x100, Undefined.getUndefinedDataType(8));
+        var program = builder.getProgram();
+        var originalName = function.getName();
+        var monitor = new TaskMonitorAdapter(true);
+        monitor.cancel();
+
+        var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(1));
+        assertThrows(CancelledException.class,
+                () -> service.registerFinishedAnalysisForProgram(programWithID, monitor));
+
+        assertTrue(service.getKnownProgram(program).isPresent());
+        assertTrue("a cancelled load must not count as analysed", service.getAnalysedProgram(program).isEmpty());
+        assertFalse(hasRevEngTag(function));
+        assertEquals(originalName, function.getName());
     }
 
     private static boolean hasRevEngTag(Function function) {
