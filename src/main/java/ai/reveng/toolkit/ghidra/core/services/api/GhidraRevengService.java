@@ -34,6 +34,7 @@ import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
+import ghidra.util.Swing;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
@@ -789,7 +790,7 @@ public class GhidraRevengService {
     /// Function and variable renames are never suppressed — see
     /// {@link ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService}.
     private int startServerTransaction(Program program, String description) {
-        program.flushEvents();
+        deliverPendingEvents(program);
         applyingServerChanges.merge(program, 1, Integer::sum);
         try {
             return program.startTransaction(description);
@@ -802,10 +803,21 @@ public class GhidraRevengService {
     private void endServerTransaction(Program program, int transactionId, boolean commit) {
         try {
             program.endTransaction(transactionId, commit);
-            program.flushEvents();
+            deliverPendingEvents(program);
         } finally {
             releaseServerChanges(program);
         }
+    }
+
+    /// Deliver every change event `program` has queued, and wait until the listeners have seen them.
+    ///
+    /// {@link Program#flushEvents} alone does not wait. Ghidra's event timer runs on the Swing thread
+    /// and takes the queued events and delivers them in one Swing task; when it has just taken them,
+    /// a flush from another thread finds the queue empty and returns while they are still being
+    /// delivered. Queuing an empty task behind it waits that delivery out.
+    private static void deliverPendingEvents(Program program) {
+        program.flushEvents();
+        Swing.runNow(() -> {});
     }
 
     private void releaseServerChanges(Program program) {
