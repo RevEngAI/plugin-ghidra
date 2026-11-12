@@ -207,6 +207,15 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 						// For now this is the only place to trigger the removal of the association
 						// If this changes, the RevEngAIAnalysisStatusChanged event should be changed to accommodate
 						// this kind of event
+						// Stop the background work tied to this analysis first, so none of it runs against the
+						// association while it is being removed, or later against a different analysis.
+						localEditSyncService.detach(program);
+						if (autoUnstripSyncService.stopPolling(knownProgram.get().analysisID())) {
+							var message = "RevEng.AI: stopped waiting for auto-unstrip; the program was detached from "
+									+ displayText + ".";
+							tool.getService(ReaiLoggingService.class).info(message);
+							tool.setStatusInfo(message);
+						}
 						program.withTransaction("Undo binary association", () -> revengService.removeProgramAssociation(program));
 
 						// Refresh action states after detaching
