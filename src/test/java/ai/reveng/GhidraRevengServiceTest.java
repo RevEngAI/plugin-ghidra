@@ -3,6 +3,7 @@ package ai.reveng;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -62,6 +63,69 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
         assertThrows(RuntimeException.class,
                 () -> service.waitForFinishedAnalysis(TaskMonitor.DUMMY, programWithID, null, null));
         assertEquals(10, statusCalls[0]);
+    }
+
+    @Test
+    public void testStatusPollingEndsOnUnrecognisedStatus() throws Exception {
+        var statusCalls = new int[1];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                statusCalls[0]++;
+                return AnalysisStatus.Unknown;
+            }
+        });
+        setInstanceField("pollIntervalMs", service, 1L);
+        var programWithID = new GhidraRevengService.ProgramWithID(newX64Program().getProgram(), new AnalysisID(1));
+
+        var result = service.waitForAnalysis(TaskMonitor.DUMMY, programWithID, null, null);
+        assertEquals(StatusPoller.Ending.UNRECOGNISED, result.ending());
+        assertEquals(AnalysisStatus.Unknown, result.status());
+        assertEquals(1, statusCalls[0]);
+    }
+
+    @Test
+    public void testStatusPollingStopsAtTheTimeLimit() throws Exception {
+        var logCalls = new int[1];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Processing;
+            }
+
+            @Override
+            public String getAnalysisLogs(AnalysisID analysisID) {
+                logCalls[0]++;
+                return "still going";
+            }
+        });
+        setInstanceField("pollIntervalMs", service, 5L);
+        setInstanceField("maxPollIntervalMs", service, 20L);
+        setInstanceField("maxAnalysisWaitMs", service, 200L);
+        var programWithID = new GhidraRevengService.ProgramWithID(newX64Program().getProgram(), new AnalysisID(1));
+
+        var result = service.waitForAnalysis(TaskMonitor.DUMMY, programWithID, null, null);
+        assertEquals(StatusPoller.Ending.TIMED_OUT, result.ending());
+        assertEquals(AnalysisStatus.Processing, result.status());
+        // Backing off to 20ms, 200ms holds well under the 40 polls a fixed 5ms interval would make
+        assertTrue("polled " + logCalls[0] + " times", logCalls[0] < 25);
+    }
+
+    @Test
+    public void testStatusPollingWaitsThroughUploaded() throws Exception {
+        var statusCalls = new int[1];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return ++statusCalls[0] < 3 ? AnalysisStatus.Uploaded : AnalysisStatus.Complete;
+            }
+        });
+        setInstanceField("pollIntervalMs", service, 1L);
+        var programWithID = new GhidraRevengService.ProgramWithID(newX64Program().getProgram(), new AnalysisID(1));
+
+        assertEquals(AnalysisStatus.Complete,
+                service.waitForFinishedAnalysis(TaskMonitor.DUMMY, programWithID, null, null));
+        assertEquals(3, statusCalls[0]);
     }
 
     static class OfflineAfterSetupAPI extends UnimplementedAPI {

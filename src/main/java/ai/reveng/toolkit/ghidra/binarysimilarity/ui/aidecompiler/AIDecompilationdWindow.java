@@ -7,6 +7,7 @@ import ai.reveng.model.ProgressMessage;
 import ai.reveng.model.RenderedToken;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
@@ -34,6 +35,7 @@ import javax.swing.text.BadLocationException;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -133,6 +135,32 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 refreshCurrentFunction();
             }
         });
+
+        addLocalAction(new DockingAction("Regenerate AI Decompilation", getName()) {
+            {
+                setToolBarData(new ToolBarData(new GIcon("icon.redo"), null));
+                setDescription("Run the failed AI decompilation of the current function again");
+            }
+
+            @Override
+            public void actionPerformed(ActionContext context) {
+                regenerateCurrentFunction();
+            }
+
+            @Override
+            public boolean isEnabledForContext(ActionContext context) {
+                return canRegenerate(function);
+            }
+        });
+    }
+
+    /// Whether {@code target}'s last AI decompilation failed
+    private boolean canRegenerate(Function target) {
+        if (target == null) {
+            return false;
+        }
+        var cachedStatus = cache.get(target);
+        return cachedStatus != null && cachedStatus.status() == DecompilationData.StatusEnum.FAILED;
     }
 
     private void sendFeedbackInBackground(Function target, String rating, String reason) {
@@ -291,7 +319,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 currentRenderModel = null;
                 String detail = status.decompilation();
                 setCode(detail != null && !detail.isBlank() ? detail : "");
-                descriptionArea.setText("AI Decompilation failed");
+                descriptionArea.setText("AI Decompilation failed. Use Regenerate AI Decompilation in the toolbar to try again.");
                 predictedNamePanel.setVisible(false);
             }
             case UNINITIALISED, PENDING, RUNNING -> {
@@ -305,6 +333,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 // Unknown status — leave existing UI state untouched.
             }
         }
+        // Regenerate is only offered for a failed decompilation
+        contextChanged();
     }
 
     private static final DateTimeFormatter PROGRESS_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -440,13 +470,18 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 // Start a background task unless this function is already being decompiled. Multiple
                 // functions decompile in parallel in the background; a running task updates the view
                 // when it polls, so revisiting an in-flight function just shows this placeholder.
-                if (inFlightDecompilations.add(function.functionID().value())) {
-                    taskMonitorComponent.setVisible(true);
-                    var task = new AIDecompTask(tool, function);
-                    var builder = TaskBuilder.withTask(task);
-                    builder.launchInBackground(taskMonitorComponent);
-                }
+                startDecompilation(function, false);
             }
+        }
+    }
+
+    /// Start a background decompilation task, unless the function already has one running
+    private void startDecompilation(GhidraRevengService.FunctionWithID function, boolean regenerate) {
+        if (inFlightDecompilations.add(function.functionID().value())) {
+            taskMonitorComponent.setVisible(true);
+            var task = new AIDecompTask(tool, function, regenerate);
+            var builder = TaskBuilder.withTask(task);
+            builder.launchInBackground(taskMonitorComponent);
         }
     }
 
@@ -489,6 +524,29 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             return;
         }
         analysed.get().getIDForFunction(target).ifPresent(this::refresh);
+    }
+
+    /// Start a new AI decompilation for the current function, whose last one failed. Refresh alone
+    /// only re-reads the failed result, because the task triggers a decompilation only when none exists.
+    private void regenerateCurrentFunction() {
+        Function target = this.function;
+        if (!canRegenerate(target)) {
+            return;
+        }
+        var service = tool.getService(GhidraRevengService.class);
+        var functionWithID = service.getAnalysedProgram(target.getProgram())
+                .flatMap(analysed -> analysed.getIDForFunction(target));
+        if (functionWithID.isEmpty()) {
+            return;
+        }
+        cache.remove(target);
+        currentRenderModel = null;
+        tool.getService(ReaiLoggingService.class).info("Regenerating the AI Decompilation for function %s".formatted(target.getName()));
+        setCode("");
+        descriptionArea.setText("Decompiling %s ...".formatted(target.getName()));
+        predictedNamePanel.setVisible(false);
+        startDecompilation(functionWithID.get(), true);
+        contextChanged();
     }
 
     // --- Rename / comment editing -------------------------------------------------------------
@@ -917,6 +975,17 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         });
     }
 
+    /// Polling for {@code stoppedFunction} ended without a result; say why in the log and the window.
+    private void reportDecompStopped(Function stoppedFunction, String reason) {
+        var logger = tool.getService(ReaiLoggingService.class);
+        logger.warn("Stopped waiting for the AI Decompilation of %s: %s".formatted(stoppedFunction.getName(), reason));
+        SwingUtilities.invokeLater(() -> {
+            if (isCurrentFunction(stoppedFunction)) {
+                descriptionArea.setText("Stopped waiting for the AI Decompilation: " + reason);
+            }
+        });
+    }
+
     /**
      * Maps each display line of the rendered decompilation back to its source line, so a click in
      * the text area can be resolved to the line/identifier to rename or comment on.
@@ -949,13 +1018,22 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
     class AIDecompTask extends Task {
 
+        // Poll every second, slowing to every 5 while nothing changes, for at most 15 minutes in all
+        // (decompilation, summary and inline comments)
+        private static final Duration POLL_INTERVAL = Duration.ofSeconds(1);
+        private static final Duration MAX_POLL_INTERVAL = Duration.ofSeconds(5);
+        private static final Duration MAX_DECOMPILATION_WAIT = Duration.ofMinutes(15);
+
         private final GhidraRevengService service;
         private final GhidraRevengService.FunctionWithID functionWithID;
+        private final boolean regenerate;
 
-        public AIDecompTask(PluginTool tool, GhidraRevengService.FunctionWithID functionWithID) {
+        /// @param regenerate also start a new decompilation when the last one FAILED
+        public AIDecompTask(PluginTool tool, GhidraRevengService.FunctionWithID functionWithID, boolean regenerate) {
             super("AI Decomp task", true, false, false);
             service = tool.getService(GhidraRevengService.class);
             this.functionWithID = functionWithID;
+            this.regenerate = regenerate;
         }
 
         @Override
@@ -963,7 +1041,9 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             try {
                 var fID = functionWithID.functionID();
                 // Check if there is an existing process already, because the trigger API will fail with 400 if there is
-                if (service.getApi().pollAIDecompileStatus(fID).status() == DecompilationData.StatusEnum.UNINITIALISED) {
+                var current = service.getApi().pollAIDecompileStatus(fID).status();
+                if (current == DecompilationData.StatusEnum.UNINITIALISED
+                        || (regenerate && current == DecompilationData.StatusEnum.FAILED)) {
                     // Trigger the decompilation
                     service.getApi().triggerAIDecompilationForFunctionID(fID);
                 }
@@ -975,18 +1055,54 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 reportDecompFailure(functionWithID.function(), e);
             } finally {
                 inFlightDecompilations.remove(functionWithID.functionID().value());
+                SwingUtilities.invokeLater(() -> {
+                    if (inFlightDecompilations.isEmpty()) {
+                        taskMonitorComponent.setVisible(false);
+                    }
+                    contextChanged();
+                });
             }
         }
 
 
-        private void waitForDecomp(TypedApiInterface.FunctionID id, TaskMonitor monitor) throws CancelledException {
-            var logger = tool.getService(ReaiLoggingService.class);
+        private void waitForDecomp(TypedApiInterface.FunctionID id, TaskMonitor monitor) throws Exception {
             var api = service.getApi();
-            AIDecompilationStatus lastDecompStatus = null;
-            boolean inlineCommentsTriggered = false;
-            boolean summaryTriggered = false;
-            while (true) {
-                var newStatus = api.pollAIDecompileStatus(id);
+            var function = functionWithID.function();
+            var step = new DecompPollStep(id);
+            var result = new StatusPoller<AIDecompilationStatus>(POLL_INTERVAL, MAX_POLL_INTERVAL, MAX_DECOMPILATION_WAIT)
+                    .poll(() -> api.pollAIDecompileStatus(id), status -> step.next(status, monitor), monitor::isCancelled);
+            switch (result.ending()) {
+                case CANCELLED -> monitor.checkCancelled();
+                case UNRECOGNISED -> {
+                    // Not cached, so selecting the function again checks the server afresh.
+                    cache.remove(function);
+                    reportDecompStopped(function, "the server reported a status this plugin does not recognise (%s)"
+                            .formatted(result.status().status()));
+                }
+                case TIMED_OUT -> {
+                    cache.remove(function);
+                    reportDecompStopped(function, "it has not finished after %s; use Refresh to check again"
+                            .formatted(StatusPoller.describe(result.waited())));
+                }
+                case DONE -> {}
+            }
+        }
+
+        /// Acts on each polled status: shows it, and once the decompilation is done starts the summary
+        /// and then the inline comments, which the server no longer runs on its own.
+        private final class DecompPollStep {
+            private final TypedApiInterface.FunctionID id;
+            private AIDecompilationStatus lastDecompStatus = null;
+            private boolean inlineCommentsTriggered = false;
+            private boolean summaryTriggered = false;
+
+            DecompPollStep(TypedApiInterface.FunctionID id) {
+                this.id = id;
+            }
+
+            StatusPoller.Verdict next(AIDecompilationStatus newStatus, TaskMonitor monitor) {
+                var logger = tool.getService(ReaiLoggingService.class);
+                var api = service.getApi();
                 if (lastDecompStatus == null
                         || !Objects.equals(newStatus.status(), lastDecompStatus.status())
                         || !Objects.equals(newStatus.summaryStatus(), lastDecompStatus.summaryStatus())
@@ -997,28 +1113,21 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                     newStatusForFunction(functionWithID.function(), newStatus);
                 }
                 monitor.setMessage("Waiting for AI Decompilation for %s ... Current status: %s".formatted(functionWithID.function().getName(), lastDecompStatus.status()));
-                monitor.checkCancelled();
                 switch (newStatus.status()) {
                     case PENDING:
                     case RUNNING:
                     case UNINITIALISED:
-                        try {
-                            // Wait a second before polling again. We don't want to spam the API with requests too often
-                            Thread.sleep(1000);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                        break;
+                        return StatusPoller.Verdict.WAIT;
                     case COMPLETED:
                         monitor.setProgress(monitor.getMaximum());
                         // Decompilation is done; now wait for inline comments to land before stopping.
                         var commentsStatus = newStatus.inlineCommentsStatus();
                         if (commentsStatus == WorkflowProgress.StatusEnum.COMPLETED) {
-                            return;
+                            return StatusPoller.Verdict.DONE;
                         }
                         if (commentsStatus == WorkflowProgress.StatusEnum.FAILED) {
                             logger.error("Inline comments generation failed for function %s".formatted(functionWithID.function().getName()));
-                            return;
+                            return StatusPoller.Verdict.DONE;
                         }
                         var summaryStatus = newStatus.summaryStatus();
                         if (!summaryTriggered) {
@@ -1032,7 +1141,9 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                                 if (e.getCause() instanceof ApiException apiException && apiException.getCode() == 409) {
                                     summaryTriggered = false;
                                 } else {
+                                    // Without a summary there are no inline comments either, so there is nothing left to wait for.
                                     logger.error("Failed to trigger summary: %s".formatted(e.getMessage()));
+                                    return StatusPoller.Verdict.DONE;
                                 }
                             }
                         }
@@ -1040,7 +1151,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                             // Server requires a summary to exist before inline comments can be generated;
                             // if the summary failed there's no point triggering comments.
                             logger.error("Summary generation failed for function %s; skipping inline comments".formatted(functionWithID.function().getName()));
-                            return;
+                            return StatusPoller.Verdict.DONE;
                         }
                         if (summaryStatus == WorkflowProgress.StatusEnum.COMPLETED && !inlineCommentsTriggered) {
                             // Gate the inline-comments POST on summary completion — the server rejects it
@@ -1050,22 +1161,16 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                                 api.triggerAIDecompilationInlineComments(id);
                             } catch (RuntimeException e) {
                                 logger.error("Failed to trigger inline comments: %s".formatted(e.getMessage()));
-                                return;
+                                return StatusPoller.Verdict.DONE;
                             }
                         }
-                        try {
-                            Thread.sleep(1000);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                        break;
+                        return StatusPoller.Verdict.WAIT;
                     case FAILED:
                         logger.error("Decompilation failed: %s".formatted(newStatus.decompilation()));
-                        return;
+                        return StatusPoller.Verdict.DONE;
                     default:
-                        throw new RuntimeException("Unknown status: %s".formatted(newStatus.status()));
+                        return StatusPoller.Verdict.UNRECOGNISED;
                 }
-
             }
         }
 

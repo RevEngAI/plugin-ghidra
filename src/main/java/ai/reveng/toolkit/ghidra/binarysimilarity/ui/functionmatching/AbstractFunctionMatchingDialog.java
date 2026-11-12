@@ -3,6 +3,7 @@ package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.CollectionSelectionPanel;
@@ -28,6 +29,7 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -78,8 +80,10 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
     protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 
-    // Polling configuration
-    protected static final int POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
+    // Polling configuration: every 2 seconds, slowing to every 10 while nothing changes, for at most 30 minutes
+    protected static final Duration POLL_INTERVAL = Duration.ofSeconds(2);
+    protected static final Duration MAX_POLL_INTERVAL = Duration.ofSeconds(10);
+    protected static final Duration MAX_MATCHING_WAIT = Duration.ofMinutes(30);
 
     protected AbstractFunctionMatchingDialog(String title, Boolean isModal, PluginTool tool,
                                            GhidraRevengService.AnalysedProgram analyzedProgram) {
@@ -155,27 +159,45 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     private void runMatchingLoop() {
         final Thread self = Thread.currentThread();
         try {
-            MatchingProgress progress = startMatching();
-            while (matchingThread == self) {
-                final MatchingProgress current = progress;
-                onEdtIfCurrent(self, () -> updateProgressUI(current));
-
-                if ("FAILED".equals(progress.status())) {
-                    String errorMsg = progress.errorMessage() != null && !progress.errorMessage().isEmpty()
-                            ? progress.errorMessage()
-                            : "Function matching returned an error status";
-                    onEdtIfCurrent(self, () -> {
-                        handleError(errorMsg);
-                        statusLabel.setText("Function matching failed");
-                    });
-                    return;
-                }
-                if ("COMPLETED".equals(progress.status())) {
-                    break;
-                }
-                Thread.sleep(POLL_INTERVAL_MS);
-                if (matchingThread != self) return;
-                progress = pollMatchingStatus();
+            boolean[] started = {false};
+            var result = new StatusPoller<MatchingProgress>(POLL_INTERVAL, MAX_POLL_INTERVAL, MAX_MATCHING_WAIT).poll(
+                    () -> {
+                        if (!started[0]) {
+                            started[0] = true;
+                            return startMatching();
+                        }
+                        return pollMatchingStatus();
+                    },
+                    current -> {
+                        onEdtIfCurrent(self, () -> updateProgressUI(current));
+                        return classifyMatchingStatus(current.status());
+                    },
+                    () -> matchingThread != self);
+            if (matchingThread != self) return;
+            String stopped = switch (result.ending()) {
+                case UNRECOGNISED -> "The server reported a function matching status this plugin does not recognise "
+                        + "(the matching may have been cancelled). Press Match Functions to start it again.";
+                case TIMED_OUT -> "Function matching has not finished after %s; stopped waiting. Press Match Functions to check again."
+                        .formatted(StatusPoller.describe(result.waited()));
+                default -> null;
+            };
+            if (stopped != null) {
+                onEdtIfCurrent(self, () -> {
+                    handleError(stopped);
+                    statusLabel.setText("Stopped waiting for function matching");
+                });
+                return;
+            }
+            var progress = result.status();
+            if ("FAILED".equals(progress.status())) {
+                String errorMsg = progress.errorMessage() != null && !progress.errorMessage().isEmpty()
+                        ? progress.errorMessage()
+                        : "Function matching returned an error status";
+                onEdtIfCurrent(self, () -> {
+                    handleError(errorMsg);
+                    statusLabel.setText("Function matching failed");
+                });
+                return;
             }
             if (matchingThread != self) return;
 
@@ -214,6 +236,19 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
                 setMatchingInProgress(false);
             });
         }
+    }
+
+    /// How a v3 matching status (as its wire value) bears on the wait. The SDK turns a status it does
+    /// not model, such as CANCELLED, into an "unknown" value; that and a missing status end the wait.
+    protected static StatusPoller.Verdict classifyMatchingStatus(String status) {
+        if (status == null) {
+            return StatusPoller.Verdict.UNRECOGNISED;
+        }
+        return switch (status) {
+            case "COMPLETED", "FAILED" -> StatusPoller.Verdict.DONE;
+            case "UNINITIALISED", "PENDING", "RUNNING" -> StatusPoller.Verdict.WAIT;
+            default -> StatusPoller.Verdict.UNRECOGNISED;
+        };
     }
 
     /// Joins the error-level {@link ProgressMessage}s of a v3 matching response into a single string
