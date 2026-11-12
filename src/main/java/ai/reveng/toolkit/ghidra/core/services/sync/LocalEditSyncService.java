@@ -47,9 +47,14 @@ public class LocalEditSyncService {
     private final ReaiLoggingService loggingService;
     private final ScheduledExecutorService scheduler;
     private final Map<Program, DomainObjectListener> listeners = new ConcurrentHashMap<>();
-    private final Map<Address, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
-    private final Map<Address, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
-    private final Map<String, ScheduledFuture<?>> pendingDataTypeScans = new ConcurrentHashMap<>();
+    private final Map<InProgram<Address>, ScheduledFuture<?>> pendingRenames = new ConcurrentHashMap<>();
+    private final Map<InProgram<Address>, ScheduledFuture<?>> pendingTypes = new ConcurrentHashMap<>();
+    private final Map<InProgram<String>, ScheduledFuture<?>> pendingDataTypeScans = new ConcurrentHashMap<>();
+
+    /// A debounce key. One service handles every open program, and two programs can have functions at
+    /// the same address (two versions of one binary, or any two PEs with code at `0x140001000`), so an
+    /// address or type path alone would let an edit in one program cancel the other's pending push.
+    private record InProgram<K>(Program program, K key) {}
 
     public LocalEditSyncService(GhidraRevengService revengService, ReaiLoggingService loggingService) {
         this.revengService = revengService;
@@ -165,7 +170,7 @@ public class LocalEditSyncService {
             dataType = previous;
         }
         if (dataType != null) {
-            scheduleDataTypeScan(program, dataType.getName());
+            scheduleDataTypeScan(program, dataType);
         }
     }
 
@@ -174,15 +179,17 @@ public class LocalEditSyncService {
     }
 
     private void scheduleRename(Program program, Address entryPoint) {
-        schedule(pendingRenames, entryPoint, () -> pushRename(program, entryPoint));
+        schedule(pendingRenames, new InProgram<>(program, entryPoint), () -> pushRename(program, entryPoint));
     }
 
     private void scheduleTypes(Program program, Address entryPoint) {
-        schedule(pendingTypes, entryPoint, () -> pushTypes(program, entryPoint));
+        schedule(pendingTypes, new InProgram<>(program, entryPoint), () -> pushTypes(program, entryPoint));
     }
 
-    private void scheduleDataTypeScan(Program program, String typeName) {
-        schedule(pendingDataTypeScans, typeName, () -> pushFunctionsReferencingType(program, typeName));
+    private void scheduleDataTypeScan(Program program, DataType dataType) {
+        var typeName = dataType.getName();
+        schedule(pendingDataTypeScans, new InProgram<>(program, dataType.getPathName()),
+                () -> pushFunctionsReferencingType(program, typeName));
     }
 
     private <K> void schedule(Map<K, ScheduledFuture<?>> pending, K key, Runnable task) {
