@@ -38,6 +38,8 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.util.Msg;
+import ghidra.util.exception.CancelledException;
+import javax.annotation.Nullable;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
 import ghidra.util.task.TaskMonitor;
@@ -84,6 +86,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 	private AnalysisLogComponent analysisLogComponent;
 	private LocalEditSyncService localEditSyncService;
 	private AutoUnstripSyncService autoUnstripSyncService;
+	/// Programs whose analysis results failed to load, for the Retry action. Touched from tasks and the Swing thread.
+	private final Set<Program> failedLoads = ConcurrentHashMap.newKeySet();
+	private static final String RETRY_HINT =
+			"The program was left unchanged. Retry now, or later from RevEng.AI > Analysis > Retry loading results.";
 
 	private PluginTool tool;
 
@@ -256,6 +262,19 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 				.menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "400")
 				.buildAndInstall(tool);
 
+        new ActionBuilder("Retry loading results", this.getName())
+                .enabledWhen(context -> {
+                    var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
+                    return currentProgram != null && failedLoads.contains(currentProgram);
+                })
+                .onAction(context -> {
+                    var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
+                    revengService.getKnownProgram(currentProgram).ifPresent(this::loadAnalysisResults);
+                })
+                .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Analysis", "Retry loading results" })
+                .menuGroup(REAI_ANALYSIS_MANAGEMENT_MENU_GROUP, "250")
+                .buildAndInstall(tool);
+
         new ActionBuilder("View in portal", this.getName())
                 .enabledWhen(context -> {
                     var currentProgram = tool.getService(ProgramManager.class).getCurrentProgram();
@@ -382,6 +401,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     @Override
     protected void programClosed(Program program) {
         super.programClosed(program);
+        failedLoads.remove(program);
         if (localEditSyncService != null) {
             localEditSyncService.detach(program);
         }
@@ -415,27 +435,36 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 Msg.info(this, "Received analysis complete event for " + analysisEvent.getProgramWithBinaryID());
 
                 // If the analysis is complete, we refresh the function signatures from the server
-                var program = analysisEvent.getProgramWithBinaryID();
-                // Events arrive on the Swing thread, and loading the results makes several requests
-                tool.execute(new Task("Load RevEng.AI analysis results", true, false, false) {
-                    @Override
-                    public void run(TaskMonitor monitor) {
-                        try {
-                            var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, monitor);
-                            localEditSyncService.attach(program.program());
-                            tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
-                            // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
-                            // and sync the recovered names / data types once it finishes (PLU-300).
-                            autoUnstripSyncService.pollAndSync(analysedProgram, true);
-                        } catch (Exception e) {
-                            Msg.error(AnalysisManagementPlugin.this, "Error registering finished analysis for program " + program, e);
-                        }
-                    }
-                }, 0);
+                loadAnalysisResults(analysisEvent.getProgramWithBinaryID());
             } else if (analysisEvent.getStatus() == AnalysisStatus.Error) {
                 reportAnalysisError(analysisEvent.getProgramWithBinaryID());
             }
         }
+    }
+
+    private void loadAnalysisResults(GhidraRevengService.ProgramWithID program) {
+        failedLoads.remove(program.program());
+        // Disables the Retry action straight away, so a second click cannot start a second load
+        tool.contextChanged(null);
+        // Events arrive on the Swing thread, and loading the results makes several requests
+        tool.execute(new Task("Load RevEng.AI analysis results", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, monitor);
+                    localEditSyncService.attach(program.program());
+                    tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
+                    // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
+                    // and sync the recovered names / data types once it finishes (PLU-300).
+                    autoUnstripSyncService.pollAndSync(analysedProgram, true);
+                } catch (CancelledException e) {
+                    reportFailedLoad(program, loadCancelledMessage(program), null);
+                } catch (Exception e) {
+                    Msg.error(AnalysisManagementPlugin.this, "Error registering finished analysis for program " + program, e);
+                    reportFailedLoad(program, loadFailedMessage(program, e), e);
+                }
+            }
+        }, 0);
     }
 
     /// Tell the user that the analysis failed on the server, with the end of its log, and offer to detach it so
@@ -464,6 +493,50 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 });
             }
         }, 0);
+    }
+
+    /// The service leaves the program as it was before the load, so it can simply be loaded again: from the
+    /// dialog straight away, or later from the Retry action.
+    private void reportFailedLoad(GhidraRevengService.ProgramWithID program, String message, @Nullable Exception error) {
+        var loggingService = tool.getService(ReaiLoggingService.class);
+        if (loggingService != null) {
+            loggingService.error(message);
+        }
+        // On the Swing thread, like programClosed, so a program closed during the load cannot be added after it
+        SwingUtilities.invokeLater(() -> {
+            if (program.program().isClosed()) {
+                // Closed during the load, which is likely why it failed. There is nothing left to retry on.
+                return;
+            }
+            failedLoads.add(program.program());
+            tool.setStatusInfo(message, true);
+            tool.contextChanged(null);
+            if (error == null) {
+                // Cancelled by the analyst, who needs no dialog to learn about it
+                return;
+            }
+            var choice = OptionDialog.showOptionDialog(tool.getToolFrame(),
+                    ReaiPluginPackage.WINDOW_PREFIX + "Load analysis results", message + "\n\n" + RETRY_HINT,
+                    "Retry", OptionDialog.ERROR_MESSAGE);
+            if (choice == OptionDialog.OPTION_ONE && failedLoads.contains(program.program())) {
+                loadAnalysisResults(program);
+            }
+        });
+    }
+
+    private static String loadFailedMessage(GhidraRevengService.ProgramWithID program, Exception error) {
+        // The API wraps its exceptions as `new RuntimeException(cause)`, whose message is the cause's class name
+        // followed by its message. The analyst only needs the message.
+        Throwable shown = error.getCause() != null && Objects.equals(error.getMessage(), error.getCause().toString())
+                ? error.getCause() : error;
+        var reason = shown.getMessage() != null ? shown.getMessage() : shown.getClass().getSimpleName();
+        return "Could not load the results of RevEng.AI analysis %d into %s: %s"
+                .formatted(program.analysisID().id(), program.program().getName(), reason);
+    }
+
+    private static String loadCancelledMessage(GhidraRevengService.ProgramWithID program) {
+        return "Loading the results of RevEng.AI analysis %d into %s was cancelled"
+                .formatted(program.analysisID().id(), program.program().getName());
     }
 
     /// The analysis log, or null when it could not be fetched

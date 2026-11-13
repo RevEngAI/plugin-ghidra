@@ -180,11 +180,31 @@ public class GhidraRevengService {
         }
         statusCache.put(programWithID.analysisID, AnalysisStatus.Complete);
 
-        var analysedProgram = associateFunctionInfo(programWithID);
-        pullFunctionInfoFromAnalysis(analysedProgram, monitor);
-        monitor.checkCancelled();
-        return analysedProgram;
+        // The function ids alone make the program count as analysed, though none of the portal's names or types
+        // may have arrived. One transaction around the whole load is rolled back when any part of it fails, so the
+        // program is left as it was, the load can be retried, and the undo history holds nothing to bring it back.
+        var program = programWithID.program();
+        var transactionId = program.startTransaction("RevEng.AI: Load analysis results");
+        boolean loaded = false;
+        FunctionAssociation association;
+        try {
+            association = associateFunctionInfo(programWithID);
+            pullFunctionInfoFromAnalysis(association.analysedProgram(), monitor);
+            monitor.checkCancelled();
+            loaded = true;
+        } finally {
+            // A program closed during the load takes no more transactions, and must not hide why the load failed
+            if (!program.isClosed()) {
+                program.endTransaction(transactionId, loaded);
+            }
+        }
+        Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary", association.summary());
+        return association.analysedProgram();
     }
+
+    /// What {@link #associateFunctionInfo(ProgramWithID)} produced, with the summary to show once the
+    /// rest of the load has succeeded too.
+    private record FunctionAssociation(AnalysedProgram analysedProgram, String summary) {}
 
     private ProgramWithID addAnalysisIDtoProgramOptions(Program program, TypedApiInterface.AnalysisID analysisID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
@@ -223,12 +243,16 @@ public class GhidraRevengService {
     /// analysis is associated with the program
     /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(AnalysedProgram ,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private AnalysedProgram associateFunctionInfo(ProgramWithID knownProgram) {
+    ///
+    /// Any association already on the program is replaced, so an earlier load that stopped part way does
+    /// not block this one.
+    private FunctionAssociation associateFunctionInfo(ProgramWithID knownProgram) {
         var analysisID = knownProgram.analysisID();
         var program = knownProgram.program();
         List<FunctionInfo> functionInfo = null;
         functionInfo = api.getFunctionInfo(analysisID);
         var transactionID = program.startTransaction("Associate Function Info");
+        clearFunctionAssociation(program);
 
         // Create the FunctionID map
         LongPropertyMap functionIDMap;
@@ -293,16 +317,14 @@ public class GhidraRevengService {
                     }
                 }
         );
-        // Print summary
-        Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary",
-                ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
-                        "boundaries. For better results, please start a new analysis from this plugin.").formatted(
-                        functionInfo.size(),
-                        ghidraBoundariesMatchedFunction,
-                        ghidraFunctionCount.get()
-                ));
+        var summary = ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
+                "boundaries. For better results, please start a new analysis from this plugin.").formatted(
+                functionInfo.size(),
+                ghidraBoundariesMatchedFunction,
+                ghidraFunctionCount.get()
+        );
 
-        return analysedProgram;
+        return new FunctionAssociation(analysedProgram, summary);
 
     }
 
@@ -1196,8 +1218,9 @@ public class GhidraRevengService {
 
             }
         } finally {
-            // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-            endServerTransaction(analysedProgram.program(), transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
+            // Done iterating over all functions. A transaction that changed nothing leaves no undo entry, and
+            // aborting it would abort the load it runs inside too, so it is discarded only when cancelled
+            endServerTransaction(analysedProgram.program(), transactionId, !monitor.isCancelled());
         }
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
@@ -1226,7 +1249,18 @@ public class GhidraRevengService {
     }
 
     public void removeProgramAssociation(Program program){
-        // Clear all function ID data
+        clearFunctionAssociation(program);
+        var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
+        reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
+        // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
+        // because this method should still work even if the analysis ID or binary ID that was associated is invalid
+        statusCache.clear();
+
+    }
+
+    /// Remove the function ids and the marks on the functions, but keep the analysis id, so the program is
+    /// known but no longer analysed. Must run inside a transaction.
+    private void clearFunctionAssociation(Program program) {
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
 
@@ -1238,12 +1272,6 @@ public class GhidraRevengService {
         if (revengTag != null) {
             revengTag.delete();
         }
-        var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
-        reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
-        // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
-        // because this method should still work even if the analysis ID or binary ID that was associated is invalid
-        statusCache.clear();
-
     }
 
     /// This method is private to the service, because it only concerns itself with how the service determines
