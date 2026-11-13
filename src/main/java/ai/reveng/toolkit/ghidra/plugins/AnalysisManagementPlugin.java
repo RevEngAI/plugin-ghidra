@@ -305,6 +305,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 		// Stop the background work tied to this analysis first, so none of it runs against the
 		// association while it is being removed, or later against a different analysis.
 		localEditSyncService.detach(program);
+		analysisLogComponent.stopMonitoring(program);
 		if (autoUnstripSyncService.stopPolling(knownProgram.analysisID())) {
 			var message = "RevEng.AI: stopped waiting for auto-unstrip; the program was detached from "
 					+ displayText + ".";
@@ -411,6 +412,10 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         }
         // Reopening a program with a failed analysis reports the failure again
         reportedErrors.removeIf(reported -> reported.program() == program);
+        if (analysisLogComponent != null) {
+            // Otherwise the wait keeps polling, and holding the program, until the analysis ends
+            analysisLogComponent.programClosed(program);
+        }
     }
 
     @Override
@@ -429,6 +434,13 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
         super.processEvent(event);
         // Forward the event to the analysis log component
         if (event instanceof RevEngAIAnalysisStatusChangedEvent analysisEvent) {
+            if (!isStillAttached(analysisEvent.getProgramWithBinaryID())) {
+                // From a wait that was still running when the program was detached or closed. Acting on it would
+                // load the old analysis into a program that is now attached to another one, or to none.
+                Msg.info(this, "Ignoring status event for an analysis the program is no longer attached to: "
+                        + analysisEvent.getProgramWithBinaryID());
+                return;
+            }
 
             analysisLogComponent.processEvent(analysisEvent);
             if (analysisEvent.getStatus() == AnalysisStatus.Complete) {
@@ -451,12 +463,19 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
             @Override
             public void run(TaskMonitor monitor) {
                 try {
+                    if (!isStillAttached(program)) {
+                        // Detached or closed since the load was requested
+                        return;
+                    }
                     var analysedProgram = revengService.registerFinishedAnalysisForProgram(program, monitor);
                     localEditSyncService.attach(program.program());
                     tool.firePluginEvent(new RevEngAIAnalysisResultsLoaded("AnalysisManagementPlugin", analysedProgram));
                     // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
                     // and sync the recovered names / data types once it finishes (PLU-300).
                     autoUnstripSyncService.pollAndSync(analysedProgram, true);
+                } catch (GhidraRevengService.DetachedDuringLoadException e) {
+                    // The user chose to leave this analysis, so there is nothing to report or retry
+                    Msg.info(AnalysisManagementPlugin.this, e.getMessage());
                 } catch (CancelledException e) {
                     reportFailedLoad(program, loadCancelledMessage(program), null);
                 } catch (Exception e) {
