@@ -5,6 +5,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.BinaryHash;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
@@ -13,7 +14,10 @@ import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -42,6 +46,28 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
                 freshService.getAnalysedProgram(program).isPresent());
         assertEquals("navigation/enablement lookups must not call status()",
                 statusCallsBefore, mock.statusCalls);
+    }
+
+    /// An unreadable binary must fail with the path and reason, not the SDK's raw HTTP 0 dump.
+    @Test
+    public void testUploadOfUnreadableFileExplainsWhy() throws Exception {
+        Path bin = Files.createTempFile("unreadable", ".bin");
+        bin.toFile().deleteOnExit();
+        Files.setPosixFilePermissions(bin, Set.of());
+        var program = newX64Program().getProgram();
+        int tx = program.startTransaction("set path");
+        program.setExecutablePath(bin.toString());
+        program.endTransaction(tx, true);
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public BinaryHash upload(Path binPath) {
+                throw new RuntimeException(new ApiException("Message: java.io.FileNotFoundException: " + binPath));
+            }
+        });
+
+        var e = assertThrows(RuntimeException.class, () -> service.upload(program));
+
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot read " + bin));
     }
 
     @Test
