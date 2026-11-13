@@ -1,0 +1,1 @@
+{"task_status":"COMPLETED","summary":"Parses an HTTP header from <code>buf</code> and returns the length of the remaining payload, or -1 if the buffer is shorter than 8 bytes.","ai_summary":"Parses an HTTP header from buf and returns the length of the remaining payload, or -1 if the buffer is shorter than 8 bytes.","predicted_function_name":"parse_http_header"}
