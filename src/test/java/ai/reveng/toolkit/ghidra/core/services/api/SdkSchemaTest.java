@@ -36,9 +36,10 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AuthenticationUsersApi", new String[]{"v3ListUsers"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
-                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
+                "v3CreateAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches",
                 "v3GetAnalysisLogs", "v3ListAnalyses"});
+        apis.put("ai.reveng.api.BinariesApi", new String[]{"v3UploadFile"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
                 "listAnalysisFunctions",
@@ -120,9 +121,11 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.FunctionSignatureVersion",
                 "getValue", "getUpdatedAt", "getUpdatedBy");
 
-        requireMethods(missing, "ai.reveng.model.AnalysisCreateRequest",
+        requireMethods(missing, "ai.reveng.model.CreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
-        requireMethods(missing, "ai.reveng.model.Tag", "getName");
+        requireMethods(missing, "ai.reveng.model.UploadOutputBody", "getSha256Hash");
+        requireMethods(missing, "ai.reveng.model.OperationCreateMetadataCreateResult",
+                "getMetadata", "getResponse");
         requireMethods(missing, "ai.reveng.model.StartMatchingForAnalysisInputBody",
                 "getMinSimilarity", "getResultsPerFunction", "getFilters");
         requireMethods(missing, "ai.reveng.model.StartMatchingForFunctionsInputBody",

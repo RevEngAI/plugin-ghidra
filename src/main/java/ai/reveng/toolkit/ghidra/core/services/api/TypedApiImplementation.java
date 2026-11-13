@@ -66,7 +66,7 @@ public class TypedApiImplementation implements TypedApiInterface {
 
     private final ApiClient apiClient;
     private final ApiClient uploadClient;
-    private final AnalysesCoreApi uploadApi;
+    private final BinariesApi uploadApi;
 
     /// Ordinary requests: a page of functions or a batch of signatures, which the server answers quickly.
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
@@ -83,7 +83,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         var apiClient = newClient(baseUrl, apiKey, userAgent, REQUEST_TIMEOUT);
         this.apiClient = apiClient;
         this.uploadClient = newClient(baseUrl, apiKey, userAgent, UPLOAD_TIMEOUT);
-        this.uploadApi = new AnalysesCoreApi(uploadClient);
+        this.uploadApi = new BinariesApi(uploadClient);
 
         this.analysisCoreApi = new AnalysesCoreApi(apiClient);
         this.searchApi = new SearchApi(apiClient);
@@ -160,12 +160,12 @@ public class TypedApiImplementation implements TypedApiInterface {
         if (!bin.exists())
             throw new FileNotFoundException("Binary to upload does not exist");
 
-        var result = this.uploadApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
+        var result = this.uploadApi.v3UploadFile(bin, "BINARY", true);
 
-        if (result.getData() == null) {
-            throw new ApiException("Upload response carried no data");
+        if (result.getSha256Hash() == null) {
+            throw new ApiException("Upload response carried no hash");
         }
-        return new BinaryHash(result.getData().getSha256Hash());
+        return new BinaryHash(result.getSha256Hash());
     }
 
     /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
@@ -197,14 +197,22 @@ public class TypedApiImplementation implements TypedApiInterface {
         return results;
     }
 
+    /// POST /v3/analyses
+    ///
+    /// Answers with a long-running operation: the analysis id rides on its metadata while pending
+    /// and on its response once done.
     @Override
     public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
         var analysisRequest = options.toAnalysisCreateRequest();
-        var result = this.analysisCoreApi.createAnalysis(analysisRequest, null);
-        if (result.getData() == null) {
-            throw new ApiException("Analysis creation response carried no data");
+        var operation = this.analysisCoreApi.v3CreateAnalysis(analysisRequest, null);
+        Long analysisId = operation.getMetadata() != null ? operation.getMetadata().getAnalysisId() : null;
+        if (analysisId == null && operation.getResponse() != null) {
+            analysisId = operation.getResponse().getAnalysisId();
         }
-        return new AnalysisID(result.getData().getAnalysisId());
+        if (analysisId == null) {
+            throw new ApiException("Create-analysis operation " + operation.getName() + " carried no analysis id");
+        }
+        return new AnalysisID(Math.toIntExact(analysisId));
     }
 
     @Override

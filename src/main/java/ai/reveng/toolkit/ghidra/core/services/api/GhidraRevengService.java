@@ -18,6 +18,8 @@ import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBat
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
 import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.cmd.function.SetFunctionNameCmd;
+import ghidra.framework.OperatingSystem;
+import ghidra.framework.Platform;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.model.address.Address;
@@ -46,7 +48,10 @@ import java.awt.*;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.FileSystemException;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
@@ -1321,6 +1326,11 @@ public class GhidraRevengService {
             // we have to drop the first "/" for the path to be valid
             filePath = Path.of(program.getExecutablePath().substring(1));
         }
+        // The SDK only reports an unreadable file as an opaque HTTP 0, so check up front.
+        try (var ignored = Files.newInputStream(filePath)) {
+        } catch (IOException e) {
+            throw new RuntimeException(unreadableBinaryMessage(filePath, e), e);
+        }
         try {
             var hash = api.upload(filePath);
             if (hash.equals(hashOfProgram(program))){
@@ -1337,6 +1347,19 @@ public class GhidraRevengService {
         } catch (ApiException e) {
             throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
+    }
+
+    private static String unreadableBinaryMessage(Path path, IOException e) {
+        String reason = e instanceof NoSuchFileException ? "file not found"
+                : e instanceof FileSystemException fse && fse.getReason() != null ? fse.getReason()
+                : e.getMessage();
+        String message = "Cannot read %s (%s).".formatted(path, reason);
+        if (Platform.CURRENT_PLATFORM.getOperatingSystem() == OperatingSystem.MAC_OS_X
+                && !(e instanceof NoSuchFileException)) {
+            message += "\n\nmacOS may be blocking Ghidra from this folder. Grant access in System Settings → "
+                    + "Privacy & Security → Files and Folders, or move the file elsewhere and re-import it.";
+        }
+        return message;
     }
 
     public TypedApiInterface.BinaryHash upload(Path path) {
