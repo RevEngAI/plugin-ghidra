@@ -249,7 +249,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
     /// fires the Error event (Swing), which starts the log fetch (a task), which shows the dialog (Swing). How many
     /// rounds that takes varies between machines, so poll for the dialog; the limit only bounds a broken run.
     private OptionDialog awaitErrorDialog() {
-        return awaitDialog(OptionDialog.class);
+        return awaitDialog(OptionDialog.class, "the failed analysis should be reported");
     }
 
     private String logText(AnalysisLogComponent logComponent) {

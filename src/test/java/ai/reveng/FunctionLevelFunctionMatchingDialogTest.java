@@ -769,7 +769,8 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
         JButton matchButton = (JButton) getInstanceField("matchButton", foundDialog);
-        waitForCondition(() -> runSwing(() -> statusLabel.getText().equals("Stopped waiting for function matching")
+        // The dialog sleeps a 2s poll interval before it sees CANCELLED, as long as waitForCondition's own limit
+        awaitCondition(() -> runSwing(() -> statusLabel.getText().equals("Stopped waiting for function matching")
                         && getInstanceField("matchingThread", foundDialog) == null
                         && matchButton.getText().equals("Match Functions")),
                 "An unrecognised status should end the matching run");

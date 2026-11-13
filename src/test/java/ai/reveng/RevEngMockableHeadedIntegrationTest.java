@@ -22,8 +22,10 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /// Base class
 abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedIntegrationTest {
@@ -72,13 +74,29 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
     /// Polls for a dialog against this test's own deadline: the timeout that waitForDialogComponent takes is
     /// ignored in favour of Ghidra's 2s default, which a slow CI runner can exceed while a task is still running
     protected static <T extends DialogComponentProvider> T awaitDialog(Class<T> type) {
+        return awaitDialog(type, "timed out waiting for " + type.getSimpleName());
+    }
+
+    /// As {@link #awaitDialog(Class)}, failing with the given message so a CI timeout says what was expected
+    protected static <T extends DialogComponentProvider> T awaitDialog(Class<T> type, String message) {
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         T dialog;
         while ((dialog = getDialogComponent(type)) == null && System.nanoTime() < deadline) {
             sleep(DEFAULT_WAIT_DELAY);
         }
-        assertNotNull("timed out waiting for " + type.getSimpleName(), dialog);
+        assertNotNull(message, dialog);
         return dialog;
+    }
+
+    /// Like waitForCondition, but against this test's own 30s deadline: Ghidra's default limit is about 2s, which
+    /// a wait that spans a real poll interval (function matching sleeps 2s between polls) can exceed on CI
+    protected static void awaitCondition(BooleanSupplier condition, String message) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        boolean met;
+        while (!(met = condition.getAsBoolean()) && System.nanoTime() < deadline) {
+            sleep(DEFAULT_WAIT_DELAY);
+        }
+        assertTrue(message, met);
     }
 
 
