@@ -9,10 +9,12 @@ import org.junit.Test;
 public class EmptyResponseDataTest extends AbstractStubServerTest {
 
     private static final String EMPTY = "{\"status\": false, \"data\": null, \"message\": \"nope\"}";
+    private static final String OPERATION_WITHOUT_ID = "{\"name\": \"operations/1\", \"done\": false}";
 
     @Override
     protected void configureStubs(HttpServer server) {
         server.createContext("/", exchange -> respondJson(exchange, EMPTY));
+        server.createContext("/v3/analyses", exchange -> respondJson(exchange, OPERATION_WITHOUT_ID));
     }
 
     @Test(expected = ApiException.class)
@@ -21,7 +23,7 @@ public class EmptyResponseDataTest extends AbstractStubServerTest {
     }
 
     @Test(expected = ApiException.class)
-    public void analyseWithoutDataThrowsApiException() throws Exception {
+    public void analyseWithoutAnalysisIdThrowsApiException() throws Exception {
         api().analyse(new AnalysisOptionsBuilder()
                 .hash(new TypedApiInterface.BinaryHash("a".repeat(64)))
                 .fileName("test.bin"));

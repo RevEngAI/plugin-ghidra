@@ -7,8 +7,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import ai.reveng.model.AnalysisCreateRequest;
-import ai.reveng.model.Tag;
+import ai.reveng.model.CreateRequest;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -102,35 +101,25 @@ public class AnalysisOptionsBuilder {
     }
 
     /**
-     * Converts the current AnalysisOptionsBuilder to an AnalysisCreateRequest object
-     * that can be used with the new API endpoints
+     * Converts the current AnalysisOptionsBuilder to the v3 create-analysis request.
      *
-     * @return AnalysisCreateRequest object populated with the current options
+     * @return CreateRequest populated with the current options
      */
-    public AnalysisCreateRequest toAnalysisCreateRequest() {
-        // Create the request with only the core required fields that we know work
-        var request = new AnalysisCreateRequest()
+    public CreateRequest toAnalysisCreateRequest() {
+        var request = new CreateRequest()
                 .filename(options.getString("file_name"))
                 .sha256Hash(options.getString("sha_256_hash"));
 
-        // Include tags if any were provided
-        List<String> tagStrings = getTags();
-        if (!tagStrings.isEmpty()) {
-            // Convert string tags to Tag objects, filtering out any empty/null strings
-            List<Tag> tags = tagStrings.stream()
-                    .filter(tagString -> tagString != null && !tagString.trim().isEmpty())
-                    .map(tagString -> new Tag().name(tagString))
-                    .toList();
-
-            // Only set tags if we have valid ones after filtering
-            if (!tags.isEmpty()) {
-                request.setTags(tags);
-            }
+        List<String> tags = getTags().stream()
+                .filter(tag -> tag != null && !tag.trim().isEmpty())
+                .toList();
+        if (!tags.isEmpty()) {
+            request.setTags(tags);
         }
 
         if (options.has("binary_scope")) {
             var scope = options.getString("binary_scope");
-            request.analysisScope(ai.reveng.model.AnalysisScope.fromValue(scope));
+            request.analysisScope(CreateRequest.AnalysisScopeEnum.fromValue(scope));
         }
 
         if (options.has("symbols")) {
@@ -160,7 +149,7 @@ public class AnalysisOptionsBuilder {
             request.setSymbols(symbolsModel);
         }
 
-        var analysisConfig = new ai.reveng.model.AnalysisConfig();
+        var analysisConfig = new ai.reveng.model.Config();
 
         if (options.has("skip_capabilities")) {
             analysisConfig.setGenerateCapabilities(!options.getBoolean("skip_capabilities"));
@@ -180,7 +169,7 @@ public class AnalysisOptionsBuilder {
 
         request.setBinaryConfig(binaryConfig);
 
-        Msg.info(this, "Created AnalysisCreateRequest: " + request);
+        Msg.info(this, "Created CreateRequest: " + request);
 
         return request;
     }

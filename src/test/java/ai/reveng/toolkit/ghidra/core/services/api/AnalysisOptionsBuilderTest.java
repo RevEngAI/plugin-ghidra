@@ -1,7 +1,6 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.model.AnalysisCreateRequest;
-import ai.reveng.model.Tag;
+import ai.reveng.model.CreateRequest;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import org.junit.Test;
 
@@ -22,7 +21,7 @@ public class AnalysisOptionsBuilderTest {
                         new FunctionBoundary("excluded_fn", 0x1020, 0x1030, false),
                         new FunctionBoundary("default_fn", 0x1040, 0x1050)));
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
         List<ai.reveng.model.FunctionBoundary> boundaries = request.getSymbols().getFunctionBoundaries();
 
         assertEquals("All boundaries are sent regardless of the include flag", 3, boundaries.size());
@@ -47,7 +46,7 @@ public class AnalysisOptionsBuilderTest {
                 .hash(new TypedApiInterface.BinaryHash("a".repeat(64)))
                 .fileName("test.bin");
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         // Verify that tags are either null or empty, but not containing empty tags
         if (request.getTags() != null) {
@@ -64,15 +63,13 @@ public class AnalysisOptionsBuilderTest {
                 .addTag("malware")
                 .addTag("suspicious");
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         // Verify that tags are properly set
         assertNotNull("Tags should not be null", request.getTags());
         assertEquals("Should have 2 tags", 2, request.getTags().size());
 
-        List<String> tagNames = request.getTags().stream()
-                .map(Tag::getName)
-                .toList();
+        List<String> tagNames = request.getTags();
 
         assertTrue("Should contain 'malware' tag", tagNames.contains("malware"));
         assertTrue("Should contain 'suspicious' tag", tagNames.contains("suspicious"));
@@ -88,12 +85,12 @@ public class AnalysisOptionsBuilderTest {
                 .addTag("   ") // whitespace only
                 .addTag("valid-tag");
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         // Verify that empty/whitespace tags are filtered out
         assertNotNull("Tags should not be null", request.getTags());
         assertEquals("Should only have 1 valid tag after filtering", 1, request.getTags().size());
-        assertEquals("Should only contain the valid tag", "valid-tag", request.getTags().getFirst().getName());
+        assertEquals("Should only contain the valid tag", "valid-tag", request.getTags().getFirst());
     }
 
     @Test
@@ -104,7 +101,7 @@ public class AnalysisOptionsBuilderTest {
                 .fileName("test.bin")
                 .addTags(Arrays.asList("tag1", "tag2", "tag3"));
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         // Verify that all tags are properly set
         assertNotNull("Tags should not be null", request.getTags());
@@ -121,7 +118,7 @@ public class AnalysisOptionsBuilderTest {
                 .addTag("   ")
                 .addTag("\t");
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         // Verify that no tags are set when all are empty
         if (request.getTags() != null) {
@@ -139,7 +136,7 @@ public class AnalysisOptionsBuilderTest {
                 .hash(new TypedApiInterface.BinaryHash(hash))
                 .fileName(filename);
 
-        AnalysisCreateRequest request = builder.toAnalysisCreateRequest();
+        CreateRequest request = builder.toAnalysisCreateRequest();
 
         assertEquals("Filename should match", filename, request.getFilename());
         assertEquals("SHA256 hash should match", hash, request.getSha256Hash());
