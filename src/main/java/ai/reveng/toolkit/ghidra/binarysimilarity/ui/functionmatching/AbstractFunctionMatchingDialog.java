@@ -1,9 +1,11 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching;
 
+import ai.reveng.invoker.ApiException;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiImplementation;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.CollectionSelectionPanel;
@@ -20,6 +22,8 @@ import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
 import ghidra.util.task.TaskMonitor;
 import ghidra.util.Msg;
+import ghidra.util.Swing;
+import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import resources.ResourceManager;
 import generic.theme.GThemeDefaults.Colors.Messages;
 import generic.theme.GColor;
@@ -76,7 +80,8 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     private final JPopupMenu portalPopup = new JPopupMenu();
 
     // Data
-    protected AnalysisBasicInfoOutputBody analysisBasicInfo;
+    /// Loaded by {@link #showWhenLoaded} before the dialog is built; the binary filter searches within its model
+    protected final AnalysisBasicInfoOutputBody analysisBasicInfo;
     protected final List<GhidraFunctionMatchWithSignature> functionMatchResults;
     protected final List<GhidraFunctionMatchWithSignature> filteredFunctionMatchResults;
 
@@ -86,24 +91,15 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
     protected static final Duration MAX_MATCHING_WAIT = Duration.ofMinutes(30);
 
     protected AbstractFunctionMatchingDialog(String title, Boolean isModal, PluginTool tool,
-                                           GhidraRevengService.AnalysedProgram analyzedProgram) {
+                                           GhidraRevengService.AnalysedProgram analyzedProgram,
+                                           AnalysisBasicInfoOutputBody analysisBasicInfo) {
         super(title, isModal);
         this.tool = tool;
         this.revengService = tool.getService(GhidraRevengService.class);
         this.analyzedProgram = analyzedProgram;
         this.functionMatchResults = new ArrayList<>();
         this.filteredFunctionMatchResults = new ArrayList<>();
-
-        try {
-            this.analysisBasicInfo = revengService.getBasicDetailsForAnalysis(analyzedProgram.analysisID());
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(null,
-                    "Failed to fetch analysis details: " + e.getMessage(),
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
-            close();
-            return;
-        }
+        this.analysisBasicInfo = analysisBasicInfo;
 
         // Initialize UI
         addDismissButton();
@@ -114,6 +110,40 @@ public abstract class AbstractFunctionMatchingDialog extends RevEngDialogCompone
 
         // Don't start function matching automatically - wait for user to click Match button
         statusLabel.setText("Ready: adjust the filters and press Match Functions");
+    }
+
+    /// Fetches the analysis' basic info in a background task, then builds the dialog with it and shows it. The
+    /// first fetch for an analysis is not cached and can take several seconds, so it must not run on the Swing
+    /// thread; when it fails the user is told why and no dialog is shown.
+    public static void showWhenLoaded(PluginTool tool, GhidraRevengService.AnalysedProgram analyzedProgram,
+                                      java.util.function.Function<AnalysisBasicInfoOutputBody, ? extends AbstractFunctionMatchingDialog> dialog) {
+        var service = tool.getService(GhidraRevengService.class);
+        tool.execute(new Task("Load RevEng.AI analysis details", true, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                AnalysisBasicInfoOutputBody basicInfo;
+                try {
+                    basicInfo = service.getBasicDetailsForAnalysis(analyzedProgram.analysisID());
+                } catch (Exception e) {
+                    // The message carries the server's reason; the trace goes to the log, not the dialog
+                    var message = "Failed to fetch the details of analysis %d: %s"
+                            .formatted(analyzedProgram.analysisID().id(), describe(e));
+                    Msg.warn(AbstractFunctionMatchingDialog.class, message, e);
+                    Msg.showError(AbstractFunctionMatchingDialog.class, tool.getToolFrame(),
+                            ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", message);
+                    return;
+                }
+                if (monitor.isCancelled()) {
+                    return;
+                }
+                Swing.runLater(() -> tool.showDialog(dialog.apply(basicInfo)));
+            }
+        }, 0);
+    }
+
+    private static String describe(Exception e) {
+        return e instanceof ApiException api
+                ? TypedApiImplementation.describeApiException(api) : e.getMessage();
     }
 
     protected void startFunctionMatching() {

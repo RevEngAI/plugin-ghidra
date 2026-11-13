@@ -15,9 +15,10 @@ import java.util.List;
 public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
     private final Function function;
 
-    public FunctionLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID, Function function) {
+    public FunctionLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID,
+                                               AnalysisBasicInfoOutputBody analysisBasicInfo, Function function) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool, programWithBinaryID);
+              tool, programWithBinaryID, analysisBasicInfo);
         this.function = function;
     }
 

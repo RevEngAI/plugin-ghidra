@@ -13,9 +13,10 @@ import java.awt.*;
 
 public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
 
-    public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID) {
+    public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID,
+                                             AnalysisBasicInfoOutputBody analysisBasicInfo) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool, programWithBinaryID);
+              tool, programWithBinaryID, analysisBasicInfo);
     }
 
     @Override
