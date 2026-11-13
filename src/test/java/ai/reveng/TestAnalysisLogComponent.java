@@ -245,13 +245,16 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         }
     }
 
-    /// The error dialog, once the work that leads to it has run: the wait that sees the Error, the delivery of its
-    /// event, and the task that fetches the log. Waiting on that work, not on a clock, keeps slow machines passing.
+    /// The error dialog, once the work that leads to it has run. Each stage starts the next one on the other side:
+    /// the Queued event is delivered on Swing and starts the wait (a task), the wait fires the Error event (Swing),
+    /// which starts the log fetch (a task), which shows the dialog (Swing). Waiting on each stage, not on a clock,
+    /// keeps slow machines passing.
     private OptionDialog awaitErrorDialog() {
-        waitForTasks();
         waitForSwing();
-        waitForTasks();
-        waitForSwing();
+        for (int stage = 0; stage < 3; stage++) {
+            waitForTasks();
+            waitForSwing();
+        }
         var dialog = getDialogComponent(OptionDialog.class);
         assertNotNull("the failed analysis should be reported", dialog);
         return dialog;
