@@ -224,7 +224,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var trackedPrograms = (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
         assertFalse(trackedPrograms.containsKey(program));
         // The wait ended in Error, which is reported
-        pressButtonByText(waitForDialogComponent(OptionDialog.class), "Keep attached");
+        pressButtonByText(waitForDialogComponent(null, OptionDialog.class, 30_000), "Keep attached");
     }
 
     private static final String FAILED_ANALYSIS_LOGS = "Unpacking binary\nDisassembling\nFATAL: worker ran out of memory\n";
@@ -245,17 +245,11 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         }
     }
 
-    /// The error dialog, once the work that leads to it has run. Each stage starts the next one on the other side:
-    /// the Queued event is delivered on Swing and starts the wait (a task), the wait fires the Error event (Swing),
-    /// which starts the log fetch (a task), which shows the dialog (Swing). Waiting on each stage, not on a clock,
-    /// keeps slow machines passing.
+    /// The error dialog, once the work that leads to it has run: the Queued event starts the wait (a task), the wait
+    /// fires the Error event (Swing), which starts the log fetch (a task), which shows the dialog (Swing). How many
+    /// rounds that takes varies between machines, so poll for the dialog; the limit only bounds a broken run.
     private OptionDialog awaitErrorDialog() {
-        waitForSwing();
-        for (int stage = 0; stage < 3; stage++) {
-            waitForTasks();
-            waitForSwing();
-        }
-        var dialog = getDialogComponent(OptionDialog.class);
+        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
         assertNotNull("the failed analysis should be reported", dialog);
         return dialog;
     }
@@ -332,7 +326,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
 
         env.showTool(program);
-        var dialog = waitForDialogComponent(OptionDialog.class);
+        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
         assertTrue(dialog.getMessage(), dialog.getMessage().contains("FATAL: worker ran out of memory"));
         pressButtonByText(dialog, "Detach");
         waitForSwing();
