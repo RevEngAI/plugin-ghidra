@@ -245,6 +245,18 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         }
     }
 
+    /// The error dialog, once the work that leads to it has run: the wait that sees the Error, the delivery of its
+    /// event, and the task that fetches the log. Waiting on that work, not on a clock, keeps slow machines passing.
+    private OptionDialog awaitErrorDialog() {
+        waitForTasks();
+        waitForSwing();
+        waitForTasks();
+        waitForSwing();
+        var dialog = getDialogComponent(OptionDialog.class);
+        assertNotNull("the failed analysis should be reported", dialog);
+        return dialog;
+    }
+
     private String logText(AnalysisLogComponent logComponent) {
         return runSwing(() -> ((JTextArea) getInstanceField("textArea", logComponent)).getText());
     }
@@ -262,7 +274,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
         tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent("StartAnalysisTask", programWithID, AnalysisStatus.Queued));
 
-        var dialog = waitForDialogComponent(OptionDialog.class);
+        var dialog = awaitErrorDialog();
         assertTrue(dialog.getMessage(), dialog.getMessage().contains("analysis 7 of " + program.getName() + " failed"));
         assertTrue(dialog.getMessage(), dialog.getMessage().contains("FATAL: worker ran out of memory"));
         var context = new DefaultActionContext();
@@ -294,7 +306,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
         tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent("StartAnalysisTask", programWithID, AnalysisStatus.Queued));
 
-        pressButtonByText(waitForDialogComponent(OptionDialog.class), "Keep attached");
+        pressButtonByText(awaitErrorDialog(), "Keep attached");
         waitForSwing();
         assertEquals(Optional.of(programWithID), service.getKnownProgram(program));
 
