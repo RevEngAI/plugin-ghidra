@@ -53,8 +53,13 @@ import java.util.Set;
 /// overloads without one keep the derived value.
 public final class GhidraDataTypeEncoder {
 
-    /// Upper bound on transitive dependency resolution, so a pathological type graph cannot make a
-    /// reactive push walk forever. Also keeps a single push well inside the endpoints' batch limits.
+    /// Upper bound on one {@link #closure} walk, so a pathological type graph cannot make a reactive
+    /// push walk forever.
+    ///
+    /// It bounds one function's closure, not a whole push: a push of many functions closes each one
+    /// separately and hands the union to {@link AnalysisDataTypesService#ensureTypes}, which chunks its
+    /// writes to the endpoints' limits. Capping the union instead made whether a function's types got
+    /// ids depend on which other functions happened to share its batch.
     private static final int MAX_TYPES = 500;
 
     /// Ghidra's placeholders for "no calling convention recorded", which the API would rather not
@@ -64,8 +69,11 @@ public final class GhidraDataTypeEncoder {
 
     private GhidraDataTypeEncoder() {}
 
-    /// Resolves a referenced type to the analysis' id for it. Absent ids encode as an omitted
-    /// reference, which the API reads as "unresolved" rather than as an error.
+    /// Resolves a referenced type to the analysis' id for it.
+    ///
+    /// An absent id is never written as a null reference: the write endpoints replace a stored
+    /// definition in full, so a null `data_type_id` would erase the type the portal had there. A body
+    /// that would need one is withheld instead — see {@link #updateEntry} and {@link #unresolvedTypes}.
     @FunctionalInterface
     public interface Ids {
         @Nullable
@@ -117,6 +125,34 @@ public final class GhidraDataTypeEncoder {
             queue.addAll(dependenciesOf(type));
         }
         return List.copyOf(seen.values());
+    }
+
+    /// The names of the types a push of `function` cannot write in full with `ids`, given its
+    /// `reachable` types ({@link #reachableTypes}). Empty when the signature and every definition
+    /// it depends on can be sent.
+    ///
+    /// A type counts when it has no id itself, or when it refers to a type that has none: the latter
+    /// is how a closure cut short by {@link #MAX_TYPES} shows up, and {@link #updateEntry} withholds
+    /// such a definition rather than write a null reference into it. Either way the function's
+    /// edit has not fully reached the portal.
+    public static Set<String> unresolvedTypes(Function function, Collection<DataType> reachable, Ids ids) {
+        Set<String> unresolved = new LinkedHashSet<>();
+        List<DataType> named = new ArrayList<>();
+        named.add(function.getReturnType());
+        for (Parameter parameter : function.getParameters()) {
+            named.add(parameter.getDataType());
+        }
+        for (DataType type : named) {
+            if (type == null || ids.idOf(keyOf(type)) == null) {
+                unresolved.add(nameOf(type));
+            }
+        }
+        for (DataType type : reachable) {
+            if (ids.idOf(keyOf(type)) == null || !referencesResolve(type, ids)) {
+                unresolved.add(nameOf(type));
+            }
+        }
+        return unresolved;
     }
 
     /// The server's identity for a Ghidra type.
@@ -221,6 +257,9 @@ public final class GhidraDataTypeEncoder {
     /// that never carry a definition, and a composite or reference type that is locally a bare
     /// placeholder. `PUT` replaces a stored type in full, so writing an empty definition would
     /// erase whatever the server extracted; a push that has nothing to say says nothing.
+    ///
+    /// Empty too when any type it refers to has no id in `ids`, for the same reason: a member or
+    /// parameter written with a null type would replace the portal's type with nothing.
     public static Optional<ai.reveng.model.UpdateDataTypeEntry> updateEntry(DataType type, long id, Ids ids) {
         return updateEntry(type, namespaceOf(type), id, ids);
     }
@@ -232,6 +271,9 @@ public final class GhidraDataTypeEncoder {
                                                                             String namespace,
                                                                             long id,
                                                                             Ids ids) {
+        if (!referencesResolve(type, ids)) {
+            return Optional.empty();
+        }
         Long size = sizeOf(type);
         String name = nameOf(type);
         return switch (kindOf(type)) {
@@ -310,7 +352,11 @@ public final class GhidraDataTypeEncoder {
     /// The function's local signature as a signature update, with every type named by id.
     ///
     /// `PUT .../signature` replaces the stored signature in full, so parameter storage is carried
-    /// over as well: leaving it out would clear the storage the server extracted.
+    /// over as well: leaving it out would clear the storage the server extracted. For the same
+    /// reason a parameter or return type without an id is refused rather than sent as null; callers
+    /// check {@link #unresolvedTypes} first.
+    ///
+    /// @throws IllegalStateException if `ids` has no id for a parameter or the return type
     public static ai.reveng.model.UpdateFunctionSignatureInputBody signatureOf(Function function, Ids ids) {
         var body = new ai.reveng.model.UpdateFunctionSignatureInputBody();
 
@@ -327,14 +373,22 @@ public final class GhidraDataTypeEncoder {
             var input = new ai.reveng.model.SignatureParameterInput()
                     .ordinal((long) ordinal)
                     .name(parameter.getName())
-                    .dataTypeId(ids.idOf(keyOf(parameter.getDataType())))
+                    .dataTypeId(requireId(parameter.getDataType(), ids))
                     .bitLength(Math.max(0, parameter.getLength()) * 8L);
             storageOf(parameter).ifPresent(input::storage);
             parameters.add(input);
         }
         body.setParameters(parameters);
-        body.setReturnDataTypeId(ids.idOf(keyOf(function.getReturnType())));
+        body.setReturnDataTypeId(requireId(function.getReturnType(), ids));
         return body;
+    }
+
+    private static long requireId(@Nullable DataType type, Ids ids) {
+        Long id = type == null ? null : ids.idOf(keyOf(type));
+        if (id == null) {
+            throw new IllegalStateException("No data type id for \"%s\"".formatted(nameOf(type)));
+        }
+        return id;
     }
 
     /// Convenience overload for callers holding the id map {@link AnalysisDataTypesService#ensure}
@@ -361,6 +415,26 @@ public final class GhidraDataTypeEncoder {
     /// The types one type refers to. A pointer's pointee and an array's element count as
     /// dependencies because they are types in their own right on the server, each with its own id.
     private static List<DataType> dependenciesOf(DataType type) {
+        List<DataType> dependencies = referencesOf(type);
+        dependencies.removeIf(java.util.Objects::isNull);
+        return dependencies;
+    }
+
+    /// Whether every type `type`'s definition names has an id, so its update body can be written
+    /// without a null reference.
+    private static boolean referencesResolve(DataType type, Ids ids) {
+        for (DataType reference : referencesOf(type)) {
+            if (reference == null || ids.idOf(keyOf(reference)) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// The types `type`'s definition names, one entry per reference. A member or parameter with no
+    /// type is kept as a null, since its body would carry a null reference; a pointer with no
+    /// pointee is `void *` and names nothing.
+    private static List<DataType> referencesOf(DataType type) {
         List<DataType> dependencies = new ArrayList<>();
         switch (kindOf(type)) {
             case STRUCT, UNION -> {
@@ -369,7 +443,12 @@ public final class GhidraDataTypeEncoder {
                 }
             }
             case TYPEDEF -> dependencies.add(((TypeDef) type).getDataType());
-            case POINTER -> dependencies.add(((Pointer) type).getDataType());
+            case POINTER -> {
+                DataType pointee = ((Pointer) type).getDataType();
+                if (pointee != null) {
+                    dependencies.add(pointee);
+                }
+            }
             case ARRAY -> dependencies.add(((Array) type).getDataType());
             case FUNCTION_DEFINITION -> {
                 FunctionDefinition definition = (FunctionDefinition) type;
@@ -381,7 +460,6 @@ public final class GhidraDataTypeEncoder {
             default -> {
             }
         }
-        dependencies.removeIf(java.util.Objects::isNull);
         return dependencies;
     }
 

@@ -162,7 +162,25 @@ public final class AnalysisDataTypesService {
     /// Where a type was filed under a different namespace than its category path implies — see
     /// {@link #storageKey} — that key is present too, pointing at the same id.
     public Map<TypeKey, Long> ensure(AnalysisID analysisID, Collection<DataType> roots) throws ApiException {
-        List<DataType> closure = GhidraDataTypeEncoder.closure(roots);
+        return ensureTypes(analysisID, GhidraDataTypeEncoder.closure(roots));
+    }
+
+    /// As {@link #ensure}, for types the caller has already closed over their dependencies — the
+    /// union of several functions' {@link GhidraDataTypeEncoder#reachableTypes}, say. They are
+    /// de-duplicated by key but neither walked again nor capped: each function's closure is bounded
+    /// on its own, and the writes are chunked to the endpoints' limits however many there are.
+    ///
+    /// A type whose definition names a type with no id here — one that lies past the edge of a
+    /// capped closure — gets an id but no definition write; see
+    /// {@link GhidraDataTypeEncoder#updateEntry}.
+    public Map<TypeKey, Long> ensureTypes(AnalysisID analysisID, Collection<DataType> types) throws ApiException {
+        Map<TypeKey, DataType> distinct = new LinkedHashMap<>();
+        for (DataType type : types) {
+            if (type != null) {
+                distinct.putIfAbsent(GhidraDataTypeEncoder.keyOf(type), type);
+            }
+        }
+        List<DataType> closure = List.copyOf(distinct.values());
         if (closure.isEmpty()) {
             return Map.of();
         }
