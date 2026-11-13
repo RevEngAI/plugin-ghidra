@@ -224,7 +224,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var trackedPrograms = (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
         assertFalse(trackedPrograms.containsKey(program));
         // The wait ended in Error, which is reported
-        pressButtonByText(waitForDialogComponent(null, OptionDialog.class, 30_000), "Keep attached");
+        pressButtonByText(awaitDialog(OptionDialog.class), "Keep attached");
     }
 
     private static final String FAILED_ANALYSIS_LOGS = "Unpacking binary\nDisassembling\nFATAL: worker ran out of memory\n";
@@ -249,9 +249,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
     /// fires the Error event (Swing), which starts the log fetch (a task), which shows the dialog (Swing). How many
     /// rounds that takes varies between machines, so poll for the dialog; the limit only bounds a broken run.
     private OptionDialog awaitErrorDialog() {
-        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
-        assertNotNull("the failed analysis should be reported", dialog);
-        return dialog;
+        return awaitDialog(OptionDialog.class);
     }
 
     private String logText(AnalysisLogComponent logComponent) {
@@ -326,7 +324,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
 
         env.showTool(program);
-        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
+        var dialog = awaitDialog(OptionDialog.class);
         assertTrue(dialog.getMessage(), dialog.getMessage().contains("FATAL: worker ran out of memory"));
         pressButtonByText(dialog, "Detach");
         waitForSwing();

@@ -3,6 +3,7 @@ package ai.reveng;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.plugins.LoggingPlugin;
+import docking.DialogComponentProvider;
 import generic.jar.ResourceFile;
 import ghidra.GhidraTestApplicationLayout;
 import utility.application.ApplicationLayout;
@@ -18,8 +19,11 @@ import org.junit.Before;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+
+import static org.junit.Assert.assertNotNull;
 
 /// Base class
 abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedIntegrationTest {
@@ -65,6 +69,17 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
         return new ProgramBuilder(name, ProgramBuilder._X64, this);
     }
 
+    /// Polls for a dialog against this test's own deadline: the timeout that waitForDialogComponent takes is
+    /// ignored in favour of Ghidra's 2s default, which a slow CI runner can exceed while a task is still running
+    protected static <T extends DialogComponentProvider> T awaitDialog(Class<T> type) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        T dialog;
+        while ((dialog = getDialogComponent(type)) == null && System.nanoTime() < deadline) {
+            sleep(DEFAULT_WAIT_DELAY);
+        }
+        assertNotNull("timed out waiting for " + type.getSimpleName(), dialog);
+        return dialog;
+    }
 
 
     /// This method adds a provided mocked service to the tool
