@@ -5,6 +5,7 @@ import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiImplementation;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
@@ -96,15 +97,13 @@ public class StartAnalysisTask extends Task {
                 message, error);
     }
 
-    private static String describe(Throwable error) {
+    static String describe(Throwable error) {
         Throwable cause = error;
         if (!(cause instanceof ApiException) && cause.getCause() instanceof ApiException) {
             cause = cause.getCause();
         }
         if (cause instanceof ApiException apiException) {
-            String body = apiException.getResponseBody();
-            String detail = (body != null && !body.isBlank()) ? body : apiException.getMessage();
-            return "HTTP " + apiException.getCode() + " — " + detail;
+            return TypedApiImplementation.describeApiException(apiException);
         }
         return cause.getMessage() != null ? cause.getMessage() : cause.toString();
     }

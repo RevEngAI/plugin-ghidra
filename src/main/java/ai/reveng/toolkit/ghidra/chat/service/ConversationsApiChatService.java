@@ -15,6 +15,7 @@ import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationReplay;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationSummary;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.StoredEvent;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.UserMessageReplay;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiImplementation;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 
@@ -268,7 +269,8 @@ public class ConversationsApiChatService implements ChatService {
             okhttp3.ResponseBody responseBody = response.body();
             String text = responseBody == null ? "" : responseBody.string();
             if (!response.isSuccessful()) {
-                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+                throw new ApiException("Failed to %s: HTTP %d".formatted(what, response.code()),
+                        response.code(), response.headers().toMultimap(), text);
             }
             Object parsed = GSON.fromJson(text, Map.class);
             if (!(parsed instanceof Map)) {
@@ -290,10 +292,7 @@ public class ConversationsApiChatService implements ChatService {
     }
 
     private static ChatServiceException apiError(String action, ApiException e) {
-        String detail = e.getResponseBody();
-        if (detail == null || detail.isBlank()) {
-            detail = e.getMessage();
-        }
-        return new ChatServiceException("Failed to %s: %s".formatted(action, detail), e);
+        return new ChatServiceException(
+                "Failed to %s: %s".formatted(action, TypedApiImplementation.describeApiException(e)), e);
     }
 }

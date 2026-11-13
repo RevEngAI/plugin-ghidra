@@ -339,7 +339,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             }
             return new FunctionSignatureBatch(items, dataTypes);
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -355,7 +355,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             return ServerDataTypeReader.readEntries(
                     executeForJsonObject(call, "list analysis data types"), "items");
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -403,7 +403,7 @@ public class TypedApiImplementation implements TypedApiInterface {
                     .getVersions();
             return versions == null ? List.of() : versions;
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -412,7 +412,8 @@ public class TypedApiImplementation implements TypedApiInterface {
             okhttp3.ResponseBody responseBody = response.body();
             String text = responseBody == null ? "" : responseBody.string();
             if (!response.isSuccessful()) {
-                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+                throw new ApiException("Failed to %s: HTTP %d".formatted(what, response.code()),
+                        response.code(), response.headers().toMultimap(), text);
             }
             JsonElement parsed = JsonParser.parseString(text);
             if (!parsed.isJsonObject()) {
@@ -566,10 +567,20 @@ public class TypedApiImplementation implements TypedApiInterface {
         functionsAiDecompilationApi.deleteAiDecompilationInlineComment(functionID.value(), line);
     }
 
-    private static String describeApiException(ApiException e) {
-        // The SDK's ApiException carries the HTTP status and response body separately from the message;
-        // surface both so callers logging only getMessage() can still diagnose server-side failures.
-        return "HTTP " + e.getCode() + " — " + (e.getResponseBody() != null ? e.getResponseBody() : e.getMessage());
+    /// The status and the server's `error.message`, falling back to the raw body, then the exception's
+    /// own message. {@link ApiException#getMessage()} itself dumps the body and every header.
+    public static String describeApiException(ApiException e) {
+        String body = e.getResponseBody();
+        String detail = body != null && !body.isBlank() ? body : e.getMessage();
+        try {
+            JsonElement message = JsonParser.parseString(body).getAsJsonObject()
+                    .getAsJsonObject("error").get("message");
+            if (message != null && message.isJsonPrimitive() && !message.getAsString().isBlank()) {
+                detail = message.getAsString();
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return "HTTP " + e.getCode() + " — " + detail;
     }
 
     /// POST /v3/functions/rename, with a one-item body: v3 has no per-function rename route.
@@ -587,7 +598,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             response = functionsRenamingHistoryApi.batchRenameFunctions(request);
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
         Long renamedCount = response == null ? null : response.getRenamedCount();
         if (renamedCount == null || renamedCount < 1) {
@@ -601,7 +612,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return FunctionDetails.fromServerResponse(functionsCoreApi.getFunctionDetails_0(id.value()));
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -718,7 +729,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             DisassemblyOutputBody disassembly = this.functionsCoreApi.getFunctionBlocks_0(id.value());
             return DisassemblyBlocksReader.readAssembly(disassembly.getBasicBlocks());
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -749,7 +760,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return this.configApi.getConfig().getData();
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -758,7 +769,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return this.iamUsersApi.getMe();
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 }
