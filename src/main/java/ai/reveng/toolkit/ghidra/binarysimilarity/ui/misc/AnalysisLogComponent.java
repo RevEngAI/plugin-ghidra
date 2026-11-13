@@ -15,6 +15,7 @@ import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
 import ghidra.util.task.TaskMonitor;
 import ghidra.util.task.TaskMonitorComponent;
+import ghidra.util.task.WrappingTaskMonitor;
 
 import javax.swing.*;
 
@@ -27,7 +28,9 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     private final JScrollPane scroll;
     private TaskMonitorComponent taskMonitorComponent;
     private final JPanel mainPanel;
-    private final Map<Program, Task> trackedPrograms =  new ConcurrentHashMap<>();
+    /// The task waiting for each program's analysis. At most one per program: a new analysis replaces the
+    /// wait for an earlier one, which the program is no longer attached to.
+    private final Map<Program, AnalysisMonitoringTask> trackedPrograms =  new ConcurrentHashMap<>();
     private final Map<Program, String> storedLogs = new ConcurrentHashMap<>();
     /// How the program's analysis ended, shown below its logs; absent while it runs or when unknown
     private final Map<Program, String> terminalStatusLines = new ConcurrentHashMap<>();
@@ -76,7 +79,7 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     public void programActivated(Program program) {
         // Switch the active log to the given program
         this.activeProgram = program;
-        if (trackedPrograms.containsKey(program)) {
+        if (program != null && trackedPrograms.containsKey(program)) {
             // If we are tracking this program, show the task monitor
             taskMonitorComponent.setVisible(true);
         } else {
@@ -117,16 +120,51 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
                 if (terminalStatusLines.remove(event.getProgram()) != null) {
                     refreshIfActive(event.getProgram());
                 }
-                if (!trackedPrograms.containsKey(event.getProgram())){
-                    // We aren't tracking this program yet, so we start a new task for it
-                    var task = new AnalysisMonitoringTask(event.getProgramWithBinaryID(), this);
-                    var builder = TaskBuilder.withTask(task);
-                    trackedPrograms.put(event.getProgram(), task);
-                    builder.launchInBackground(getTaskMonitor());
+                var tracked = trackedPrograms.get(event.getProgram());
+                if (tracked != null && tracked.program.equals(event.getProgramWithBinaryID())) {
+                    // Already waiting for this analysis
+                    return;
                 }
+                if (tracked != null) {
+                    // Waiting for an analysis the program has since been detached from
+                    tracked.stop();
+                }
+                var task = new AnalysisMonitoringTask(event.getProgramWithBinaryID(), this);
+                trackedPrograms.put(event.getProgram(), task);
+                TaskBuilder.withTask(task).launchInBackground(task.waitMonitor);
             }
         }
 
+    }
+
+    /// Stop waiting for the program's analysis, e.g. because the program was detached from it. The wait ends
+    /// without firing any further status events for it.
+    public void stopMonitoring(Program program) {
+        var task = trackedPrograms.remove(program);
+        if (task != null) {
+            task.stop();
+        }
+        updateMonitorVisibility();
+    }
+
+    /// Forget everything about a program that was closed, and stop waiting for its analysis
+    public void programClosed(Program program) {
+        stopMonitoring(program);
+        storedLogs.remove(program);
+        terminalStatusLines.remove(program);
+        if (activeProgram == program) {
+            activeProgram = null;
+        }
+    }
+
+    private void updateMonitorVisibility() {
+        var active = activeProgram;
+        var show = active != null && trackedPrograms.containsKey(active);
+        if (!show && trackedPrograms.isEmpty()) {
+            // Nothing uses the shared monitor any more, so a Cancel pressed on it must not cancel the next wait
+            taskMonitorComponent.clearCanceled();
+        }
+        taskMonitorComponent.setVisible(show);
     }
 
     @Override
@@ -181,10 +219,43 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         };
     }
 
+    /// Shows its progress on the shared monitor component, and is cancelled either by the Cancel button there
+    /// (which cancels every wait shown on it) or on its own, without cancelling the shared component.
+    private static class StoppableMonitor extends WrappingTaskMonitor {
+        private volatile boolean stopped;
+
+        StoppableMonitor(TaskMonitor display) {
+            super(display);
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return stopped || super.isCancelled();
+        }
+
+        @Override
+        public void checkCancelled() throws CancelledException {
+            if (isCancelled()) {
+                throw new CancelledException();
+            }
+        }
+
+        @Override
+        public void cancel() {
+            stopped = true;
+        }
+
+        @Override
+        public void clearCanceled() {
+            stopped = false;
+        }
+    }
+
     class AnalysisMonitoringTask extends Task {
 
         private final GhidraRevengService.ProgramWithID program;
         private final AnalysisLogConsumer logConsumer;
+        private final StoppableMonitor waitMonitor = new StoppableMonitor(getTaskMonitor());
 
         public AnalysisMonitoringTask(GhidraRevengService.ProgramWithID programWithID, AnalysisLogConsumer logConsumer) {
             super(programWithID.toString(), true, false, false);
@@ -192,12 +263,22 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
             this.logConsumer = logConsumer;
         }
 
+        void stop() {
+            waitMonitor.cancel();
+        }
+
         @Override
         public void run(TaskMonitor monitor) throws CancelledException {
             // Wait for the analysis
             var service = tool.getService(GhidraRevengService.class);
+            // Logs fetched just before the wait was stopped belong to an analysis the program has left
+            AnalysisLogConsumer logs = (text, programWithID) -> {
+                if (!waitMonitor.isCancelled()) {
+                    logConsumer.consumeLogs(text, programWithID);
+                }
+            };
             try {
-                var result = service.waitForAnalysis(monitor, program, this.logConsumer, tool);
+                var result = service.waitForAnalysis(monitor, program, logs, tool);
                 var message = unfinishedWaitMessage(result, program);
                 if (message != null) {
                     tool.getService(ReaiLoggingService.class).warn(message);
@@ -206,9 +287,9 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
             } finally {
                 ///  waitForFinishedAnalysis has already sent the completion event to all plugins
                 /// so this task just needs to clean up the tracked programs map
-                // Remove ourselves from the tracked programs when done
-                trackedPrograms.remove(program.program());
-                taskMonitorComponent.setVisible(false);
+                // Remove ourselves from the tracked programs when done, and only our own entry: a newer analysis of the same program may have replaced it
+                trackedPrograms.remove(program.program(), this);
+                updateMonitorVisibility();
             }
         }
     }

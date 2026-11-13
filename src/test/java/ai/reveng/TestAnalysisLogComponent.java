@@ -39,6 +39,13 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         );
     }
 
+    /// Attach the program to its analysis, as StartAnalysisTask does before reporting it queued. Status events
+    /// for an analysis the program is not attached to are ignored.
+    private static GhidraRevengService.ProgramWithID attach(GhidraRevengService service,
+                                                            GhidraRevengService.ProgramWithID programWithID) {
+        return service.registerAnalysisForProgram(programWithID.program(), programWithID.analysisID());
+    }
+
     /// If a user starts Ghidra for a program with an associated analysis that is still processing on the server,
     /// then the analysis log component should show that the analysis is still processing, and automatically
     /// fetch the logs and fire
@@ -47,16 +54,15 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
     public void testResumeWaitingForProcessingAnalysis() throws Exception{
         var defaultTool = env.showTool();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
             @Override
             public AnalysisStatus status(AnalysisID analysisID) {
                 return AnalysisStatus.Processing;
             }
         });
 
-//        defaultTool.getService(GhidraRevengService.class);
         env.addPlugin(AnalysisManagementPlugin.class);
-        var programWithID = getPlaceHolderID();
+        var programWithID = attach(service, getPlaceHolderID());
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent(
                         "Test",
@@ -79,7 +85,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var defaultTool = env.showTool();
         var programWithID = getPlaceHolderID();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
                     private final Map<AnalysisID, AnalysisStatus> statusMap = new HashMap<>();
 
                     {
@@ -105,6 +111,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
                     }
                 }
         );
+        attach(service, programWithID);
         env.addPlugin(AnalysisManagementPlugin.class);
         // Start a new analysis that is queued
         defaultTool.firePluginEvent(
@@ -135,7 +142,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var statusCalls = new AtomicInteger();
         var logCalls = new AtomicInteger();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
             @Override
             public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
                 return switch (statusCalls.incrementAndGet()) {
@@ -158,6 +165,7 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
                 return List.of();
             }
         });
+        attach(service, programWithID);
         env.addPlugin(AnalysisManagementPlugin.class);
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Queued)
@@ -176,12 +184,13 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var defaultTool = env.showTool();
         var programWithID = getPlaceHolderID();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
             @Override
             public AnalysisStatus status(AnalysisID analysisID) {
                 return AnalysisStatus.Queued;
             }
         });
+        attach(service, programWithID);
         env.addPlugin(AnalysisManagementPlugin.class);
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Queued)
@@ -415,13 +424,14 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var programWithID = getPlaceHolderID();
         var statusCalls = new AtomicInteger();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
             @Override
             public AnalysisStatus status(AnalysisID analysisID) {
                 statusCalls.incrementAndGet();
                 return AnalysisStatus.Unknown;
             }
         });
+        attach(service, programWithID);
         env.addPlugin(AnalysisManagementPlugin.class);
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Unknown)
@@ -442,12 +452,13 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         var programWithID = getPlaceHolderID();
         var statusCalls = new AtomicInteger();
 
-        addMockedService(defaultTool, new UnimplementedAPI() {
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
             @Override
             public AnalysisStatus status(AnalysisID analysisID) {
                 return statusCalls.incrementAndGet() == 1 ? AnalysisStatus.Processing : AnalysisStatus.Unknown;
             }
         });
+        attach(service, programWithID);
         env.addPlugin(AnalysisManagementPlugin.class);
         defaultTool.firePluginEvent(
                 new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Queued)
