@@ -1332,16 +1332,20 @@ public class GhidraRevengService {
                         "Hash of uploaded file %s from path %s doesn't match the hash of the program loaded in Ghidra %s"
                                 .formatted(hash, program.getExecutablePath(), hashOfProgram(program)));
             }
-        } catch (FileNotFoundException | ApiException e) {
+        } catch (FileNotFoundException e) {
             throw new RuntimeException(e);
+        } catch (ApiException e) {
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
     }
 
     public TypedApiInterface.BinaryHash upload(Path path) {
         try {
             return api.upload(path);
-        } catch (FileNotFoundException | ApiException e) {
+        } catch (FileNotFoundException e) {
             throw new RuntimeException(e);
+        } catch (ApiException e) {
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
     }
 
@@ -1355,7 +1359,7 @@ public class GhidraRevengService {
             return api.status(program.analysisID());
         } catch (ApiException e) {
             // This should never happen given that `ProgramWithID` guarantees a valid analysis ID
-            throw new RuntimeException(e);
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
     }
 
