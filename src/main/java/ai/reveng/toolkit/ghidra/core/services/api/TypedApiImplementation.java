@@ -509,12 +509,12 @@ public class TypedApiImplementation implements TypedApiInterface {
                     inlineComments,
                     decompilationProgress);
         } catch (ApiException e) {
+            // A function that was never decompiled is a 200 with status UNINITIALISED; a 404 means the
+            // function itself was not found, and treating it as "not started yet" polled for ever.
             if (e.getCode() == 404) {
-                return new AIDecompilationStatus(
-                        DecompilationData.StatusEnum.UNINITIALISED,
-                        null, null, null, null, null, List.of(), null);
+                throw new RuntimeException("RevEng.AI could not find function %d (HTTP 404)".formatted(functionID.value()), e);
             }
-            throw new RuntimeException("Failed to poll AI decompilation status", e);
+            throw new RuntimeException("Failed to poll AI decompilation status: " + describeApiException(e), e);
         }
     }
 

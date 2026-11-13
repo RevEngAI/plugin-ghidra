@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
@@ -49,6 +48,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.Collection;
 import java.util.List;
@@ -391,14 +391,19 @@ public class GhidraRevengService {
     }
 
     /// The function name as the portal expects it: qualified with its namespace path (joined by
-    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace and the global
-    /// namespace. Ghidra stores only the leaf label on the symbol, so the namespace must be
-    /// re-attached when pushing a rename back — the portal's function names include the namespace.
+    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace, the namespaces
+    /// under it, and the global namespace. Ghidra stores only the leaf label on the symbol, so the
+    /// namespace must be re-attached when pushing a rename back — the portal's function names
+    /// include the namespace. Applying a match files the function under
+    /// {@code RevEng.AI::<matched binary>}, and that binary name is not part of the function's name.
     static String qualifiedServerName(Function function) {
         List<String> parts = new ArrayList<>();
         parts.add(function.getName());
         for (Namespace ns = function.getParentNamespace(); ns != null && !ns.isGlobal(); ns = ns.getParentNamespace()) {
-            if (!REVENG_AI_NAMESPACE.equals(ns.getName())) {
+            if (REVENG_AI_NAMESPACE.equals(ns.getName())) {
+                // Drop the namespaces collected so far: they are all inside RevEng.AI
+                parts.subList(0, parts.size() - 1).clear();
+            } else {
                 parts.add(0, ns.getName());
             }
         }
@@ -1362,7 +1367,11 @@ public class GhidraRevengService {
     public AnalysedProgram analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
         // Check if we are on the swing thread
         var programWithBinaryID = startAnalysis(program, analysisOptionsBuilder);
-        var finalStatus = waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
+        var waited = waitForAnalysis(monitor, programWithBinaryID, null, null);
+        if (waited.ending() != StatusPoller.Ending.DONE) {
+            throw new IllegalStateException("Analysis %s did not finish (%s, last status: %s)"
+                    .formatted(programWithBinaryID.analysisID().id(), waited.ending(), waited.status()));
+        }
         // TODO: Check final status for errors, and do something appropriate on failure
         var analysedProgram = registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
         if (getKnownProgram(program).isEmpty()){
@@ -1451,7 +1460,9 @@ public class GhidraRevengService {
 
     /**
      * @param tool   The UI tool for firing an event on status changes. Can be null
-     * @return The final AnalysisStatus, should be either Complete or Error
+     * @return The final AnalysisStatus: Complete or Error when the analysis finished, Unknown when the
+     *     server reported a status the plugin does not recognise, or the last status seen when the wait
+     *     reached its time limit or was interrupted
      */
     public AnalysisStatus waitForFinishedAnalysis(
             TaskMonitor monitor,
@@ -1460,38 +1471,90 @@ public class GhidraRevengService {
             @Nullable PluginTool tool
 
             ) throws CancelledException {
-        monitor.setMessage("Checking analysis status");
-        // Check the status of the analysis every 500ms
-        // TODO: In the future this can be made smarter and e.g. wait longer if the analysis log hasn't changed
-        AnalysisStatus lastStatus = null;
-        while (true) {
-            AnalysisStatus currentStatus = this.status(programWithID);
-            if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
-                // Analysis log endpoint only starts to return data after the analysis is processing
-                String logs = this.getAnalysisLog(programWithID.analysisID());
-                if (logger != null) {
-                    logger.consumeLogs(logs, programWithID);
-                }
-                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
-            }
-            if (currentStatus != lastStatus) {
-                lastStatus = currentStatus;
-                if (tool != null){
-                    tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
-                }
-            }
+        return waitForAnalysis(monitor, programWithID, logger, tool).status();
+    }
 
-            if (lastStatus == AnalysisStatus.Complete || lastStatus == AnalysisStatus.Error) {
-                // Show the UI message for the completion
-                return lastStatus;
-            }
-            monitor.checkCancelled();
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                return lastStatus;
-            }
+    /// Like {@link #waitForFinishedAnalysis}, but also says why the wait ended, so the caller can tell
+    /// the user when it stopped without the analysis finishing.
+    ///
+    /// @throws CancelledException the monitor was cancelled
+    public StatusPoller.Result<AnalysisStatus> waitForAnalysis(
+            TaskMonitor monitor,
+            ProgramWithID programWithID,
+            @Nullable AnalysisLogConsumer logger,
+            @Nullable PluginTool tool
+    ) throws CancelledException {
+        monitor.setMessage("Checking analysis status");
+        var poller = new StatusPoller<AnalysisStatus>(
+                Duration.ofMillis(pollIntervalMs), Duration.ofMillis(maxPollIntervalMs), Duration.ofMillis(maxAnalysisWaitMs))
+                .retrying(e -> {
+                    if (e instanceof ApiException api && isTransient(api)) {
+                        Msg.warn(this, "Transient error polling analysis status, retrying", e);
+                        return true;
+                    }
+                    return false;
+                }, MAX_POLL_ATTEMPTS, Duration.ofMillis(maxPollBackoffMs));
+        AnalysisStatus[] lastStatus = {null};
+        StatusPoller.Result<AnalysisStatus> result;
+        try {
+            result = poller.poll(
+                    () -> api.status(programWithID.analysisID()),
+                    currentStatus -> {
+                        if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
+                            // Analysis log endpoint only starts to return data after the analysis is processing
+                            try {
+                                String logs = this.getAnalysisLog(programWithID.analysisID());
+                                if (logger != null) {
+                                    logger.consumeLogs(logs, programWithID);
+                                }
+                                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
+                            } catch (RuntimeException e) {
+                                // Logs are cosmetic; a failed fetch must not end the wait
+                                Msg.warn(this, "Failed to fetch analysis logs", e);
+                            }
+                        }
+                        if (currentStatus != lastStatus[0]) {
+                            lastStatus[0] = currentStatus;
+                            if (tool != null) {
+                                tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
+                            }
+                        }
+                        return switch (currentStatus) {
+                            case Complete, Error -> StatusPoller.Verdict.DONE;
+                            case Uploaded, Queued, Processing -> StatusPoller.Verdict.WAIT;
+                            case Unknown -> StatusPoller.Verdict.UNRECOGNISED;
+                        };
+                    },
+                    monitor::isCancelled);
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new StatusPoller.Result<>(StatusPoller.Ending.CANCELLED, lastStatus[0], Duration.ZERO);
         }
+        if (result.ending() == StatusPoller.Ending.CANCELLED) {
+            monitor.checkCancelled();
+        }
+        if (result.ending() == StatusPoller.Ending.TIMED_OUT) {
+            Msg.warn(this, "Stopped waiting for analysis %s after %s; last status: %s"
+                    .formatted(programWithID.analysisID().id(), StatusPoller.describe(result.waited()), result.status()));
+        }
+        return result;
+    }
+
+    /// First wait between status polls; it grows while the status stays the same
+    private long pollIntervalMs = 500;
+    /// Longest wait between status polls while the analysis is running normally
+    private long maxPollIntervalMs = 5_000;
+    /// Longest wait between status polls while the status endpoint keeps failing transiently
+    private long maxPollBackoffMs = 30_000;
+    /// How long to wait for an analysis before giving up; it keeps running on the server
+    private long maxAnalysisWaitMs = Duration.ofHours(3).toMillis();
+    private static final int MAX_POLL_ATTEMPTS = 10;
+
+    /// 5xx, or no response at all (code 0: connection or timeout failure)
+    private static boolean isTransient(ApiException e) {
+        return e.getCode() == 0 || e.getCode() >= 500;
     }
 
     public ProgramWithID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
@@ -1640,31 +1703,6 @@ public class GhidraRevengService {
     public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
         return api.getFunctionsMatches(functionIds);
     }
-
-    public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
-        // Pushing types to the portal is not supported yet, so we just extract the function matches and call the other method
-        batchRenameMatches(functionsList.stream()
-                .map(GhidraFunctionMatchWithSignature::functionMatch)
-                .toList());
-
-    }
-
-    public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
-        var items = functionsList.stream()
-                .map(result -> {
-                    var item = new BatchRenameItem();
-                    item.setFunctionId(result.origin_function_id().value());
-                    item.setNewName(result.nearest_neighbor_function_name());
-                    item.setNewMangledName(result.nearest_neighbor_mangled_function_name());
-                    return item;
-                })
-                .toList();
-
-        var request = new BatchRenameInputBody();
-        request.setFunctions(items);
-        api.batchRenameFunctions(request);
-    }
-
 
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished

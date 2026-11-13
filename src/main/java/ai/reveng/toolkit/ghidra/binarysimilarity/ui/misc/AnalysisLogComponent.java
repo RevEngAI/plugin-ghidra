@@ -4,6 +4,9 @@ import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.StatusPoller;
+import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -90,7 +93,8 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
 
         this.setVisible(true);
         switch (event.getStatus()) {
-            case Complete, Error -> {}
+            // Unknown: the wait for it has already ended, so starting another would end at once and loop
+            case Complete, Error, Unknown -> {}
             default -> {
                 if (!trackedPrograms.containsKey(event.getProgram())){
                     // We aren't tracking this program yet, so we start a new task for it
@@ -115,6 +119,22 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     }
 
 
+    /// What to tell the user when the wait for an analysis ended without it finishing, or null when
+    /// there is nothing to tell (it finished, or the user cancelled the wait).
+    public static String unfinishedWaitMessage(StatusPoller.Result<AnalysisStatus> result,
+                                        GhidraRevengService.ProgramWithID program) {
+        return switch (result.ending()) {
+            case UNRECOGNISED -> ("RevEng.AI: analysis %d of %s reports a status this plugin does not recognise; "
+                    + "stopped waiting for it. Reopen the program to check it again, or use View in portal.")
+                    .formatted(program.analysisID().id(), program.program().getName());
+            case TIMED_OUT -> ("RevEng.AI: analysis %d of %s has not finished after %s (status: %s); stopped waiting. "
+                    + "It keeps running on the server: reopen the program to resume waiting, or use View in portal.")
+                    .formatted(program.analysisID().id(), program.program().getName(),
+                            StatusPoller.describe(result.waited()), result.status());
+            case DONE, CANCELLED -> null;
+        };
+    }
+
     class AnalysisMonitoringTask extends Task {
 
         private final GhidraRevengService.ProgramWithID program;
@@ -130,12 +150,20 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         public void run(TaskMonitor monitor) throws CancelledException {
             // Wait for the analysis
             var service = tool.getService(GhidraRevengService.class);
-            service.waitForFinishedAnalysis(monitor, program, this.logConsumer, tool);
-            ///  waitForFinishedAnalysis has already sent the completion event to all plugins
-            /// so this task just needs to clean up the tracked programs map
-            // Remove ourselves from the tracked programs when done
-            trackedPrograms.remove(program.program());
-            taskMonitorComponent.setVisible(false);
+            try {
+                var result = service.waitForAnalysis(monitor, program, this.logConsumer, tool);
+                var message = unfinishedWaitMessage(result, program);
+                if (message != null) {
+                    tool.getService(ReaiLoggingService.class).warn(message);
+                    SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, true));
+                }
+            } finally {
+                ///  waitForFinishedAnalysis has already sent the completion event to all plugins
+                /// so this task just needs to clean up the tracked programs map
+                // Remove ourselves from the tracked programs when done
+                trackedPrograms.remove(program.program());
+                taskMonitorComponent.setVisible(false);
+            }
         }
     }
 

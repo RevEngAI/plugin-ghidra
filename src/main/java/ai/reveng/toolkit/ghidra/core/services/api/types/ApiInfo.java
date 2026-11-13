@@ -15,7 +15,12 @@ public record ApiInfo(
         String apiKey
 ) {
     public ApiInfo(String hostURI, String portalURI, String apiKey) {
-        this(URI.create(hostURI), URI.create(portalURI), apiKey);
+        this(URI.create(normaliseHost(hostURI)), URI.create(normaliseHost(portalURI)), apiKey);
+    }
+
+    public static String normaliseHost(String host) {
+        var normalised = host.strip().replaceAll("/+$", "");
+        return normalised.isEmpty() || normalised.contains("://") ? normalised : "https://" + normalised;
     }
 
     public static ApiInfo fromConfig(Path configFilePath) throws FileNotFoundException {

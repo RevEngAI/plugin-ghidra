@@ -215,6 +215,15 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 						// For now this is the only place to trigger the removal of the association
 						// If this changes, the RevEngAIAnalysisStatusChanged event should be changed to accommodate
 						// this kind of event
+						// Stop the background work tied to this analysis first, so none of it runs against the
+						// association while it is being removed, or later against a different analysis.
+						localEditSyncService.detach(program);
+						if (autoUnstripSyncService.stopPolling(knownProgram.get().analysisID())) {
+							var message = "RevEng.AI: stopped waiting for auto-unstrip; the program was detached from "
+									+ displayText + ".";
+							tool.getService(ReaiLoggingService.class).info(message);
+							tool.setStatusInfo(message);
+						}
 						program.withTransaction("Undo binary association", () -> revengService.removeProgramAssociation(program));
 
 						// Refresh action states after detaching
@@ -330,7 +339,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                                                 knownProgram.get(),
                                                 status));
                             }
-                            case Queued, Processing -> {
+                            case Uploaded, Queued, Processing -> {
                                 // This is the same code as above, but it has the implicit assumption that someone
                                 /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
                                 tool.firePluginEvent(
@@ -345,6 +354,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                                 // The analysis failed on the server side
                                 Msg.showError(AnalysisManagementPlugin.this, null, "Analysis Error",
                                         "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                            }
+                            case Unknown -> {
+                                // Not waited on: an unrecognised status might never change into one that ends the wait
+                                var message = unknownStatusOnOpenMessage(knownProgram.get());
+                                tool.getService(ReaiLoggingService.class).warn(message);
+                                SwingUtilities.invokeLater(() -> tool.setStatusInfo(message, true));
                             }
                         }
                     }
@@ -468,6 +483,12 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
     private static String loadCancelledMessage(GhidraRevengService.ProgramWithID program) {
         return "Loading the results of RevEng.AI analysis %d into %s was cancelled"
+                .formatted(program.analysisID().id(), program.program().getName());
+    }
+
+    static String unknownStatusOnOpenMessage(GhidraRevengService.ProgramWithID program) {
+        return ("RevEng.AI: analysis %d of %s reports a status this plugin does not recognise; not waiting for it. "
+                + "Reopen the program to check it again, or use View in portal.")
                 .formatted(program.analysisID().id(), program.program().getName());
     }
 
