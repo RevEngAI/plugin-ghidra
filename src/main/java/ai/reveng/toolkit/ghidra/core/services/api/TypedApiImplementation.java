@@ -254,8 +254,11 @@ public class TypedApiImplementation implements TypedApiInterface {
                             new FunctionID(f.getFunctionId()),
                             f.getFunctionName(),
                             // The mangled name is optional here; an unmangled symbol carries none,
-                            // and callers rely on this field being populated.
-                            f.getMangledName() != null ? f.getMangledName() : f.getFunctionName(),
+                            // and callers rely on this field being populated. The server also sends
+                            // it as "" rather than leaving it out, which would otherwise slip past
+                            // the FUN_/sub_ guard on renames.
+                            f.getMangledName() == null || f.getMangledName().isBlank()
+                                    ? f.getFunctionName() : f.getMangledName(),
                             f.getFunctionVaddr(),
                             Math.toIntExact(f.getFunctionSize())
                     )
