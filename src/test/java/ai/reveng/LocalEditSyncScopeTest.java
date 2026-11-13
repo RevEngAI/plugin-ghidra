@@ -17,8 +17,11 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithS
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.data.FunctionDefinitionDataType;
 import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.LongDataType;
+import ghidra.program.model.data.ParameterDefinitionImpl;
+import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.LocalVariableImpl;
 import ghidra.program.model.listing.ParameterImpl;
@@ -175,6 +178,60 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
 
         waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
         assertEquals("matched_name", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
+    /// The matching dialog applies a transfer with no service, so the sync service is what pushes it. A
+    /// signature-only transfer changes the prototype and nothing else: the signature goes up once, and no
+    /// rename does.
+    @Test
+    public void aSignatureTransferPushesTheSignatureOnceAndNoRename() throws Exception {
+        var originalName = first.getName();
+        edit("transfer the signature", () -> assertTrue(new ApplyMatchCmd(null, analysedProgram,
+                matchWithSignature(), false, ApplyMatchCmd.Transfer.SIGNATURE).applyTo(program)));
+        assertEquals(originalName, first.getName());
+        assertEquals("buf", first.getParameter(1).getName());
+
+        waitForCondition(() -> !api.pushedSignatures.isEmpty(), "the transferred signature should be pushed");
+        // Past the debounce, so a second push or a rename would have gone up by now
+        Thread.sleep(1_000);
+        assertEquals(List.of(new FunctionID(1)), api.pushedSignatures);
+        assertTrue("renames pushed: " + api.renameRequests, api.renameRequests.isEmpty());
+    }
+
+    /// Transferring both pushes each once: one rename, one signature.
+    @Test
+    public void aNameAndSignatureTransferPushesEachOnce() throws Exception {
+        edit("transfer name and signature", () -> assertTrue(new ApplyMatchCmd(null, analysedProgram,
+                matchWithSignature(), false, ApplyMatchCmd.Transfer.NAME_AND_SIGNATURE).applyTo(program)));
+
+        waitForCondition(() -> !api.pushedSignatures.isEmpty() && !api.renameRequests.isEmpty(),
+                "the transferred name and signature should be pushed");
+        Thread.sleep(1_000);
+        assertEquals(List.of(new FunctionID(1)), api.pushedSignatures);
+        assertEquals("renames pushed: " + api.renameRequests, 1, api.renameRequests.size());
+        var pushed = api.renameRequests.get(0).getFunctions();
+        assertEquals(1, pushed.size());
+        assertEquals(Long.valueOf(1), pushed.get(0).getFunctionId());
+        assertEquals("matched_name", pushed.get(0).getNewName());
+    }
+
+    private GhidraFunctionMatchWithSignature matchWithSignature() {
+        var signature = new FunctionDefinitionDataType("matched_name");
+        signature.setReturnType(IntegerDataType.dataType);
+        signature.setArguments(
+                new ParameterDefinitionImpl("len", IntegerDataType.dataType, null),
+                new ParameterDefinitionImpl("buf", PointerDataType.dataType, null));
+        return new GhidraFunctionMatchWithSignature(first, new FunctionMatch(
+                new FunctionID(1),
+                new FunctionID(200),
+                "matched_name",
+                "matched_name",
+                "libfoo.so",
+                new BinaryHash("abc123"),
+                false,
+                BigDecimal.valueOf(0.9),
+                BigDecimal.valueOf(0.9),
+                null), signature);
     }
 
     /// A namespace the analyst made is part of the function's name on the portal.
