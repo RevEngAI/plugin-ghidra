@@ -84,9 +84,6 @@ dependencies {
 // Maven repository:
 //
 //     ./gradlew buildExtension -PrevengSdkVersion=<version>
-//
-// The pin in the dependencies block stays the literal default so that
-// .github/scripts/bump_revengai.py can still find and rewrite it.
 if (project.hasProperty('revengSdkVersion')) {
 	configurations.all {
 		resolutionStrategy.force "ai.reveng:sdk:${project.revengSdkVersion}"
