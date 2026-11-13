@@ -1,0 +1,1 @@
+{"status":"COMPLETED","decompilation":"int parse_header(char *buf, int len)\n{\n    if (len < 8) {\n        return -1;\n    }\n    return read_field(buf + 4, len - 4);\n}\n"}

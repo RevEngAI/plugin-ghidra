@@ -1,0 +1,1 @@
+{"status":"COMPLETED","step":"storing_comments","step_index":2,"steps_total":2,"percent":100,"step_share":0,"messages":[{"timestamp":"2026-11-13T10:05:02.220871Z","step":"generating_comments","level":"INFO","text":"Generating structured comments"},{"timestamp":"2026-11-13T10:05:09.031455Z","step":"storing_comments","level":"INFO","text":"Storing comments"}]}
