@@ -16,6 +16,7 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.AbstractFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.BinaryLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.SimilarFunctionsWindow;
@@ -134,8 +135,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         return;
                     }
 
-                    var functionMatchingDialog = new BinaryLevelFunctionMatchingDialog(tool, knownProgram.get());
-                    tool.showDialog(functionMatchingDialog);
+                    AbstractFunctionMatchingDialog.showWhenLoaded(tool, knownProgram.get(),
+                            basicInfo -> new BinaryLevelFunctionMatchingDialog(tool, knownProgram.get(), basicInfo));
                 })
                 .buildAndInstall(tool);
 
@@ -196,8 +197,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 
-                    var functionMatchingDialog = new FunctionLevelFunctionMatchingDialog(tool, knownProgram, func);
-                    tool.showDialog(functionMatchingDialog);
+                    AbstractFunctionMatchingDialog.showWhenLoaded(tool, knownProgram,
+                            basicInfo -> new FunctionLevelFunctionMatchingDialog(tool, knownProgram, basicInfo, func));
                 })
                 .popupMenuPath(new String[] { "Match function" })
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)

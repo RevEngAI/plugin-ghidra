@@ -2,7 +2,9 @@ package ai.reveng;
 
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.AbstractFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
@@ -13,6 +15,8 @@ import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithS
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
+import docking.AbstractErrDialog;
+import docking.DialogComponentProvider;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.symbol.SourceType;
@@ -60,7 +64,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         // Create and show the dialog
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -107,7 +111,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         // Create the dialog
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -142,7 +146,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -176,7 +180,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -217,7 +221,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -255,7 +259,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -306,7 +310,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -378,7 +382,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -452,7 +456,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -502,7 +506,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -548,7 +552,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -615,7 +619,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         sync.attach(program);
         try {
             FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
             );
             runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
             var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
@@ -759,7 +763,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
@@ -808,7 +812,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
@@ -884,6 +888,95 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
     }
 
+    /// The plugin actions open the dialog through showWhenLoaded, which fetches the analysis details off the
+    /// Swing thread and builds the dialog with them
+    @Test
+    public void testAnalysisDetailsLoadOffTheSwingThreadBeforeTheDialogOpens() throws Exception {
+        var tool = env.getTool();
+        var fetchedOnSwingThread = new java.util.concurrent.atomic.AtomicReference<Boolean>();
+        var service = addMockedService(tool, new FunctionMatchingMockApi() {
+            @Override
+            public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                    throws ai.reveng.invoker.ApiException {
+                fetchedOnSwingThread.set(SwingUtilities.isEventDispatchThread());
+                return super.getAnalysisBasicInfo(analysisID);
+            }
+        });
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        runSwing(() -> AbstractFunctionMatchingDialog.showWhenLoaded(tool, analysedProgram,
+                basicInfo -> new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo, testFunction)), false);
+
+        var dialog = awaitDialog(FunctionLevelFunctionMatchingDialog.class);
+        assertEquals("the details should be fetched, and not on the Swing thread", Boolean.FALSE, fetchedOnSwingThread.get());
+        var loaded = (AnalysisBasicInfoOutputBody) getInstanceField("analysisBasicInfo", dialog);
+        assertEquals("test-model", loaded.getModelName());
+
+        close(dialog);
+        waitForSwing();
+    }
+
+    /// When the details cannot be fetched the user is told why, and no half-built dialog is shown
+    @Test
+    public void testFailedAnalysisDetailsShowAnErrorInsteadOfTheDialog() throws Exception {
+        setErrorGUIEnabled(true);
+        var tool = env.getTool();
+        var service = addMockedService(tool, new FunctionMatchingMockApi() {
+            @Override
+            public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                    throws ai.reveng.invoker.ApiException {
+                throw new ai.reveng.invoker.ApiException(503, "Service Unavailable");
+            }
+        });
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        var factoryCalls = new AtomicInteger();
+        runSwing(() -> AbstractFunctionMatchingDialog.showWhenLoaded(tool, analysedProgram, basicInfo -> {
+            factoryCalls.incrementAndGet();
+            return new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo, testFunction);
+        }), false);
+
+        var error = awaitDialog(AbstractErrDialog.class);
+        assertTrue(error.getMessage(), error.getMessage().contains("Failed to fetch the details of analysis 12345"));
+        assertTrue(error.getMessage(), error.getMessage().contains("HTTP 503"));
+        close(error);
+        waitForSwing();
+
+        assertEquals("no dialog should be built without the details", 0, factoryCalls.get());
+        assertNull(getDialogComponent(FunctionLevelFunctionMatchingDialog.class));
+    }
+
+    /// Polls for a dialog against this test's own deadline: the timeout that waitForDialogComponent takes is
+    /// ignored in favour of Ghidra's 2s default, which a slow CI runner can exceed while a task is still running
+    private static <T extends DialogComponentProvider> T awaitDialog(Class<T> type) {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
+        T dialog;
+        while ((dialog = getDialogComponent(type)) == null && System.nanoTime() < deadline) {
+            sleep(DEFAULT_WAIT_DELAY);
+        }
+        assertNotNull("timed out waiting for " + type.getSimpleName(), dialog);
+        return dialog;
+    }
+
+    private static AnalysisBasicInfoOutputBody basicInfo(GhidraRevengService service,
+                                                         GhidraRevengService.AnalysedProgram program) {
+        try {
+            return service.getBasicDetailsForAnalysis(program.analysisID());
+        } catch (ai.reveng.invoker.ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * Mock API implementation for function matching dialog tests.
      * Provides necessary responses for the dialog to function without a real server.
@@ -918,7 +1011,8 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                throws ai.reveng.invoker.ApiException {
             var basic = new AnalysisBasicInfoOutputBody();
             basic.setModelId(1L);
             basic.setModelName("test-model");
