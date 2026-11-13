@@ -29,6 +29,8 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     private final JPanel mainPanel;
     private final Map<Program, Task> trackedPrograms =  new ConcurrentHashMap<>();
     private final Map<Program, String> storedLogs = new ConcurrentHashMap<>();
+    /// How the program's analysis ended, shown below its logs; absent while it runs or when unknown
+    private final Map<Program, String> terminalStatusLines = new ConcurrentHashMap<>();
 
     public static String NAME = ReaiPluginPackage.WINDOW_PREFIX + "Analysis Log";
     private Program activeProgram;
@@ -80,7 +82,16 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         } else {
             taskMonitorComponent.setVisible(false);
         }
-        setLogs(storedLogs.getOrDefault(program, "No analysis logs available for the active program."));
+        setLogs(displayText(program));
+    }
+
+    /// The logs last received for the program, or null when none were
+    public String getStoredLogs(Program program) {
+        return storedLogs.get(program);
+    }
+
+    private String displayText(Program program) {
+        return withTerminalStatus(storedLogs.get(program), terminalStatusLines.get(program));
     }
 
     public void processEvent(RevEngAIAnalysisStatusChangedEvent event) {
@@ -93,9 +104,19 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
 
         this.setVisible(true);
         switch (event.getStatus()) {
+            case Complete, Error -> {
+                // The wait has ended; say how, so the panel does not look like it is still waiting
+                terminalStatusLines.put(event.getProgram(),
+                        terminalStatusLine(event.getStatus(), event.getProgramWithBinaryID().analysisID().id()));
+                refreshIfActive(event.getProgram());
+            }
             // Unknown: the wait for it has already ended, so starting another would end at once and loop
-            case Complete, Error, Unknown -> {}
+            case Unknown -> {}
             default -> {
+                // A new or resumed analysis: an earlier ending no longer applies
+                if (terminalStatusLines.remove(event.getProgram()) != null) {
+                    refreshIfActive(event.getProgram());
+                }
                 if (!trackedPrograms.containsKey(event.getProgram())){
                     // We aren't tracking this program yet, so we start a new task for it
                     var task = new AnalysisMonitoringTask(event.getProgramWithBinaryID(), this);
@@ -113,10 +134,35 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         storedLogs.put(programWithID.program(), logs);
         // If this is the currently active program, update the log display
 
-        if (activeProgram == programWithID.program()) {
-            setLogs(logs);
+        refreshIfActive(programWithID.program());
+    }
+
+    private void refreshIfActive(Program program) {
+        if (activeProgram == program) {
+            setLogs(displayText(program));
         }
     }
+
+    /// The line that ends the log of an analysis that has finished, or null for a status that is not final
+    public static String terminalStatusLine(AnalysisStatus status, int analysisId) {
+        return switch (status) {
+            case Complete -> "RevEng.AI: analysis %d completed.".formatted(analysisId);
+            case Error -> ("RevEng.AI: analysis %d failed on the server. Use %s > Analysis > Detach, then create a "
+                    + "new analysis or attach to an existing one.").formatted(analysisId, ReaiPluginPackage.MENU_GROUP_NAME);
+            default -> null;
+        };
+    }
+
+    /// The text the panel shows: the logs, followed by how the analysis ended when it has
+    public static String withTerminalStatus(String logs, String statusLine) {
+        boolean noLogs = logs == null || logs.isBlank();
+        if (statusLine == null) {
+            return noLogs ? NO_LOGS : logs;
+        }
+        return noLogs ? statusLine : logs.stripTrailing() + "\n\n" + statusLine;
+    }
+
+    public static final String NO_LOGS = "No analysis logs available for the active program.";
 
 
     /// What to tell the user when the wait for an analysis ended without it finishing, or null when
