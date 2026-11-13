@@ -136,7 +136,7 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
                 }
                 if (taskMonitorComponent.isCancelled()) {
                     // Left over from a Cancel press; the waits it cancelled have already been stopped
-                    taskMonitorComponent.clearCanceled();
+                    taskMonitorComponent.clearCancelled();
                 }
                 var task = new AnalysisMonitoringTask(event.getProgramWithBinaryID(), this);
                 trackedPrograms.put(event.getProgram(), task);
@@ -173,7 +173,7 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
             var show = active != null && trackedPrograms.containsKey(active);
             if (!show && trackedPrograms.isEmpty()) {
                 // Nothing uses the shared monitor any more, so a Cancel pressed on it must not cancel the next wait
-                taskMonitorComponent.clearCanceled();
+                taskMonitorComponent.clearCancelled();
             }
             taskMonitorComponent.setVisible(show);
         });
@@ -257,12 +257,6 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         }
 
         @Override
-        @SuppressWarnings("deprecation")
-        public void checkCanceled() throws CancelledException {
-            checkCancelled();
-        }
-
-        @Override
         public void setMessage(String message) {
             // A stopped wait may still report its analysis' last log line, which would replace the message of the
             // wait that is now shown
@@ -276,8 +270,9 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
             stopped = true;
         }
 
+        // Only the non-deprecated spellings: Ghidra 12.2 removed checkCanceled and clearCanceled
         @Override
-        public void clearCanceled() {
+        public void clearCancelled() {
             stopped = false;
         }
     }
