@@ -473,6 +473,9 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                     // Auto-unstrip runs server-side after the analysis is marked complete, so poll for it
                     // and sync the recovered names / data types once it finishes (PLU-300).
                     autoUnstripSyncService.pollAndSync(analysedProgram, true);
+                } catch (GhidraRevengService.DetachedDuringLoadException e) {
+                    // The user chose to leave this analysis, so there is nothing to report or retry
+                    Msg.info(AnalysisManagementPlugin.this, e.getMessage());
                 } catch (CancelledException e) {
                     reportFailedLoad(program, loadCancelledMessage(program), null);
                 } catch (Exception e) {

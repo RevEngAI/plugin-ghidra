@@ -10,6 +10,7 @@ import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Swing;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskBuilder;
@@ -49,6 +50,10 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         taskMonitorComponent = new TaskMonitorComponent(false, true);
         taskMonitorComponent.setIndeterminate(true);
         taskMonitorComponent.setVisible(false);
+        // Each wait keeps the cancel to itself, so the shared component can be reset for the next wait without
+        // resuming one the user cancelled
+        taskMonitorComponent.addCancelledListener(
+                () -> trackedPrograms.values().forEach(AnalysisMonitoringTask::stop));
 
         scroll = new JScrollPane(textArea);
         
@@ -129,6 +134,10 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
                     // Waiting for an analysis the program has since been detached from
                     tracked.stop();
                 }
+                if (taskMonitorComponent.isCancelled()) {
+                    // Left over from a Cancel press; the waits it cancelled have already been stopped
+                    taskMonitorComponent.clearCanceled();
+                }
                 var task = new AnalysisMonitoringTask(event.getProgramWithBinaryID(), this);
                 trackedPrograms.put(event.getProgram(), task);
                 TaskBuilder.withTask(task).launchInBackground(task.waitMonitor);
@@ -158,17 +167,24 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
     }
 
     private void updateMonitorVisibility() {
-        var active = activeProgram;
-        var show = active != null && trackedPrograms.containsKey(active);
-        if (!show && trackedPrograms.isEmpty()) {
-            // Nothing uses the shared monitor any more, so a Cancel pressed on it must not cancel the next wait
-            taskMonitorComponent.clearCanceled();
-        }
-        taskMonitorComponent.setVisible(show);
+        // Also called from the background thread of a wait that has ended
+        Swing.runIfSwingOrRunLater(() -> {
+            var active = activeProgram;
+            var show = active != null && trackedPrograms.containsKey(active);
+            if (!show && trackedPrograms.isEmpty()) {
+                // Nothing uses the shared monitor any more, so a Cancel pressed on it must not cancel the next wait
+                taskMonitorComponent.clearCanceled();
+            }
+            taskMonitorComponent.setVisible(show);
+        });
     }
 
     @Override
     public void consumeLogs(String logs, GhidraRevengService.ProgramWithID programWithID) {
+        if (programWithID.program().isClosed()) {
+            // Arrived after programClosed, and would keep the closed program in the map
+            return;
+        }
         storedLogs.put(programWithID.program(), logs);
         // If this is the currently active program, update the log display
 
@@ -237,6 +253,21 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
         public void checkCancelled() throws CancelledException {
             if (isCancelled()) {
                 throw new CancelledException();
+            }
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public void checkCanceled() throws CancelledException {
+            checkCancelled();
+        }
+
+        @Override
+        public void setMessage(String message) {
+            // A stopped wait may still report its analysis' last log line, which would replace the message of the
+            // wait that is now shown
+            if (!stopped) {
+                super.setMessage(message);
             }
         }
 

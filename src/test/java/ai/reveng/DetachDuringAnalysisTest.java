@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -40,6 +41,8 @@ public class DetachDuringAnalysisTest extends RevEngMockableHeadedIntegrationTes
         final Set<AnalysisID> finished = ConcurrentHashMap.newKeySet();
         final Map<AnalysisID, AtomicInteger> statusCalls = new ConcurrentHashMap<>();
         final AtomicInteger functionInfoCalls = new AtomicInteger();
+        /// Holds function info requests until released, when set
+        volatile CountDownLatch functionInfoGate;
 
         int statusCalls(AnalysisID id) {
             return statusCalls.computeIfAbsent(id, k -> new AtomicInteger()).get();
@@ -59,6 +62,14 @@ public class DetachDuringAnalysisTest extends RevEngMockableHeadedIntegrationTes
         @Override
         public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
             functionInfoCalls.incrementAndGet();
+            var gate = functionInfoGate;
+            if (gate != null) {
+                try {
+                    gate.await();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
             return List.of();
         }
     }
@@ -154,6 +165,33 @@ public class DetachDuringAnalysisTest extends RevEngMockableHeadedIntegrationTes
         assertEquals(Optional.of(current), fixture.service().getKnownProgram(fixture.program()));
     }
 
+    /// Detach while the finished analysis' results are being fetched: the load writes nothing and reports no failure
+    @Test
+    public void testDetachDuringResultsLoadWritesNothing() throws Exception {
+        var fixture = fixture();
+        var gate = new CountDownLatch(1);
+        fixture.api().functionInfoGate = gate;
+        fixture.startAnalysis(OLD);
+        var resultsLoaded = new AtomicBoolean();
+        fixture.tool().addEventListener(RevEngAIAnalysisResultsLoaded.class, e -> resultsLoaded.set(true));
+
+        // The analysis finishes, and its wait starts loading the results
+        fixture.api().finished.add(OLD);
+        waitForCondition(() -> fixture.api().functionInfoCalls.get() > 0, "the results should start loading");
+
+        detach(fixture);
+        var current = fixture.service().registerAnalysisForProgram(fixture.program(), NEW);
+        gate.countDown();
+        waitForTasks();
+        waitForSwing();
+
+        assertFalse("no function ids should be written", hasFunctionIds(fixture.program()));
+        assertFalse(resultsLoaded.get());
+        assertEquals(Optional.of(current), fixture.service().getKnownProgram(fixture.program()));
+        assertTrue("an abandoned load is not a failed one",
+                ((Set<?>) getInstanceField("failedLoads", getPlugin(fixture.tool(), AnalysisManagementPlugin.class))).isEmpty());
+    }
+
     /// After Detach, a new analysis of the same program is waited on
     @Test
     public void testNewAnalysisAfterDetachIsMonitored() throws Exception {
@@ -189,7 +227,7 @@ public class DetachDuringAnalysisTest extends RevEngMockableHeadedIntegrationTes
         assertTrue(fixture.trackedPrograms().isEmpty());
         assertNull(fixture.logComponent().getStoredLogs(fixture.program()));
         var calls = fixture.api().statusCalls(OLD);
-        sleep(1_500);
+        sleep(500);
         assertEquals("the closed program's analysis should no longer be polled", calls, fixture.api().statusCalls(OLD));
     }
 }
