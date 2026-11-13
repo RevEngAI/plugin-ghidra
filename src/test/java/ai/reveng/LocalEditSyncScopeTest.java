@@ -1,0 +1,318 @@
+package ai.reveng;
+
+import ai.reveng.model.BatchRenameInputBody;
+import ai.reveng.model.CreateAnalysisDataTypesInputBody;
+import ai.reveng.model.UpdateFunctionSignatureInputBody;
+import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.AnalysisID;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.BinaryHash;
+import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
+import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
+import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
+import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
+import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.data.FunctionDefinitionDataType;
+import ghidra.program.model.data.IntegerDataType;
+import ghidra.program.model.data.LongDataType;
+import ghidra.program.model.data.ParameterDefinitionImpl;
+import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.LocalVariableImpl;
+import ghidra.program.model.listing.ParameterImpl;
+import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.SourceType;
+import ghidra.util.task.TaskMonitor;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+/// What the reactive push sends, and how many requests it takes.
+public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest {
+
+    private static final String SYNCED_TAG = "REVENGAI_SYNCED";
+    private static final long[] ENTRIES = {0x4000L, 0x4100L, 0x4200L};
+
+    /// One function per entry in {@link #ENTRIES}, with ids 1, 2 and 3.
+    private static class RecordingApi extends UnimplementedAPI {
+        final List<BatchRenameInputBody> renameRequests = new CopyOnWriteArrayList<>();
+        final List<FunctionID> pushedSignatures = new CopyOnWriteArrayList<>();
+        private final AtomicInteger nextDataTypeId = new AtomicInteger(100);
+
+        @Override
+        public AnalysisStatus status(AnalysisID analysisID) {
+            return AnalysisStatus.Complete;
+        }
+
+        @Override
+        public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+            return java.util.stream.IntStream.range(0, ENTRIES.length)
+                    .mapToObj(i -> new FunctionInfo(new FunctionID(i + 1), "FUN_" + i, "FUN_" + i, ENTRIES[i], 0x100))
+                    .toList();
+        }
+
+        @Override
+        public long batchRenameFunctions(BatchRenameInputBody request) {
+            renameRequests.add(request);
+            return request.getFunctions().size();
+        }
+
+        @Override
+        public List<ServerDataType> listAnalysisDataTypes(AnalysisID analysisID, long offset, long limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
+                                                            CreateAnalysisDataTypesInputBody request) {
+            return request.getDataTypes().stream()
+                    .map(type -> new ServerDataType(nextDataTypeId.getAndIncrement(), "", "pushed",
+                            ServerDataType.Kind.BASE, null, "USER", false, null, null, null))
+                    .toList();
+        }
+
+        @Override
+        public void updateFunctionSignature(AnalysisID analysisID, FunctionID functionID,
+                                            UpdateFunctionSignatureInputBody signature) {
+            pushedSignatures.add(functionID);
+        }
+    }
+
+    private final RecordingApi api = new RecordingApi();
+    private Program program;
+    private Function first;
+    private LocalEditSyncService sync;
+    private GhidraRevengService.AnalysedProgram analysedProgram;
+
+    @Before
+    public void analyse() throws Exception {
+        var service = new GhidraRevengService(api);
+        var builder = newX64Program();
+        builder.createMemory("code", "0x4000", 0x400);
+        for (long entry : ENTRIES) {
+            builder.createEmptyFunction(null, "0x" + Long.toHexString(entry), 0x100, new IntegerDataType());
+        }
+        program = builder.getProgram();
+        first = program.getFunctionManager().getFunctionAt(address(ENTRIES[0]));
+        program.withTransaction("give it a parameter", () -> rethrow(() -> first.replaceParameters(
+                Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.ANALYSIS,
+                new ParameterImpl("count", new IntegerDataType(), program))));
+
+        var withId = service.registerAnalysisForProgram(program, new AnalysisID(1));
+        service.registerFinishedAnalysisForProgram(withId, TaskMonitor.DUMMY);
+        analysedProgram = service.getAnalysedProgram(program).orElseThrow();
+        sync = new LocalEditSyncService(service, env.getTool().getService(ReaiLoggingService.class),
+                (message, warning) -> {});
+        sync.attach(program);
+    }
+
+    @After
+    public void disposeSync() {
+        if (sync != null) {
+            sync.dispose();
+        }
+    }
+
+    private ghidra.program.model.address.Address address(long offset) {
+        return program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
+    }
+
+    private void edit(String description, Edit change) {
+        program.withTransaction(description, () -> rethrow(change));
+        program.flushEvents();
+    }
+
+    private static boolean tagged(Function function) {
+        return function.getTags().stream().anyMatch(tag -> SYNCED_TAG.equals(tag.getName()));
+    }
+
+    @Test
+    public void renamesInOneProgramGoUpInOneRequest() throws Exception {
+        for (int i = 0; i < ENTRIES.length; i++) {
+            var function = program.getFunctionManager().getFunctionAt(address(ENTRIES[i]));
+            var name = "renamed_" + i;
+            edit("rename", () -> function.setName(name, SourceType.USER_DEFINED));
+        }
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the renames should be pushed");
+        Thread.sleep(1_000);
+        assertEquals("one request for all three renames", 1, api.renameRequests.size());
+        var pushed = api.renameRequests.get(0).getFunctions().stream()
+                .collect(java.util.stream.Collectors.toMap(item -> item.getFunctionId(), item -> item.getNewName()));
+        assertEquals(Map.of(1L, "renamed_0", 2L, "renamed_1", 3L, "renamed_2"), pushed);
+    }
+
+    /// "Apply Match" files the function under `RevEng.AI::<matched binary>`. That namespace only
+    /// organises the matches, so the rename it triggers must push the bare name, not
+    /// `<matched binary>::<name>`.
+    @Test
+    public void anAppliedMatchPushesItsNameWithoutTheMatchedBinary() throws Exception {
+        var match = new GhidraFunctionMatchWithSignature(first, new FunctionMatch(
+                new FunctionID(1),
+                new FunctionID(200),
+                "matched_name",
+                "matched_name",
+                "libfoo.so",
+                new BinaryHash("abc123"),
+                false,
+                BigDecimal.valueOf(0.9),
+                BigDecimal.valueOf(0.9),
+                null), null);
+        edit("apply match", () -> new ApplyMatchCmd(null, analysedProgram, match, true).applyTo(program));
+        assertEquals("RevEng.AI::libfoo.so", first.getParentNamespace().getName(true));
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("matched_name", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
+    /// The matching dialog applies a transfer with no service, so the sync service is what pushes it. A
+    /// signature-only transfer changes the prototype and nothing else: the signature goes up once, and no
+    /// rename does.
+    @Test
+    public void aSignatureTransferPushesTheSignatureOnceAndNoRename() throws Exception {
+        var originalName = first.getName();
+        edit("transfer the signature", () -> assertTrue(new ApplyMatchCmd(null, analysedProgram,
+                matchWithSignature(), false, ApplyMatchCmd.Transfer.SIGNATURE).applyTo(program)));
+        assertEquals(originalName, first.getName());
+        assertEquals("buf", first.getParameter(1).getName());
+
+        waitForCondition(() -> !api.pushedSignatures.isEmpty(), "the transferred signature should be pushed");
+        // Past the debounce, so a second push or a rename would have gone up by now
+        Thread.sleep(1_000);
+        assertEquals(List.of(new FunctionID(1)), api.pushedSignatures);
+        assertTrue("renames pushed: " + api.renameRequests, api.renameRequests.isEmpty());
+    }
+
+    /// Transferring both pushes each once: one rename, one signature.
+    @Test
+    public void aNameAndSignatureTransferPushesEachOnce() throws Exception {
+        edit("transfer name and signature", () -> assertTrue(new ApplyMatchCmd(null, analysedProgram,
+                matchWithSignature(), false, ApplyMatchCmd.Transfer.NAME_AND_SIGNATURE).applyTo(program)));
+
+        waitForCondition(() -> !api.pushedSignatures.isEmpty() && !api.renameRequests.isEmpty(),
+                "the transferred name and signature should be pushed");
+        Thread.sleep(1_000);
+        assertEquals(List.of(new FunctionID(1)), api.pushedSignatures);
+        assertEquals("renames pushed: " + api.renameRequests, 1, api.renameRequests.size());
+        var pushed = api.renameRequests.get(0).getFunctions();
+        assertEquals(1, pushed.size());
+        assertEquals(Long.valueOf(1), pushed.get(0).getFunctionId());
+        assertEquals("matched_name", pushed.get(0).getNewName());
+    }
+
+    private GhidraFunctionMatchWithSignature matchWithSignature() {
+        var signature = new FunctionDefinitionDataType("matched_name");
+        signature.setReturnType(IntegerDataType.dataType);
+        signature.setArguments(
+                new ParameterDefinitionImpl("len", IntegerDataType.dataType, null),
+                new ParameterDefinitionImpl("buf", PointerDataType.dataType, null));
+        return new GhidraFunctionMatchWithSignature(first, new FunctionMatch(
+                new FunctionID(1),
+                new FunctionID(200),
+                "matched_name",
+                "matched_name",
+                "libfoo.so",
+                new BinaryHash("abc123"),
+                false,
+                BigDecimal.valueOf(0.9),
+                BigDecimal.valueOf(0.9),
+                null), signature);
+    }
+
+    /// A namespace the analyst made is part of the function's name on the portal.
+    @Test
+    public void aRenameInsideAnAnalystNamespaceKeepsTheNamespace() throws Exception {
+        edit("move and rename", () -> {
+            var namespace = program.getSymbolTable().createNameSpace(null, "MyClass", SourceType.USER_DEFINED);
+            first.setParentNamespace(namespace);
+            first.setName("method", SourceType.USER_DEFINED);
+        });
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("MyClass::method", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
+    /// Every namespace inside RevEng.AI is dropped, while one the analyst made above it is kept.
+    @Test
+    public void aRenameDropsOnlyTheNamespacesInsideRevEngAi() throws Exception {
+        edit("move and rename", () -> {
+            var symbols = program.getSymbolTable();
+            var outer = symbols.createNameSpace(null, "Outer", SourceType.USER_DEFINED);
+            var reveng = symbols.createNameSpace(outer, "RevEng.AI", SourceType.USER_DEFINED);
+            var binary = symbols.createNameSpace(reveng, "libfoo.so", SourceType.USER_DEFINED);
+            var inner = symbols.createNameSpace(binary, "Inner", SourceType.USER_DEFINED);
+            first.setParentNamespace(inner);
+            first.setName("name", SourceType.USER_DEFINED);
+        });
+
+        waitForCondition(() -> !api.renameRequests.isEmpty(), "the rename should be pushed");
+        assertEquals("Outer::name", api.renameRequests.get(0).getFunctions().get(0).getNewName());
+    }
+
+    @Test
+    public void localVariableEditsPushNothingButAParameterRenameDoes() throws Exception {
+        edit("add a local", () -> first.addLocalVariable(
+                new LocalVariableImpl("local", new IntegerDataType(), -0x10, program), SourceType.USER_DEFINED));
+        var local = first.getLocalVariables()[0];
+        edit("rename the local", () -> local.setName("renamed_local", SourceType.USER_DEFINED));
+        edit("retype the local", () -> local.setDataType(new LongDataType(), SourceType.USER_DEFINED));
+
+        // Past the debounce, so any push these had scheduled would have gone up.
+        Thread.sleep(1_000);
+        assertTrue("signatures pushed: " + api.pushedSignatures, api.pushedSignatures.isEmpty());
+
+        edit("rename the parameter", () -> first.getParameter(0).setName("renamed_count", SourceType.USER_DEFINED));
+        waitForCondition(() -> !api.pushedSignatures.isEmpty(), "a parameter rename should push the signature");
+        assertEquals(List.of(new FunctionID(1)), api.pushedSignatures);
+    }
+
+    @Test
+    public void aFunctionCreatedAgainKeepsItsTag() throws Exception {
+        assertTrue(tagged(first));
+        var entry = first.getEntryPoint();
+        var body = new AddressSet(first.getBody());
+        edit("delete", () -> program.getFunctionManager().removeFunction(entry));
+        edit("create again", () -> program.getFunctionManager()
+                .createFunction(null, entry, body, SourceType.USER_DEFINED));
+
+        var recreated = program.getFunctionManager().getFunctionAt(entry);
+        waitForCondition(() -> tagged(recreated), "the re-created function should be tagged again");
+    }
+
+    @Test
+    public void aNewFunctionAtAnUnmappedAddressIsNotTagged() throws Exception {
+        var entry = address(0x4300L);
+        edit("create", () -> program.getFunctionManager()
+                .createFunction(null, entry, new AddressSet(entry, address(0x43ffL)), SourceType.USER_DEFINED));
+
+        Thread.sleep(500);
+        assertFalse(tagged(program.getFunctionManager().getFunctionAt(entry)));
+    }
+
+    private interface Edit {
+        void run() throws Exception;
+    }
+
+    private static void rethrow(Edit edit) {
+        try {
+            edit.run();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}

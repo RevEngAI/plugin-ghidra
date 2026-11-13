@@ -1,21 +1,25 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
+import ai.reveng.invoker.ApiClient;
 import ai.reveng.invoker.ApiException;
 import ai.reveng.model.*;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.components.SelectableItem;
 import ai.reveng.toolkit.ghidra.core.AnalysisLogConsumer;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
+import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionBoundary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
-import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.UnpushedEdits;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
 import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.cmd.function.SetFunctionNameCmd;
+import ghidra.framework.OperatingSystem;
+import ghidra.framework.Platform;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.model.address.Address;
@@ -30,9 +34,9 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.StringPropertyMap;
-import ghidra.util.BrowserLoader;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
+import ghidra.util.Swing;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
@@ -43,15 +47,18 @@ import javax.annotation.Nullable;
 import java.awt.*;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URI;
+import java.nio.file.FileSystemException;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -81,13 +88,13 @@ public class GhidraRevengService {
     private static final String REVENG_BOOKMARK_CATEGORY = "Analysed Function";
     private final Map<TypedApiInterface.AnalysisID, AnalysisStatus> statusCache = new HashMap<>();
 
-    private TypedApiInterface api;
-    private ApiInfo apiInfo;
+    private volatile TypedApiInterface api;
+    private volatile ApiInfo apiInfo;
 
-    /// Set while the plugin is applying server-sourced changes locally (pull / analysis-sync), so the
-    /// reactive listener does not echo those changes straight back to the portal. Mirrors the IDA
-    /// plugin's {@code analysis_sync_service.is_worker_running()} guard.
-    private final AtomicBoolean pushbackSuppressed = new AtomicBoolean(false);
+    /// The programs the plugin is writing server-sourced changes into right now, each with how many
+    /// such writes overlap, so the reactive listener does not echo those changes straight back to the
+    /// portal. See {@link #startServerTransaction}.
+    private final Map<Program, Integer> applyingServerChanges = new ConcurrentHashMap<>();
 
     /// dedicated functions on the GhidraRevengService should be used instead to enforce assumptions via
     /// type level guarantees
@@ -142,6 +149,30 @@ public class GhidraRevengService {
         return this.apiInfo.hostURI();
     }
 
+    /// Points the running service at new credentials, as the setup wizard does when it finishes.
+    /// Swapped in place rather than replaced, because every plugin holds the instance it was handed
+    /// as a service. Returns false when nothing changed.
+    public synchronized boolean reconfigure(ApiInfo newApiInfo) {
+        if (newApiInfo.equals(apiInfo)) {
+            return false;
+        }
+        this.api = new TypedApiImplementation(newApiInfo);
+        this.apiInfo = newApiInfo;
+        // Both wrap the old API, and analysis ids from the old host mean nothing on the new one.
+        this.signatureService = null;
+        this.analysisDataTypesService = null;
+        statusCache.clear();
+        return true;
+    }
+
+    /// The HTTP client behind the API, for SDK APIs that {@link TypedApiInterface} does not wrap.
+    public ApiClient apiClient() {
+        if (api instanceof TypedApiImplementation impl) {
+            return impl.apiClient();
+        }
+        throw new IllegalStateException("The configured API is not backed by an HTTP client");
+    }
+
     public ProgramWithID registerAnalysisForProgram(Program program, TypedApiInterface.AnalysisID analysisID) {
         return addAnalysisIDtoProgramOptions(program, analysisID);
     }
@@ -154,10 +185,63 @@ public class GhidraRevengService {
         }
         statusCache.put(programWithID.analysisID, AnalysisStatus.Complete);
 
-        var analysedProgram = associateFunctionInfo(programWithID);
-        pullFunctionInfoFromAnalysis(analysedProgram, monitor);
-        monitor.checkCancelled();
-        return analysedProgram;
+        // The function ids alone make the program count as analysed, though none of the portal's names or types
+        // may have arrived. One transaction around the whole load is rolled back when any part of it fails, so the
+        // program is left as it was, the load can be retried, and the undo history holds nothing to bring it back.
+        var program = programWithID.program();
+        // Fetched before the transaction opens, so a Detach during the request does not join it
+        var functionInfo = api.getFunctionInfo(programWithID.analysisID());
+        requireStillAttached(programWithID);
+        var transactionId = program.startTransaction("RevEng.AI: Load analysis results");
+        boolean loaded = false;
+        FunctionAssociation association;
+        try {
+            association = associateFunctionInfo(programWithID, functionInfo);
+            pullFunctionInfoFromAnalysis(association.analysedProgram(), monitor);
+            monitor.checkCancelled();
+            if (!isStillAttached(programWithID)) {
+                // Detached during the pull. Its change to the options joined this transaction, so rolling back
+                // would undo the Detach too. Remove the function ids instead, so the program is not taken to
+                // be analysed by the analysis it has left.
+                if (!program.isClosed()) {
+                    clearFunctionAssociation(program);
+                }
+                loaded = true;
+                throw new DetachedDuringLoadException(programWithID);
+            }
+            loaded = true;
+        } finally {
+            // A program closed during the load takes no more transactions, and must not hide why the load failed
+            if (!program.isClosed()) {
+                program.endTransaction(transactionId, loaded);
+            }
+        }
+        Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary", association.summary());
+        return association.analysedProgram();
+    }
+
+    /// What {@link #associateFunctionInfo(ProgramWithID, List)} produced, with the summary to show once the
+    /// rest of the load has succeeded too.
+    private record FunctionAssociation(AnalysedProgram analysedProgram, String summary) {}
+
+    /// The program was detached from the analysis, or attached to another one, while its results were loading.
+    /// The program is left without that analysis' function ids.
+    public static class DetachedDuringLoadException extends RuntimeException {
+        public DetachedDuringLoadException(ProgramWithID programWithID) {
+            super("%s was detached from analysis %d while its results were loading"
+                    .formatted(programWithID.program().getName(), programWithID.analysisID().id()));
+        }
+    }
+
+    private boolean isStillAttached(ProgramWithID programWithID) {
+        return !programWithID.program().isClosed()
+                && getKnownProgram(programWithID.program()).filter(programWithID::equals).isPresent();
+    }
+
+    private void requireStillAttached(ProgramWithID programWithID) {
+        if (!isStillAttached(programWithID)) {
+            throw new DetachedDuringLoadException(programWithID);
+        }
     }
 
     private ProgramWithID addAnalysisIDtoProgramOptions(Program program, TypedApiInterface.AnalysisID analysisID){
@@ -197,12 +281,14 @@ public class GhidraRevengService {
     /// analysis is associated with the program
     /// Other function information like the name and signature should be loaded in [#pullFunctionInfoFromAnalysis(AnalysedProgram ,TaskMonitor)]
     /// because this information can change on the server, and thus needs a dedicated method to refresh it
-    private AnalysedProgram associateFunctionInfo(ProgramWithID knownProgram) {
+    ///
+    /// Any association already on the program is replaced, so an earlier load that stopped part way does
+    /// not block this one.
+    private FunctionAssociation associateFunctionInfo(ProgramWithID knownProgram, List<FunctionInfo> functionInfo) {
         var analysisID = knownProgram.analysisID();
         var program = knownProgram.program();
-        List<FunctionInfo> functionInfo = null;
-        functionInfo = api.getFunctionInfo(analysisID);
         var transactionID = program.startTransaction("Associate Function Info");
+        clearFunctionAssociation(program);
 
         // Create the FunctionID map
         LongPropertyMap functionIDMap;
@@ -267,17 +353,31 @@ public class GhidraRevengService {
                     }
                 }
         );
-        // Print summary
-        Msg.showInfo(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function loading summary",
-                ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
-                        "boundaries. For better results, please start a new analysis from this plugin.").formatted(
-                        functionInfo.size(),
-                        ghidraBoundariesMatchedFunction,
-                        ghidraFunctionCount.get()
-                ));
+        var summary = ("Found %d functions from RevEng.AI. Your local Ghidra instance has %d/%d matching function " +
+                "boundaries. For better results, please start a new analysis from this plugin.").formatted(
+                functionInfo.size(),
+                ghidraBoundariesMatchedFunction,
+                ghidraFunctionCount.get()
+        );
 
-        return analysedProgram;
+        return new FunctionAssociation(analysedProgram, summary);
 
+    }
+
+    /// Put the synced tag back on a function at an address the analysis still maps to a server
+    /// function, as after the function was deleted and created again. Does nothing otherwise.
+    public void restoreSyncedTag(Function function) {
+        var program = function.getProgram();
+        var analysedProgram = getAnalysedProgram(program);
+        if (analysedProgram.isEmpty() || analysedProgram.get().getIDForFunction(function).isEmpty()) {
+            return;
+        }
+        boolean tagged = function.getTags().stream()
+                .anyMatch(tag -> REVENGAI_FUNCTION_TAG.equals(tag.getName()));
+        if (!tagged) {
+            program.withTransaction("RevEng.AI: Tag re-created function",
+                    () -> function.addTag(REVENGAI_FUNCTION_TAG));
+        }
     }
 
     private void markFunctionAsRevEng(BookmarkManager bookmarkManager, Function function, FunctionInfo info) {
@@ -290,33 +390,56 @@ public class GhidraRevengService {
     public record RenameResult(Function func, String originalName, String newName) {
     }
 
-    /// Push a local function rename back to the portal. Returns the namespace-qualified name that was
-    /// pushed, or empty if the function is not known on the server.
-    public Optional<String> pushFunctionRename(AnalysedProgram analysedProgram, Function function) throws ApiException {
-        var withId = analysedProgram.getIDForFunction(function);
-        if (withId.isEmpty()) {
-            return Optional.empty();
+    /// Push local function renames back to the portal in one request. Answers with the
+    /// namespace-qualified name pushed for each function; functions not known on the server are left
+    /// out, and when none is known nothing is sent.
+    ///
+    /// @throws IllegalStateException when the portal accepted the request but renamed fewer functions
+    ///                               than were sent; it does not say which, so none counts as pushed
+    public Map<Function, String> pushFunctionRenames(AnalysedProgram analysedProgram, Collection<Function> functions)
+            throws ApiException {
+        Map<Function, String> pushed = new LinkedHashMap<>();
+        List<BatchRenameItem> items = new ArrayList<>();
+        for (Function function : functions) {
+            var withId = analysedProgram.getIDForFunction(function);
+            if (withId.isEmpty()) {
+                continue;
+            }
+            String qualifiedName = qualifiedServerName(function);
+            var item = new BatchRenameItem();
+            item.setFunctionId(withId.get().functionID().value());
+            item.setNewName(qualifiedName);
+            item.setNewMangledName(qualifiedName);
+            items.add(item);
+            pushed.put(function, qualifiedName);
         }
-        String qualifiedName = qualifiedServerName(function);
-        var item = new BatchRenameItem();
-        item.setFunctionId(withId.get().functionID().value());
-        item.setNewName(qualifiedName);
-        item.setNewMangledName(qualifiedName);
+        if (items.isEmpty()) {
+            return pushed;
+        }
         var request = new BatchRenameInputBody();
-        request.setFunctions(List.of(item));
-        api.batchRenameFunctions(request);
-        return Optional.of(qualifiedName);
+        request.setFunctions(items);
+        long renamed = api.batchRenameFunctions(request);
+        if (renamed < items.size()) {
+            throw new IllegalStateException("The portal renamed %d of the %d function(s) sent"
+                    .formatted(renamed, items.size()));
+        }
+        return pushed;
     }
 
     /// The function name as the portal expects it: qualified with its namespace path (joined by
-    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace and the global
-    /// namespace. Ghidra stores only the leaf label on the symbol, so the namespace must be
-    /// re-attached when pushing a rename back — the portal's function names include the namespace.
+    /// {@code ::}), excluding the artificial RevEng.AI organisational namespace, the namespaces
+    /// under it, and the global namespace. Ghidra stores only the leaf label on the symbol, so the
+    /// namespace must be re-attached when pushing a rename back — the portal's function names
+    /// include the namespace. Applying a match files the function under
+    /// {@code RevEng.AI::<matched binary>}, and that binary name is not part of the function's name.
     static String qualifiedServerName(Function function) {
         List<String> parts = new ArrayList<>();
         parts.add(function.getName());
         for (Namespace ns = function.getParentNamespace(); ns != null && !ns.isGlobal(); ns = ns.getParentNamespace()) {
-            if (!REVENG_AI_NAMESPACE.equals(ns.getName())) {
+            if (REVENG_AI_NAMESPACE.equals(ns.getName())) {
+                // Drop the namespaces collected so far: they are all inside RevEng.AI
+                parts.subList(0, parts.size() - 1).clear();
+            } else {
                 parts.add(0, ns.getName());
             }
         }
@@ -389,8 +512,33 @@ public class GhidraRevengService {
             int canonicalizedNames,
             int dedupedNames,
             int pushedNames,
-            int pushedTypeSets
+            int pushedTypeSets,
+            int pushedLocalEdits,
+            int failedLocalEdits,
+            int nameConflicts,
+            int signatureConflicts
     ) {}
+
+    /// What sending the unpushed local edits achieved. Every edit that failed is still marked.
+    ///
+    /// @param pushed      the edits that reached the portal this time
+    /// @param unsent      the edits that failed for a reason that may pass — see {@link PushFailure}
+    /// @param unsentError why the last of those failed, or null when none did
+    /// @param rejected    the edits the portal turned down, or that failed for good, one entry each
+    public record LocalEditFlush(int pushed, int unsent, @Nullable Exception unsentError,
+                                 List<RejectedEdit> rejected) {
+        public int failed() {
+            return unsent + rejected.size();
+        }
+    }
+
+    /// @param edit  which edit, for the log: "rename of \"foo\" at 00401000"
+    /// @param error why it failed
+    public record RejectedEdit(String edit, Exception error) {
+        public PushFailure failure() {
+            return PushFailure.of(error);
+        }
+    }
 
     private record PendingNamePush(TypedApiInterface.FunctionID functionID, String newName, String newMangledName) {}
     private record InvalidRemoteName(Function function, TypedApiInterface.FunctionID functionID, String remoteName) {}
@@ -405,17 +553,21 @@ public class GhidraRevengService {
     /// for matched functions whose remote types are absent or could not be applied. Mirrors the IDA
     /// plugin's {@code analysis_sync.py}.
     public SyncSummary syncAnalysisUpdates(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
-        pushbackSuppressed.set(true);
-        try {
-            return syncAnalysisUpdatesInternal(analysedProgram, monitor, log);
-        } finally {
-            pushbackSuppressed.set(false);
-        }
-    }
-
-    private SyncSummary syncAnalysisUpdatesInternal(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) throws ApiException {
         var program = analysedProgram.program();
         log.info("Starting bidirectional sync with the RevEng.AI portal");
+        // Before the remote names are read, so an edit that goes up now is not then reported as a
+        // conflict with the portal's stale copy of it.
+        var flush = pushUnpushedEdits(analysedProgram);
+        if (flush.pushed() > 0) {
+            log.info("Pushed %d local edit(s) that had not reached the RevEng.AI portal".formatted(flush.pushed()));
+        }
+        if (flush.unsent() > 0) {
+            log.warn("Could not push %d local edit(s) to the RevEng.AI portal: %s"
+                    .formatted(flush.unsent(), flush.unsentError()));
+        }
+        for (RejectedEdit rejected : flush.rejected()) {
+            log.warn("The RevEng.AI portal did not take the %s: %s".formatted(rejected.edit(), rejected.error()));
+        }
         Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
                 .collect(Collectors.toMap(FunctionInfo::functionID, fi -> fi, (a, b) -> a));
 
@@ -426,8 +578,9 @@ public class GhidraRevengService {
         int namesModifiedRemotely = 0;
         int deduped = 0;
         int canonicalizedNames = 0;
+        int nameConflicts = 0;
 
-        var transactionId = program.startTransaction("RevEng.AI: Sync Analysis Updates");
+        var transactionId = startServerTransaction(program, "RevEng.AI: Sync Analysis Updates");
         boolean commit = false;
         try {
             // Creating the RevEng.AI namespace is a DB write, so it must happen inside the transaction.
@@ -453,8 +606,16 @@ public class GhidraRevengService {
                 if (remoteName == null || remoteName.isBlank() || remoteName.equals(function.getName())) {
                     continue;
                 }
-                // Do not overwrite names the user has explicitly set locally.
+                // Do not overwrite names the user has explicitly set locally. The portal holding a
+                // different name for one means both sides renamed it, unless the local rename is
+                // still waiting to go up.
                 if (function.getSymbol().getSource() == SourceType.USER_DEFINED) {
+                    if (!remoteName.equals(qualifiedServerName(function))
+                            && !UnpushedEdits.isMarked(program, UnpushedEdits.Kind.NAME, function.getEntryPoint())) {
+                        nameConflicts++;
+                        log.warn("Name conflict at %s: \"%s\" locally, \"%s\" in the portal; kept the local name"
+                                .formatted(function.getEntryPoint(), function.getName(), remoteName));
+                    }
                     continue;
                 }
                 if (isInvalidGhidraName(remoteName)) {
@@ -502,7 +663,7 @@ public class GhidraRevengService {
             commit = !namePushbacks.isEmpty() || namesModifiedRemotely > 0;
             canonicalizedNames = canonicalized;
         } finally {
-            program.endTransaction(transactionId, commit && !monitor.isCancelled());
+            endServerTransaction(program, transactionId, commit && !monitor.isCancelled());
         }
 
         // Push back over the network only after the local transaction has closed, so we don't hold a
@@ -513,53 +674,179 @@ public class GhidraRevengService {
         }
         // Pull before pushing, so the back-fill below sees the signatures this sync just applied and
         // does not send the local placeholder back up for a function the portal already described.
-        int appliedSignatures = applyRemoteSignatures(analysedProgram, monitor, log);
+        var signatures = applyRemoteSignatures(analysedProgram, monitor, log);
+        int appliedSignatures = signatures.applied();
         int pushedTypeSets = pushLocalTypesWhereRemoteMissing(analysedProgram, functionInfoMap.keySet(), monitor, log);
 
         log.info(("Sync complete: %d matched, %d name(s) applied, %d signature(s) applied, %d canonicalized, "
-                + "%d de-duplicated, %d name(s) and %d type set(s) pushed back")
+                + "%d de-duplicated, %d name(s) and %d type set(s) pushed back, %d unpushed local edit(s) "
+                + "pushed and %d still failing, %d name and %d signature conflict(s)")
                 .formatted(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
-                        pushedNames, pushedTypeSets));
+                        pushedNames, pushedTypeSets, flush.pushed(), flush.failed(), nameConflicts,
+                        signatures.conflicts()));
         return new SyncSummary(matched, namesModifiedRemotely, appliedSignatures, canonicalizedNames, deduped,
-                pushedNames, pushedTypeSets);
+                pushedNames, pushedTypeSets, flush.pushed(), flush.failed(), nameConflicts, signatures.conflicts());
+    }
+
+    /// Push the local edits whose reactive push failed or never ran — see {@link UnpushedEdits}. A
+    /// function that is gone, or not part of the analysis, has nothing left to push and is unmarked.
+    /// Failures are returned rather than logged, so a caller retrying in the background can report an
+    /// outage once instead of once per attempt.
+    ///
+    /// The renames go up as one batch and the type edits through one type pass. When the portal
+    /// turns a batch down, the edits are sent again one at a time, so a single edit it will never
+    /// take does not keep the others from going up.
+    public LocalEditFlush pushUnpushedEdits(AnalysedProgram analysedProgram) {
+        var program = analysedProgram.program();
+        var flush = new FlushTally();
+        Map<Function, Address> renamed = markedFunctions(program, UnpushedEdits.Kind.NAME);
+        sendIsolatingRejections(program, UnpushedEdits.Kind.NAME, renamed, flush,
+                functions -> pushFunctionRenames(analysedProgram, functions).size(),
+                function -> "rename of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
+
+        Map<Function, Address> retyped = markedFunctions(program, UnpushedEdits.Kind.TYPES);
+        // A function the analysis does not know has no types on the portal to update.
+        retyped.keySet().removeIf(function -> {
+            boolean unknown = analysedProgram.getIDForFunction(function).isEmpty();
+            if (unknown) {
+                UnpushedEdits.clear(program, UnpushedEdits.Kind.TYPES, function.getEntryPoint());
+            }
+            return unknown;
+        });
+        // A signature the portal has no extraction for is declined, but its types went up, which is
+        // all this push can do.
+        sendIsolatingRejections(program, UnpushedEdits.Kind.TYPES, retyped, flush,
+                functions -> {
+                    pushFunctionTypes(analysedProgram, functions);
+                    return functions.size();
+                },
+                function -> "types of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
+        return new LocalEditFlush(flush.pushed, flush.unsent, flush.unsentError, List.copyOf(flush.rejected));
+    }
+
+    private static final class FlushTally {
+        int pushed;
+        int unsent;
+        Exception unsentError;
+        final List<RejectedEdit> rejected = new ArrayList<>();
+    }
+
+    @FunctionalInterface
+    private interface EditSender {
+        /// Send the edits of these functions and answer with how many went up.
+        int send(List<Function> functions) throws Exception;
+    }
+
+    /// The functions with a `kind` edit marked, each with the address it is marked at. A mark whose
+    /// function is gone is cleared, since nothing is left to send.
+    private static Map<Function, Address> markedFunctions(Program program, UnpushedEdits.Kind kind) {
+        Map<Function, Address> marked = new LinkedHashMap<>();
+        for (Address entryPoint : UnpushedEdits.marked(program, kind)) {
+            var function = program.getFunctionManager().getFunctionAt(entryPoint);
+            if (function == null) {
+                UnpushedEdits.clear(program, kind, entryPoint);
+            } else {
+                marked.put(function, entryPoint);
+            }
+        }
+        return marked;
+    }
+
+    /// Send `marked` as one batch and clear the marks of what went up. When the portal turns the
+    /// batch down, send each edit on its own to find the ones it will not take. A failure that may
+    /// pass leaves the rest for a later attempt instead, since sending them one by one would only
+    /// fail the same way more often.
+    private static void sendIsolatingRejections(Program program, UnpushedEdits.Kind kind,
+                                                Map<Function, Address> marked, FlushTally flush,
+                                                EditSender sender,
+                                                java.util.function.Function<Function, String> describe) {
+        if (marked.isEmpty()) {
+            return;
+        }
+        List<Function> functions = List.copyOf(marked.keySet());
+        try {
+            flush.pushed += sender.send(functions);
+            marked.values().forEach(entryPoint -> UnpushedEdits.clear(program, kind, entryPoint));
+            return;
+        } catch (Exception e) {
+            if (PushFailure.of(e) != PushFailure.REJECTED || functions.size() == 1) {
+                record(flush, functions, e, describe);
+                return;
+            }
+        }
+        for (Function function : functions) {
+            try {
+                flush.pushed += sender.send(List.of(function));
+                UnpushedEdits.clear(program, kind, marked.get(function));
+            } catch (Exception e) {
+                record(flush, List.of(function), e, describe);
+            }
+        }
+    }
+
+    private static void record(FlushTally flush, List<Function> functions, Exception e,
+                               java.util.function.Function<Function, String> describe) {
+        if (PushFailure.of(e) == PushFailure.TRANSIENT) {
+            flush.unsent += functions.size();
+            flush.unsentError = e;
+        } else {
+            functions.forEach(function -> flush.rejected.add(new RejectedEdit(describe.apply(function), e)));
+        }
     }
 
     /// Apply the signatures — and with them the data types they name — that the portal holds for this
     /// analysis' functions, and answer with how many landed.
     ///
-    /// Names are deliberately left alone. {@link #syncAnalysisUpdatesInternal} owns that decision,
+    /// Names are deliberately left alone. {@link #syncAnalysisUpdates} owns that decision,
     /// including canonicalising names Ghidra rejects and de-duplicating the ones it has already
     /// applied this run, so the command is given {@link FunctionRenameOption#NO_CHANGE} and nothing
     /// here competes with it.
     ///
-    /// A signature is applied unless the analyst wrote the local one by hand; anything Ghidra's own
-    /// analysis inferred is fair game. That is also what makes a second sync useful: an earlier pull
-    /// stamps {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the
-    /// first into a no-op.
-    private int applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor, ReaiLoggingService log) {
+    /// A signature is applied unless the analyst wrote the local one by hand, or the server only has
+    /// what it extracted itself and the local one is better-founded — see
+    /// {@link #localSignatureOutranks}. A signature edited in the portal still replaces one Ghidra
+    /// inferred. That is also what makes a second sync useful: an earlier pull stamps
+    /// {@link SourceType#ANALYSIS}, so a "default only" guard would turn every pull after the first
+    /// into a no-op.
+    ///
+    /// A hand-written local signature that differs from the portal's is counted as a conflict rather
+    /// than applied, unless the local edit is still waiting to go up.
+    private SignaturePull applyRemoteSignatures(AnalysedProgram analysedProgram, TaskMonitor monitor,
+                                                ReaiLoggingService log) {
         var functionMap = analysedProgram.getFunctionMap();
         if (functionMap.isEmpty()) {
-            return 0;
+            return new SignaturePull(0, 0);
         }
         var batch = signatures().getMany(List.copyOf(functionMap.keySet()));
         Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
         var program = analysedProgram.program();
         int applied = 0;
-        var transactionId = program.startTransaction("RevEng.AI: Apply Portal Signatures");
+        int conflicts = 0;
+        var transactionId = startServerTransaction(program, "RevEng.AI: Apply Portal Signatures");
         try {
             for (BatchFunctionSignatureEntry entry : batch.items()) {
                 if (monitor.isCancelled()) {
                     break;
                 }
-                if (!Boolean.TRUE.equals(entry.getHasSignature())) {
+                if (!FunctionSignatureService.hasUsableSignature(entry)) {
                     continue;
                 }
                 var function = functionMap.get(new TypedApiInterface.FunctionID(entry.getFunctionId()));
                 if (function == null || function.isExternal() || function.isThunk()
-                        || function.getSignatureSource() == SourceType.USER_DEFINED) {
+                        || localSignatureOutranks(function, entry)) {
                     continue;
                 }
                 var signature = getFunctionSignature(entry, decoderFor(decoders, batch, entry));
+                if (function.getSignatureSource() == SourceType.USER_DEFINED) {
+                    if (!matchesLocalSignature(function, signature)
+                            && !UnpushedEdits.isMarked(program, UnpushedEdits.Kind.TYPES, function.getEntryPoint())) {
+                        conflicts++;
+                        log.warn("Signature conflict for \"%s\" at %s: the portal holds %s; kept the local signature"
+                                .formatted(function.getName(), function.getEntryPoint(),
+                                        signature.getPrototypeString()));
+                    }
+                    continue;
+                }
                 // The portal derives a signature for every function when the analysis completes, so
                 // most of them match what is already on the function. Applying those regardless would
                 // churn the type manager and fill the undo history on every sync.
@@ -581,9 +868,22 @@ public class GhidraRevengService {
                 }
             }
         } finally {
-            program.endTransaction(transactionId, applied > 0 && !monitor.isCancelled());
+            endServerTransaction(program, transactionId, applied > 0 && !monitor.isCancelled());
         }
-        return applied;
+        return new SignaturePull(applied, conflicts);
+    }
+
+    /// @param applied   portal signatures that landed locally
+    /// @param conflicts hand-written local signatures the portal disagrees with
+    private record SignaturePull(int applied, int conflicts) {}
+
+    /// Whether the function's own signature beats one the server extracted itself. A SYSTEM signature
+    /// is what server-side Ghidra worked out, so it adds nothing over a signature imported from debug
+    /// info locally, or one local analysis inferred, and replacing either can only lose information.
+    private static boolean localSignatureOutranks(Function function, BatchFunctionSignatureEntry entry) {
+        var local = function.getSignatureSource();
+        return entry.getSourceType() == BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM
+                && (local == SourceType.IMPORTED || local == SourceType.ANALYSIS);
     }
 
     /// Apply one server-sourced signature to a function.
@@ -670,8 +970,8 @@ public class GhidraRevengService {
         }).toList();
         var request = new BatchRenameInputBody();
         request.setFunctions(items);
-        api.batchRenameFunctions(request);
-        return namePushbacks.size();
+        // The count the portal reports, not the number asked for: a rename it skipped did not happen.
+        return Math.toIntExact(api.batchRenameFunctions(request));
     }
 
     /// Push local types for matched functions whose remote types are absent or could not be applied,
@@ -680,12 +980,14 @@ public class GhidraRevengService {
                                                  Set<TypedApiInterface.FunctionID> matchedIds,
                                                  TaskMonitor monitor,
                                                  ReaiLoggingService log) {
-        // Only the matched functions are candidates, and only whether the server holds a signature
-        // at all matters here, so ask for exactly those ids and skip the type closure.
+        // Only the matched functions are candidates, and only whether the server holds a usable
+        // signature matters here, so ask for exactly those ids and skip the type closure. A placeholder
+        // counts as missing: unlike a function with no signature at all, it is a stored row the
+        // signature PUT accepts, so these are the functions a push can actually fill in.
         Set<TypedApiInterface.FunctionID> remotePresent = signatures()
                 .getMany(List.copyOf(matchedIds), false)
                 .items().stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
+                .filter(FunctionSignatureService::hasUsableSignature)
                 .map(item -> new TypedApiInterface.FunctionID(item.getFunctionId()))
                 .collect(Collectors.toSet());
 
@@ -719,6 +1021,58 @@ public class GhidraRevengService {
             Msg.warn(this, "Failed to push local types during sync", e);
             return 0;
         }
+    }
+
+    /// Start a transaction that writes server-sourced changes into `program`, during which the reactive
+    /// listener ignores that program's type and variable events. Close it with
+    /// {@link #endServerTransaction}.
+    ///
+    /// The window is this one write, not the whole sync: a sync spends most of its time on network
+    /// calls, and suppressing for all of it dropped every edit the analyst made meanwhile, in every
+    /// open program. Ghidra delivers change events later, from a timer, so the window is bounded by
+    /// flushing them: once before, so edits made up to now are delivered as the analyst's, and once
+    /// after, so this write's own events are delivered while they are still recognisably ours.
+    /// Function and variable renames are never suppressed — see
+    /// {@link ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService}.
+    private int startServerTransaction(Program program, String description) {
+        deliverPendingEvents(program);
+        applyingServerChanges.merge(program, 1, Integer::sum);
+        try {
+            return program.startTransaction(description);
+        } catch (RuntimeException e) {
+            releaseServerChanges(program);
+            throw e;
+        }
+    }
+
+    private void endServerTransaction(Program program, int transactionId, boolean commit) {
+        try {
+            program.endTransaction(transactionId, commit);
+            deliverPendingEvents(program);
+        } finally {
+            releaseServerChanges(program);
+        }
+    }
+
+    /// Deliver every change event `program` has queued, and wait until the listeners have seen them.
+    ///
+    /// {@link Program#flushEvents} alone does not wait. Ghidra's event timer runs on the Swing thread
+    /// and takes the queued events and delivers them in one Swing task; when it has just taken them,
+    /// a flush from another thread finds the queue empty and returns while they are still being
+    /// delivered. Queuing an empty task behind it waits that delivery out.
+    private static void deliverPendingEvents(Program program) {
+        program.flushEvents();
+        Swing.runNow(() -> {});
+    }
+
+    private void releaseServerChanges(Program program) {
+        applyingServerChanges.computeIfPresent(program, (p, writes) -> writes > 1 ? writes - 1 : null);
+    }
+
+    /// True while the plugin is writing server-sourced changes into `program`; the reactive listener
+    /// uses this to avoid pushing those changes back to the portal.
+    public boolean isApplyingServerChanges(Program program) {
+        return applyingServerChanges.containsKey(program);
     }
 
     private boolean applyRemoteName(Program program, Function function, Namespace revEngNamespace, String name) {
@@ -759,155 +1113,151 @@ public class GhidraRevengService {
     /// * the type signature of the function
     ///
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
-    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
+    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID, List)}
     ///
     public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
-        pushbackSuppressed.set(true);
-        try {
-            return pullFunctionInfoFromAnalysisInternal(analysedProgram, monitor);
-        } finally {
-            pushbackSuppressed.set(false);
-        }
-    }
-
-    /// True while the plugin is applying server-sourced changes locally; the reactive listener uses
-    /// this to avoid pushing those changes back to the portal.
-    public boolean isPushbackSuppressed() {
-        return pushbackSuppressed.get();
-    }
-
-    private List<RenameResult> pullFunctionInfoFromAnalysisInternal(AnalysedProgram analysedProgram, TaskMonitor monitor) {
-        var transactionId = analysedProgram.program().startTransaction("RevEng.AI: Pull Function Info from Analysis");
+        var transactionId = startServerTransaction(analysedProgram.program(), "RevEng.AI: Pull Function Info from Analysis");
 
         List<RenameResult> renameResults = new ArrayList<>();
 
         int failedRenames = 0;
+        try {
 
-        var revEngNamespace = getRevEngAINameSpace(analysedProgram.program());
+            var revEngNamespace = getRevEngAINameSpace(analysedProgram.program());
 
-        Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
-                .collect(
-                        Collectors.toMap(
-                                FunctionInfo::functionID,
-                                fi -> fi
-                        )
-                );
-
-
-        // /v3/functions/signatures is addressed by function id rather than by analysis, so ask for
-        // the functions this analysis reported. The response carries the types those signatures
-        // reference alongside them, which is what the decoders below are built from.
-        var signatureBatch = signatures().getMany(List.copyOf(functionInfoMap.keySet()));
-        Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
-        Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
-                .stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
-                .collect(
-                Collectors.toMap(
-                        item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
-                        item -> item,
-                        (existing, replacement) -> existing
-                )
-        );
-
-        for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
-            if (monitor.isCancelled()) {
-                continue;
-            }
-            var ghidraMangledName = function.getSymbol().getName(false);
-            // Skip external and thunk functions because we don't support them
-            if (function.isExternal() || function.isThunk()) {
-                Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
-                continue;
-            }
-
-            var fID = analysedProgram.getIDForFunction(function);
-            if (fID.isEmpty()) {
-                Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
-                continue;
-            }
-
-            // Get the current name on  the server side
-            FunctionInfo details = functionInfoMap.get(fID.get().functionID);
-
-            // Extract the mangled name from Ghidra
-            var revEngMangledName = details.functionMangledName();
-            var revEngDemangledName = details.functionName();
-
-            // Skip invalid function mangled names
-            if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
-                Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                continue;
-            }
-
-            // Get the type information on the server side. Every type the signature refers to is
-            // resolved by id against its analysis' decoder, so there is nothing left to fail on.
-            Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
-                    Optional.ofNullable(signatureMap.get(fID.get().functionID))
-                            .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
+            Map<TypedApiInterface.FunctionID, FunctionInfo> functionInfoMap = api.getFunctionInfo(analysedProgram.analysisID()).stream()
+                    .collect(
+                            Collectors.toMap(
+                                    FunctionInfo::functionID,
+                                    fi -> fi
+                            )
+                    );
 
 
-            analysedProgram.setMangledNameForFunction(function, revEngMangledName);
+            // /v3/functions/signatures is addressed by function id rather than by analysis, so ask for
+            // the functions this analysis reported. The response carries the types those signatures
+            // reference alongside them, which is what the decoders below are built from.
+            var signatureBatch = signatures().getMany(List.copyOf(functionInfoMap.keySet()));
+            Map<TypedApiInterface.AnalysisID, ServerDataTypeDecoder> decoders = new HashMap<>();
+            Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = signatureBatch.items()
+                    .stream()
+                    .filter(FunctionSignatureService::hasUsableSignature)
+                    .collect(
+                    Collectors.toMap(
+                            item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
+                            item -> item,
+                            (existing, replacement) -> existing
+                    )
+            );
 
-            /// Source types:
-            /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
-            /// ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
-            /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
-            /// USER_DEFINED: A name or signature explicitly set by the analyst.
-            /// See {@link ghidra.program.model.symbol.SourceType} for more details
-            // The name and the signature are separate decisions. Gating the signature on the name
-            // source hid every type the portal held for a function that was already named — by the
-            // analyst, or by an earlier run of this same pull — and the signature apply is what
-            // carries the data types down.
-            if (functionSignatureMessageOpt.isEmpty()) {
-                // No signature to apply, so a rename is all that is left. Skip server-side default
-                // names — Ghidra's own "FUN_" and IDA's "sub_" — so we never overwrite Ghidra's
-                // default placeholder with an IDA-style one.
-                if (function.getSymbol().getSource() == SourceType.DEFAULT
-                        && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")
-                        && !function.getSymbol().getName(false).equals(revEngDemangledName)) {
-                    Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
-                    try {
-                        function.setParentNamespace(revEngNamespace);
-                    } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
-                        throw new RuntimeException(e);
+            for (Function function : analysedProgram.program().getFunctionManager().getFunctions(true)) {
+                if (monitor.isCancelled()) {
+                    continue;
+                }
+                var ghidraMangledName = function.getSymbol().getName(false);
+                // Skip external and thunk functions because we don't support them
+                if (function.isExternal() || function.isThunk()) {
+                    Msg.debug(this, "Skipping external/thunk function %s".formatted(ghidraMangledName));
+                    continue;
+                }
+
+                var fID = analysedProgram.getIDForFunction(function);
+                if (fID.isEmpty()) {
+                    Msg.info(this, "Function %s has no associated FunctionID, skipping".formatted(function.getName()));
+                    continue;
+                }
+
+                // Get the current name on  the server side
+                FunctionInfo details = functionInfoMap.get(fID.get().functionID);
+                if (details == null) {
+                    Msg.warn(this, "No server info for function %s, skipping".formatted(function.getName()));
+                    continue;
+                }
+
+                // Extract the mangled name from Ghidra
+                var revEngMangledName = details.functionMangledName();
+                var revEngDemangledName = details.functionName();
+
+                // Skip invalid function mangled names
+                if (revEngMangledName.contains(" ") || revEngDemangledName.contains(" ")) {
+                    Msg.warn(this, "Skipping renaming of function %s to invalid name %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                    continue;
+                }
+
+                // Get the type information on the server side. Every type the signature refers to is
+                // resolved by id against its analysis' decoder, so there is nothing left to fail on.
+                // A signature the local one outranks is treated as absent, so the function can still
+                // take the portal's name below.
+                Optional<FunctionDefinitionDataType> functionSignatureMessageOpt =
+                        Optional.ofNullable(signatureMap.get(fID.get().functionID))
+                                .filter(entry -> !localSignatureOutranks(function, entry))
+                                .map(entry -> getFunctionSignature(entry, decoderFor(decoders, signatureBatch, entry)));
+
+
+                analysedProgram.setMangledNameForFunction(function, revEngMangledName);
+
+                /// Source types:
+                /// DEFAULT: placeholder name automatically assigned by Ghidra when it doesn’t know the real name.
+                /// ANALYSIS: A name/signature inferred by one of Ghidra’s analysis engines (or demangler) rather than simply “default.”
+                /// IMPORTED: Information taken from an external source — symbols or signatures imported from a file or database.
+                /// USER_DEFINED: A name or signature explicitly set by the analyst.
+                /// See {@link ghidra.program.model.symbol.SourceType} for more details
+                // The name and the signature are separate decisions. Gating the signature on the name
+                // source hid every type the portal held for a function that was already named — by the
+                // analyst, or by an earlier run of this same pull — and the signature apply is what
+                // carries the data types down.
+                if (functionSignatureMessageOpt.isEmpty()) {
+                    // No signature to apply, so a rename is all that is left. Skip server-side default
+                    // names — Ghidra's own "FUN_" and IDA's "sub_" — so we never overwrite Ghidra's
+                    // default placeholder with an IDA-style one.
+                    if (function.getSymbol().getSource() == SourceType.DEFAULT
+                            && !revEngMangledName.startsWith("FUN_") && !revEngMangledName.startsWith("sub_")
+                            && !function.getSymbol().getName(false).equals(revEngDemangledName)) {
+                        Msg.info(this, "Renaming function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                        try {
+                            function.setParentNamespace(revEngNamespace);
+                        } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+                            throw new RuntimeException(e);
+                        }
+                        var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
+                                .applyTo(analysedProgram.program());
+                        if (success) {
+                            renameResults.add(new RenameResult(
+                                    function,
+                                    ghidraMangledName,
+                                    revEngDemangledName
+                            ));
+                        } else {
+                            failedRenames++;
+                            Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
+                        }
                     }
-                    var success = new SetFunctionNameCmd(function.getEntryPoint(), revEngDemangledName, SourceType.ANALYSIS)
-                            .applyTo(analysedProgram.program());
-                    if (success) {
+                } else if (function.getSignatureSource() != SourceType.USER_DEFINED) {
+                    // RENAME_IF_DEFAULT preserves the long-standing behaviour that applying a signature
+                    // also names a function still carrying Ghidra's placeholder, and leaves every other
+                    // name alone.
+                    var application = applyRemoteSignature(analysedProgram.program(), function,
+                            functionSignatureMessageOpt.get(), monitor, FunctionRenameOption.RENAME_IF_DEFAULT);
+                    // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
+                    if (application.success()) {
                         renameResults.add(new RenameResult(
                                 function,
                                 ghidraMangledName,
                                 revEngDemangledName
                         ));
                     } else {
+                        Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
                         failedRenames++;
-                        Msg.error(this, "Failed to rename function %s to %s [%s]".formatted(ghidraMangledName, revEngMangledName, revEngDemangledName));
                     }
                 }
-            } else if (function.getSignatureSource() != SourceType.USER_DEFINED) {
-                // RENAME_IF_DEFAULT preserves the long-standing behaviour that applying a signature
-                // also names a function still carrying Ghidra's placeholder, and leaves every other
-                // name alone.
-                var application = applyRemoteSignature(analysedProgram.program(), function,
-                        functionSignatureMessageOpt.get(), monitor, FunctionRenameOption.RENAME_IF_DEFAULT);
-                // For unclear reasons the signature source is not set by the command in Ghidra 11.2.x and lower
-                if (application.success()) {
-                    renameResults.add(new RenameResult(
-                            function,
-                            ghidraMangledName,
-                            revEngDemangledName
-                    ));
-                } else {
-                    Msg.error(this, "Failed to apply signature to function %s".formatted(function.getName()));
-                    failedRenames++;
-                }
+
+
             }
-
-
+        } finally {
+            // Done iterating over all functions. A transaction that changed nothing leaves no undo entry, and
+            // aborting it would abort the load it runs inside too, so it is discarded only when cancelled
+            endServerTransaction(analysedProgram.program(), transactionId, !monitor.isCancelled());
         }
-        // Done iterating over all functions. If nothing changed, discard the transaction, to keep undo history clean
-        analysedProgram.program().endTransaction(transactionId, !renameResults.isEmpty() && !monitor.isCancelled());
         if (failedRenames > 0){
             Msg.showError(this, null, ReaiPluginPackage.WINDOW_PREFIX + "Function Update Summary",
                     ("Failed to update %d functions from RevEng.AI. Please check the error log for details.").formatted(
@@ -935,7 +1285,18 @@ public class GhidraRevengService {
     }
 
     public void removeProgramAssociation(Program program){
-        // Clear all function ID data
+        clearFunctionAssociation(program);
+        var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
+        reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
+        // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
+        // because this method should still work even if the analysis ID or binary ID that was associated is invalid
+        statusCache.clear();
+
+    }
+
+    /// Remove the function ids and the marks on the functions, but keep the analysis id, so the program is
+    /// known but no longer analysed. Must run inside a transaction.
+    private void clearFunctionAssociation(Program program) {
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_PROP_MAP);
         program.getUsrPropertyManager().removePropertyMap(REAI_FUNCTION_MANGLED_MAP);
 
@@ -947,12 +1308,6 @@ public class GhidraRevengService {
         if (revengTag != null) {
             revengTag.delete();
         }
-        var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
-        reaiOptions.setLong(OPTION_KEY_ANALYSIS_ID, ReaiPluginPackage.INVALID_ANALYSIS_ID);
-        // Clear the entire cache. Getting the correct ID is not worth the effort in terms of edge cases to handle
-        // because this method should still work even if the analysis ID or binary ID that was associated is invalid
-        statusCache.clear();
-
     }
 
     /// This method is private to the service, because it only concerns itself with how the service determines
@@ -1002,6 +1357,11 @@ public class GhidraRevengService {
             // we have to drop the first "/" for the path to be valid
             filePath = Path.of(program.getExecutablePath().substring(1));
         }
+        // The SDK only reports an unreadable file as an opaque HTTP 0, so check up front.
+        try (var ignored = Files.newInputStream(filePath)) {
+        } catch (IOException e) {
+            throw new RuntimeException(unreadableBinaryMessage(filePath, e), e);
+        }
         try {
             var hash = api.upload(filePath);
             if (hash.equals(hashOfProgram(program))){
@@ -1013,16 +1373,33 @@ public class GhidraRevengService {
                         "Hash of uploaded file %s from path %s doesn't match the hash of the program loaded in Ghidra %s"
                                 .formatted(hash, program.getExecutablePath(), hashOfProgram(program)));
             }
-        } catch (FileNotFoundException | ApiException e) {
+        } catch (FileNotFoundException e) {
             throw new RuntimeException(e);
+        } catch (ApiException e) {
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
+    }
+
+    private static String unreadableBinaryMessage(Path path, IOException e) {
+        String reason = e instanceof NoSuchFileException ? "file not found"
+                : e instanceof FileSystemException fse && fse.getReason() != null ? fse.getReason()
+                : e.getMessage();
+        String message = "Cannot read %s (%s).".formatted(path, reason);
+        if (Platform.CURRENT_PLATFORM.getOperatingSystem() == OperatingSystem.MAC_OS_X
+                && !(e instanceof NoSuchFileException)) {
+            message += "\n\nmacOS may be blocking Ghidra from this folder. Grant access in System Settings → "
+                    + "Privacy & Security → Files and Folders, or move the file elsewhere and re-import it.";
+        }
+        return message;
     }
 
     public TypedApiInterface.BinaryHash upload(Path path) {
         try {
             return api.upload(path);
-        } catch (FileNotFoundException | ApiException e) {
+        } catch (FileNotFoundException e) {
             throw new RuntimeException(e);
+        } catch (ApiException e) {
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
     }
 
@@ -1036,7 +1413,7 @@ public class GhidraRevengService {
             return api.status(program.analysisID());
         } catch (ApiException e) {
             // This should never happen given that `ProgramWithID` guarantees a valid analysis ID
-            throw new RuntimeException(e);
+            throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
         }
     }
 
@@ -1048,7 +1425,11 @@ public class GhidraRevengService {
     public AnalysedProgram analyse(Program program, AnalysisOptionsBuilder analysisOptionsBuilder, TaskMonitor monitor) throws CancelledException, ApiException {
         // Check if we are on the swing thread
         var programWithBinaryID = startAnalysis(program, analysisOptionsBuilder);
-        var finalStatus = waitForFinishedAnalysis(monitor, programWithBinaryID, null, null);
+        var waited = waitForAnalysis(monitor, programWithBinaryID, null, null);
+        if (waited.ending() != StatusPoller.Ending.DONE) {
+            throw new IllegalStateException("Analysis %s did not finish (%s, last status: %s)"
+                    .formatted(programWithBinaryID.analysisID().id(), waited.ending(), waited.status()));
+        }
         // TODO: Check final status for errors, and do something appropriate on failure
         var analysedProgram = registerFinishedAnalysisForProgram(programWithBinaryID, monitor);
         if (getKnownProgram(program).isEmpty()){
@@ -1131,30 +1512,15 @@ public class GhidraRevengService {
             }
             sb.append(s);
         }
-        openURI(serviceProvider, URI.create(sb.toString()));
-    }
-
-    /// Ghidra's BrowserLoader is more reliable than java.awt.Desktop, which frequently no-ops or is
-    /// reported unsupported inside Ghidra's JVM. It reads the manual-viewer options off the service
-    /// provider, which Ghidra 12.2 made mandatory, so the tool has to be threaded this far down.
-    private void openURI(ServiceProvider serviceProvider, URI uri){
-        try {
-            BrowserLoader.display(uri.toURL(), null, serviceProvider);
-        } catch (MalformedURLException e) {
-            Msg.showError(
-                    this,
-                    null,
-                    "URI Opening Failed",
-                    "Browsing to URI %s failed".formatted(uri),
-                    e
-            );
-        }
+        WebBrowser.open(URI.create(sb.toString()));
     }
 
 
     /**
      * @param tool   The UI tool for firing an event on status changes. Can be null
-     * @return The final AnalysisStatus, should be either Complete or Error
+     * @return The final AnalysisStatus: Complete or Error when the analysis finished, Unknown when the
+     *     server reported a status the plugin does not recognise, or the last status seen when the wait
+     *     reached its time limit or was interrupted
      */
     public AnalysisStatus waitForFinishedAnalysis(
             TaskMonitor monitor,
@@ -1163,38 +1529,90 @@ public class GhidraRevengService {
             @Nullable PluginTool tool
 
             ) throws CancelledException {
-        monitor.setMessage("Checking analysis status");
-        // Check the status of the analysis every 500ms
-        // TODO: In the future this can be made smarter and e.g. wait longer if the analysis log hasn't changed
-        AnalysisStatus lastStatus = null;
-        while (true) {
-            AnalysisStatus currentStatus = this.status(programWithID);
-            if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
-                // Analysis log endpoint only starts to return data after the analysis is processing
-                String logs = this.getAnalysisLog(programWithID.analysisID());
-                if (logger != null) {
-                    logger.consumeLogs(logs, programWithID);
-                }
-                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
-            }
-            if (currentStatus != lastStatus) {
-                lastStatus = currentStatus;
-                if (tool != null){
-                    tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
-                }
-            }
+        return waitForAnalysis(monitor, programWithID, logger, tool).status();
+    }
 
-            if (lastStatus == AnalysisStatus.Complete || lastStatus == AnalysisStatus.Error) {
-                // Show the UI message for the completion
-                return lastStatus;
-            }
-            monitor.checkCancelled();
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                return lastStatus;
-            }
+    /// Like {@link #waitForFinishedAnalysis}, but also says why the wait ended, so the caller can tell
+    /// the user when it stopped without the analysis finishing.
+    ///
+    /// @throws CancelledException the monitor was cancelled
+    public StatusPoller.Result<AnalysisStatus> waitForAnalysis(
+            TaskMonitor monitor,
+            ProgramWithID programWithID,
+            @Nullable AnalysisLogConsumer logger,
+            @Nullable PluginTool tool
+    ) throws CancelledException {
+        monitor.setMessage("Checking analysis status");
+        var poller = new StatusPoller<AnalysisStatus>(
+                Duration.ofMillis(pollIntervalMs), Duration.ofMillis(maxPollIntervalMs), Duration.ofMillis(maxAnalysisWaitMs))
+                .retrying(e -> {
+                    if (e instanceof ApiException api && isTransient(api)) {
+                        Msg.warn(this, "Transient error polling analysis status, retrying", e);
+                        return true;
+                    }
+                    return false;
+                }, MAX_POLL_ATTEMPTS, Duration.ofMillis(maxPollBackoffMs));
+        AnalysisStatus[] lastStatus = {null};
+        StatusPoller.Result<AnalysisStatus> result;
+        try {
+            result = poller.poll(
+                    () -> api.status(programWithID.analysisID()),
+                    currentStatus -> {
+                        if (currentStatus != AnalysisStatus.Uploaded && currentStatus != AnalysisStatus.Queued) {
+                            // Analysis log endpoint only starts to return data after the analysis is processing
+                            try {
+                                String logs = this.getAnalysisLog(programWithID.analysisID());
+                                if (logger != null) {
+                                    logger.consumeLogs(logs, programWithID);
+                                }
+                                logs.lines().reduce((first, second) -> second).ifPresent(monitor::setMessage);
+                            } catch (RuntimeException e) {
+                                // Logs are cosmetic; a failed fetch must not end the wait
+                                Msg.warn(this, "Failed to fetch analysis logs", e);
+                            }
+                        }
+                        if (currentStatus != lastStatus[0]) {
+                            lastStatus[0] = currentStatus;
+                            if (tool != null) {
+                                tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
+                            }
+                        }
+                        return switch (currentStatus) {
+                            case Complete, Error -> StatusPoller.Verdict.DONE;
+                            case Uploaded, Queued, Processing -> StatusPoller.Verdict.WAIT;
+                            case Unknown -> StatusPoller.Verdict.UNRECOGNISED;
+                        };
+                    },
+                    monitor::isCancelled);
+        } catch (ApiException e) {
+            throw new RuntimeException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new StatusPoller.Result<>(StatusPoller.Ending.CANCELLED, lastStatus[0], Duration.ZERO);
         }
+        if (result.ending() == StatusPoller.Ending.CANCELLED) {
+            monitor.checkCancelled();
+        }
+        if (result.ending() == StatusPoller.Ending.TIMED_OUT) {
+            Msg.warn(this, "Stopped waiting for analysis %s after %s; last status: %s"
+                    .formatted(programWithID.analysisID().id(), StatusPoller.describe(result.waited()), result.status()));
+        }
+        return result;
+    }
+
+    /// First wait between status polls; it grows while the status stays the same
+    private long pollIntervalMs = 500;
+    /// Longest wait between status polls while the analysis is running normally
+    private long maxPollIntervalMs = 5_000;
+    /// Longest wait between status polls while the status endpoint keeps failing transiently
+    private long maxPollBackoffMs = 30_000;
+    /// How long to wait for an analysis before giving up; it keeps running on the server
+    private long maxAnalysisWaitMs = Duration.ofHours(3).toMillis();
+    private static final int MAX_POLL_ATTEMPTS = 10;
+
+    /// 5xx, or no response at all (code 0: connection or timeout failure)
+    private static boolean isTransient(ApiException e) {
+        return e.getCode() == 0 || e.getCode() >= 500;
     }
 
     public ProgramWithID startAnalysis(Program program, AnalysisOptionsBuilder analysisOptionsBuilder) throws ApiException {
@@ -1221,7 +1639,7 @@ public class GhidraRevengService {
         // Create a map from FunctionID to signature for easy lookup, only where the server has one.
         // The same neighbour can still appear more than once in the response, so keep the first.
         Map<TypedApiInterface.FunctionID, BatchFunctionSignatureEntry> signatureMap = batch.items().stream()
-                .filter(BatchFunctionSignatureEntry::getHasSignature)
+                .filter(FunctionSignatureService::hasUsableSignature)
                 .collect(Collectors.toMap(
                         item -> new TypedApiInterface.FunctionID(item.getFunctionId()),
                         item -> item,
@@ -1291,6 +1709,27 @@ public class GhidraRevengService {
         });
     }
 
+    public CompletableFuture<List<SelectableItem>> searchUsersWithIds(String query) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                List<SelectableItem> selectableItems = api.searchUsers(query).stream()
+                        .filter(result -> result.getUsername() != null && !result.getUsername().trim().isEmpty())
+                        .map(result -> new SelectableItem(
+                                Math.toIntExact(result.getUserId()),
+                                result.getUsername()
+                        ))
+                        .collect(Collectors.toList());
+
+                Msg.info(this, "Found " + selectableItems.size() + " users matching '" + query + "'");
+                return selectableItems;
+
+            } catch (Exception e) {
+                Msg.error(this, "Error searching users: " + e.getMessage(), e);
+                return List.of();
+            }
+        });
+    }
+
     public AnalysisBasicInfoOutputBody getBasicDetailsForAnalysis(TypedApiInterface.AnalysisID analysisID) throws ApiException {
         return api.getAnalysisBasicInfo(analysisID);
     }
@@ -1322,31 +1761,6 @@ public class GhidraRevengService {
     public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) throws ApiException {
         return api.getFunctionsMatches(functionIds);
     }
-
-    public void batchRenamingGhidraMatchesWithSignatures(List<GhidraFunctionMatchWithSignature> functionsList) throws ApiException {
-        // Pushing types to the portal is not supported yet, so we just extract the function matches and call the other method
-        batchRenameMatches(functionsList.stream()
-                .map(GhidraFunctionMatchWithSignature::functionMatch)
-                .toList());
-
-    }
-
-    public void batchRenameMatches(List<FunctionMatch> functionsList) throws ApiException {
-        var items = functionsList.stream()
-                .map(result -> {
-                    var item = new BatchRenameItem();
-                    item.setFunctionId(result.origin_function_id().value());
-                    item.setNewName(result.nearest_neighbor_function_name());
-                    item.setNewMangledName(result.nearest_neighbor_mangled_function_name());
-                    return item;
-                })
-                .toList();
-
-        var request = new BatchRenameInputBody();
-        request.setFunctions(items);
-        api.batchRenameFunctions(request);
-    }
-
 
     /// Old Helper Datatype that encapsulates a Ghidra program with a binary ID and analysis ID
     /// This only guarantees that the program has an associated analysis, but not that the analysis is finished

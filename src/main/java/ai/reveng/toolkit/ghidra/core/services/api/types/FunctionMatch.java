@@ -22,7 +22,8 @@ public record FunctionMatch(
         TypedApiInterface.BinaryHash nearest_neighbor_sha_256_hash,
         Boolean nearest_neighbor_debug,
         BigDecimal similarity,
-        BigDecimal confidence
+        BigDecimal confidence,
+        @Nullable TypedApiInterface.AnalysisID nearest_neighbor_analysis_id
 
 ) {
 
@@ -36,7 +37,8 @@ public record FunctionMatch(
                 new TypedApiInterface.BinaryHash(matchedFunction.getSha256Hash()),
                 matchedFunction.getDebug(),
                 matchedFunction.getSimilarity() == null ? null : BigDecimal.valueOf(matchedFunction.getSimilarity()),
-                matchedFunction.getConfidence() == null ? null : BigDecimal.valueOf(matchedFunction.getConfidence())
+                matchedFunction.getConfidence() == null ? null : BigDecimal.valueOf(matchedFunction.getConfidence()),
+                matchedFunction.getAnalysisId() == null ? null : new TypedApiInterface.AnalysisID(Math.toIntExact(matchedFunction.getAnalysisId()))
         );
     }
 

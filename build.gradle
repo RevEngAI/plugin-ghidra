@@ -69,11 +69,13 @@ dependencies {
 	implementation group: 'com.fifesoft', name: 'rsyntaxtextarea', version: '3.5.2'
 	implementation 'org.commonmark:commonmark:0.24.0'
 	implementation 'org.commonmark:commonmark-ext-gfm-tables:0.24.0'
-    implementation('ai.reveng:sdk:4.75.0')
+    implementation('ai.reveng:sdk:4.75.1-rc.1')
 	testImplementation('junit:junit:4.13.1')
 	testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.8.2")
 	// Version comes from the junit-bom pulled in by junit-vintage-engine.
 	testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+	// Compile-time API for ForkTempDir; matches the runtime version above.
+	testCompileOnly('org.junit.platform:junit-platform-launcher:1.8.2')
 
 	// https://mvnrepository.com/artifact/org.jetbrains/annotations
 	implementation group: 'org.jetbrains', name: 'annotations', version: '26.0.2'
@@ -104,6 +106,10 @@ test {
 	useJUnitPlatform()
     jvmArgs '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
     systemProperty "ghidra.test.property.batch.mode", 'true'
+    // Parent of the per-fork Ghidra temp dirs created by ForkTempDir.
+    def forkTempRoot = layout.buildDirectory.dir('tmp/ghidra-test-forks').get().asFile
+    systemProperty 'reveng.test.fork.tmproot', forkTempRoot.path
+    doFirst { forkTempRoot.mkdirs() }
 
     // Ghidra 12.1+ installs a serial filter factory during application initialization. The JVM
     // only allows this if no ObjectInputStream has been constructed yet, but Gradle's test

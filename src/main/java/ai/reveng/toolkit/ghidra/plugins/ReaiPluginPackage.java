@@ -1,7 +1,7 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
+import generic.theme.GIcon;
 import ghidra.framework.plugintool.util.PluginPackage;
-import resources.ResourceManager;
 
 import javax.swing.*;
 import java.nio.file.Path;
@@ -32,13 +32,13 @@ public class ReaiPluginPackage extends PluginPackage {
     @Deprecated
     public static final Integer INVALID_ANALYSIS_ID = -1;
 
-	public static final Icon REVENG_16 = ResourceManager.loadImage("images/reveng_16.png");
+	public static final Icon REVENG_16 = new GIcon("icon.reveng.mark.16");
 
 
 	/**
 	 * Create a Top Level Plugin Package that uses the RevEng.AI logo
 	 */
 	public ReaiPluginPackage() {
-		super(NAME, ResourceManager.loadImage("images/icon.png"), "AI Assisted Binary Analysis");
+		super(NAME, new GIcon("icon.reveng.mark.large"), "AI Assisted Binary Analysis");
 	}
 }

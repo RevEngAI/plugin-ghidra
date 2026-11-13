@@ -10,6 +10,7 @@ import ai.reveng.toolkit.ghidra.chat.service.ChatService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import ghidra.app.services.GoToService;
 import ghidra.app.services.ProgramManager;
@@ -20,11 +21,11 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.util.ProgramLocation;
-import ghidra.util.BrowserLoader;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitor;
+import generic.theme.GThemeDefaults.Colors.Messages;
 
 import javax.swing.*;
 import javax.swing.text.AttributeSet;
@@ -105,7 +106,7 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
         top.add(header, BorderLayout.NORTH);
 
         contextLabel = new JLabel("No analysis attached");
-        contextLabel.setForeground(Color.GRAY);
+        contextLabel.setForeground(Messages.HINT);
         top.add(contextLabel, BorderLayout.CENTER);
 
         historyModel = new DefaultListModel<>();
@@ -311,7 +312,7 @@ public class AgentChatWindow extends ComponentProviderAdapter implements ChatVie
         // A link from the agent's markdown (e.g. a portal or docs URL) — open it in the browser.
         if (href.startsWith("http://") || href.startsWith("https://")) {
             try {
-                BrowserLoader.display(URI.create(href).toURL(), null, tool);
+                WebBrowser.open(URI.create(href));
             } catch (Exception e) {
                 loggingService().warn("Failed to open link " + href + ": " + e.getMessage());
             }

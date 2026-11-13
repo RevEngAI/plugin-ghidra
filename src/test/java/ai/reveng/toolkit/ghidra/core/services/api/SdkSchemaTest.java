@@ -34,13 +34,17 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
+        apis.put("ai.reveng.api.AuthenticationUsersApi", new String[]{"v3ListUsers"});
+        // The tier gates the private-scope option in the analysis dialog.
+        apis.put("ai.reveng.api.IamUsersApi", new String[]{"getMe"});
         apis.put("ai.reveng.api.AnalysesCoreApi", new String[]{
-                "uploadFile", "createAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
+                "v3CreateAnalysis", "getAnalysisStatus", "getAnalysisBasicInfo_0",
                 "startAnalysisFunctionMatching", "getAnalysisFunctionMatchingStatus", "getAnalysisFunctionMatches",
-                "v3GetAnalysisLogs", "v3ListAnalyses"});
+                "v3GetAnalysisLogs", "v3ListAnalyses", "v3GetAnalysisAutoUnstripStatus"});
+        apis.put("ai.reveng.api.BinariesApi", new String[]{"v3UploadFile"});
         apis.put("ai.reveng.api.FunctionsCoreApi", new String[]{
                 "startFunctionsMatching", "getFunctionsMatchingStatus", "getFunctionsMatches",
-                "listAnalysisFunctions",
+                "listAnalysisFunctions", "v3CanonicalizeFunctionNames",
                 // v3 endpoints; the generator suffixes _0 where the deprecated v2 name collides.
                 "getFunctionBlocks_0", "getFunctionDetails_0"});
         apis.put("ai.reveng.api.FunctionsRenamingHistoryApi", new String[]{"batchRenameFunctions"});
@@ -59,10 +63,11 @@ public class SdkSchemaTest {
                 "v3CreateAnalysisDataTypesCall", "v3UpdateAnalysisDataTypesCall",
                 "v3UpdateFunctionSignature"});
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
-                "createAiDecompilation", "getAiDecompilation", "v3GetAiDecompilationTokens",
-                "v3UpsertAiDecompilationOverrides",
+                "createAiDecompilation", "getAiDecompilation", "getAiDecompilationStatus",
+                "v3GetAiDecompilationTokens", "v3UpsertAiDecompilationOverrides",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
+                "patchAiDecompilationInlineComment", "deleteAiDecompilationInlineComment",
                 "regenerateAiDecompilationSummary", "regenerateAiDecompilationInlineComments",
                 "upsertAiDecompilationRating"});
 
@@ -119,18 +124,29 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.FunctionSignatureVersion",
                 "getValue", "getUpdatedAt", "getUpdatedBy");
 
-        requireMethods(missing, "ai.reveng.model.AnalysisCreateRequest",
+        requireMethods(missing, "ai.reveng.model.CreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
-        requireMethods(missing, "ai.reveng.model.Tag", "getName");
+        requireMethods(missing, "ai.reveng.model.UploadOutputBody", "getSha256Hash");
+        requireMethods(missing, "ai.reveng.model.OperationCreateMetadataCreateResult",
+                "getMetadata", "getResponse");
         requireMethods(missing, "ai.reveng.model.StartMatchingForAnalysisInputBody",
                 "getMinSimilarity", "getResultsPerFunction", "getFilters");
         requireMethods(missing, "ai.reveng.model.StartMatchingForFunctionsInputBody",
                 "getFunctionIds", "getResultsPerFunction", "getFilters", "getMinSimilarity");
         requireMethods(missing, "ai.reveng.model.MatchFilters",
-                "getCollectionIds", "getBinaryIds", "getDebugTypes");
+                "getCollectionIds", "getBinaryIds", "getDebugTypes", "getPlatforms", "getArchitectures", "getUserIds");
+        requireMethods(missing, "ai.reveng.model.ListPublicUsersOutputBody", "getResults");
+        requireMethods(missing, "ai.reveng.model.PublicUserBody", "getUserId", "getUsername");
         requireMethods(missing, "ai.reveng.model.GetMatchesOutputBody", "getMatches", "getStatus");
+        // Matching is polled on the status body; its step fields drive the progress text and its
+        // error-level messages become the failure reason.
+        requireMethods(missing, "ai.reveng.model.GetMatchesStatusOutputBody",
+                "getStatus", "getStep", "getStepIndex", "getStepsTotal", "getMessages");
+        requireMethods(missing, "ai.reveng.model.ProgressMessage", "getLevel", "getText", "getTimestamp");
+        requireMethods(missing, "ai.reveng.model.FunctionMatch", "getFunctionId", "getMatchedFunctions");
         requireMethods(missing, "ai.reveng.model.MatchedFunction",
-                "getFunctionId", "getFunctionName", "getSimilarity", "getConfidence");
+                "getFunctionId", "getFunctionName", "getMangledName", "getBinaryName", "getSha256Hash",
+                "getDebug", "getSimilarity", "getConfidence", "getAnalysisId");
         requireMethods(missing, "ai.reveng.model.BatchRenameInputBody", "setFunctions");
         requireMethods(missing, "ai.reveng.model.BatchRenameItem",
                 "setFunctionId", "setNewName", "setNewMangledName");
@@ -179,6 +195,32 @@ public class SdkSchemaTest {
                 "getValue", "getDataTypeId", "getFunctionId", "getImportedFunctionId");
         requireMethods(missing, "ai.reveng.model.Token", "getValue");
         requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
+
+        // The AI decompilation poll: the decompilation itself, its pipeline progress while it runs,
+        // then the summary and inline comments once it completes.
+        requireMethods(missing, "ai.reveng.model.DecompilationData", "getStatus", "getDecompilation");
+        requireMethods(missing, "ai.reveng.model.WorkflowProgress",
+                "getStatus", "getStep", "getStepIndex", "getStepsTotal", "getMessages");
+        requireMethods(missing, "ai.reveng.model.SummaryData", "getAiSummary", "getSummary");
+        requireMethods(missing, "ai.reveng.model.CommentsData", "getInlineComments");
+        requireMethods(missing, "ai.reveng.model.InlineComment", "getLine", "getComment");
+        requireMethods(missing, "ai.reveng.model.PatchCommentBody", "comment", "line");
+
+        requireMethods(missing, "ai.reveng.model.AutoUnstripStatusOutputBody", "getStatus");
+        requireMethods(missing, "ai.reveng.model.CanonicalizeNamesInputBody", "names");
+        requireMethods(missing, "ai.reveng.model.CanonicalizeNamesOutputBody", "getResults");
+        requireMethods(missing, "ai.reveng.model.CanonicalName", "getName", "getCanonicalName");
+
+        requireMethods(missing, "ai.reveng.model.User", "getTier");
+        requireMethods(missing, "ai.reveng.model.BaseResponseConfigResponse", "getData");
+        requireMethods(missing, "ai.reveng.model.ConfigResponse", "getMaxFileSizeBytes");
+
+        // The collection and binary pickers in the matching filters.
+        requireMethods(missing, "ai.reveng.model.BaseResponseBinarySearchResponse", "getData");
+        requireMethods(missing, "ai.reveng.model.BinarySearchResponse", "getResults");
+        requireMethods(missing, "ai.reveng.model.BinarySearchResult", "getAnalysisId", "getBinaryName");
+        requireMethods(missing, "ai.reveng.model.ListCollectionsOutputBody", "getResults");
+        requireMethods(missing, "ai.reveng.model.CollectionListItemBody", "getCollectionId", "getCollectionName");
 
         assertTrue("SDK model surface drifted: " + missing, missing.isEmpty());
     }

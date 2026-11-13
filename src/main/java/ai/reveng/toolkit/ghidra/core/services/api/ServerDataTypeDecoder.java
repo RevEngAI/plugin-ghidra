@@ -290,7 +290,7 @@ public final class ServerDataTypeDecoder {
         if (namespace == null || namespace.isBlank()) {
             return CategoryPath.ROOT;
         }
-        return TypePathAndName.fromString(namespace + "::" + leafName(type)).toCategoryPath();
+        return TypePathAndName.fromString(sanitise(namespace) + "::" + leafName(type)).toCategoryPath();
     }
 
     private static String leafName(ServerDataType type) {
@@ -298,7 +298,13 @@ public final class ServerDataTypeDecoder {
         if (name == null || name.isBlank()) {
             return "anon_%d".formatted(type.id());
         }
-        return TypePathAndName.fromString(name).name();
+        String leaf = sanitise(TypePathAndName.fromString(name).name());
+        return leaf.isBlank() ? "anon_%d".formatted(type.id()) : leaf;
+    }
+
+    /// Ghidra rejects names containing control characters.
+    private static String sanitise(String name) {
+        return name.replaceAll("\\p{Cntrl}", "_");
     }
 
     /// Ghidra sizes are `int`; the API's are `long`. Anything that does not fit is not a real type.
@@ -333,12 +339,15 @@ public final class ServerDataTypeDecoder {
     /// Enum values stay strings on the wire because they may be negative or exceed 64 unsigned bits.
     /// Ghidra can only hold a `long`, so widen through {@link BigInteger} and take the low 64 bits.
     private static long toLong(String value) {
+        if (value == null) {
+            throw new NumberFormatException("missing value");
+        }
         return new BigInteger(value.trim()).longValue();
     }
 
     /// An exact-width filler for a type we could not build. Ghidra only has undefined1/2/4/8, so
     /// anything else becomes an array of undefined1 to keep the surrounding layout intact.
-    private static DataType undefined(long size) {
+    private static DataType undefined(@Nullable Long size) {
         long clamped = clampSize(size);
         if (clamped == 1 || clamped == 2 || clamped == 4 || clamped == 8) {
             return Undefined.getUndefinedDataType((int) clamped);

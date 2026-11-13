@@ -1,5 +1,6 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.components;
 
+import generic.theme.GColor;
 import javax.swing.*;
 import javax.swing.border.Border;
 import java.awt.*;
@@ -17,6 +18,7 @@ import java.util.stream.Collectors;
 public class ItemSelectionPanel extends JPanel {
     private SimpleAutocompleteField autocompleteField;
     private JPanel selectedItemsPanel;
+    private JScrollPane tagsScrollPane;
     private final Set<SelectableItem> selectedItems;
     private final List<ItemSelectionListener> listeners;
     private Function<String, CompletableFuture<List<SelectableItem>>> dynamicItemLoader;
@@ -41,29 +43,35 @@ public class ItemSelectionPanel extends JPanel {
     }
 
     private void initializeUI(int minimumQueryLength) {
-        setLayout(new BorderLayout());
-        setBorder(BorderFactory.createTitledBorder(panelTitle));
+        setLayout(new BorderLayout(0, 4));
 
-        // Create top panel with autocomplete
+        // A caption above the field, like the dialog's other filters, rather than a titled box
+        JLabel caption = new JLabel(panelTitle);
+        caption.setFont(caption.getFont().deriveFont(Font.BOLD));
+        add(caption, BorderLayout.NORTH);
+
+        // Create panel with autocomplete
         JPanel inputPanel = createInputPanel(minimumQueryLength);
-        add(inputPanel, BorderLayout.NORTH);
+        add(inputPanel, BorderLayout.CENTER);
 
         // Create panel for selected items (tags) without any border
         selectedItemsPanel = new JPanel();
         selectedItemsPanel.setLayout(new WrapLayout(FlowLayout.LEFT));
 
-        JScrollPane scrollPane = new JScrollPane(selectedItemsPanel);
-        scrollPane.setPreferredSize(new Dimension(0, 60));
-        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scrollPane.setBorder(null); // Remove any border from the scroll pane
+        tagsScrollPane = new JScrollPane(selectedItemsPanel);
+        // One row of tags; more rows scroll
+        tagsScrollPane.setPreferredSize(new Dimension(0, 34));
+        tagsScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        tagsScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        tagsScrollPane.setBorder(null); // Remove any border from the scroll pane
+        // Only takes up room once something is selected
+        tagsScrollPane.setVisible(false);
 
-        add(scrollPane, BorderLayout.CENTER);
+        add(tagsScrollPane, BorderLayout.SOUTH);
     }
 
     private JPanel createInputPanel(int minimumQueryLength) {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 
         // Create the autocomplete field without label or add button
         // Convert SelectableItem results to strings for autocomplete display
@@ -72,6 +80,7 @@ public class ItemSelectionPanel extends JPanel {
                 items.stream().map(SelectableItem::getName).collect(Collectors.toList()));
 
         autocompleteField = new SimpleAutocompleteField(stringItemLoader, minimumQueryLength);
+        autocompleteField.setHint("Type %d+ characters to search".formatted(minimumQueryLength));
 
         // Handle selection from autocomplete
         autocompleteField.addActionListener(e -> addSelectedItem());
@@ -107,7 +116,7 @@ public class ItemSelectionPanel extends JPanel {
     private void addItemTag(SelectableItem item) {
         JPanel tagPanel = new JPanel(new BorderLayout());
         tagPanel.setBorder(createTagBorder());
-        tagPanel.setBackground(new Color(230, 240, 250));
+        tagPanel.setBackground(new GColor("color.bg.reveng.tag"));
 
         JLabel label = new JLabel(item.getName()); // Display name to user
         label.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
@@ -116,21 +125,26 @@ public class ItemSelectionPanel extends JPanel {
         removeButton.setPreferredSize(new Dimension(20, 20));
         removeButton.setFont(removeButton.getFont().deriveFont(Font.BOLD, 12f));
         removeButton.setMargin(new Insets(0, 0, 0, 0));
-        removeButton.setBackground(Color.WHITE);
-        removeButton.setBorder(BorderFactory.createRaisedBevelBorder());
+        removeButton.setBorder(BorderFactory.createEmptyBorder());
+        removeButton.setContentAreaFilled(false);
         removeButton.addActionListener(e -> removeItem(item, tagPanel));
 
         tagPanel.add(label, BorderLayout.CENTER);
         tagPanel.add(removeButton, BorderLayout.EAST);
 
         selectedItemsPanel.add(tagPanel);
-        selectedItemsPanel.revalidate();
-        selectedItemsPanel.repaint();
+        updateTagsVisibility();
+    }
+
+    private void updateTagsVisibility() {
+        tagsScrollPane.setVisible(!selectedItems.isEmpty());
+        revalidate();
+        repaint();
     }
 
     private Border createTagBorder() {
         return BorderFactory.createCompoundBorder(
-                BorderFactory.createRaisedBevelBorder(),
+                BorderFactory.createLineBorder(new GColor("color.border.reveng.tag")),
                 BorderFactory.createEmptyBorder(2, 2, 2, 2)
         );
     }
@@ -138,8 +152,7 @@ public class ItemSelectionPanel extends JPanel {
     private void removeItem(SelectableItem item, JPanel tagPanel) {
         selectedItems.remove(item);
         selectedItemsPanel.remove(tagPanel);
-        selectedItemsPanel.revalidate();
-        selectedItemsPanel.repaint();
+        updateTagsVisibility();
         notifyListeners();
     }
 

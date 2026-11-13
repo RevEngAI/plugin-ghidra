@@ -20,10 +20,11 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import ai.reveng.invoker.Configuration;
+import ai.reveng.invoker.ApiClient;
 import ai.reveng.invoker.JSON;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -31,6 +32,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ai.reveng.invoker.auth.ApiKeyAuth;
 import ai.reveng.invoker.ApiException;
+import okhttp3.Dns;
 
 import static ai.reveng.toolkit.ghidra.core.services.api.LoggingInterceptor.*;
 
@@ -58,13 +60,59 @@ public class TypedApiImplementation implements TypedApiInterface {
     private final FunctionsAiDecompilationApi functionsAiDecompilationApi;
     private final DataTypesApi dataTypesApi;
     private final IamUsersApi iamUsersApi;
+    private final AuthenticationUsersApi authenticationUsersApi;
 
     private final Map<AnalysisID, AnalysisBasicInfoOutputBody> analysisBasicInfoCache = new HashMap<>();
 
-    public TypedApiImplementation(String baseUrl, String apiKey) {
-        var apiClient = Configuration.getDefaultApiClient();
-        apiClient.setBasePath(baseUrl);
+    private final ApiClient apiClient;
+    private final ApiClient uploadClient;
+    private final BinariesApi uploadApi;
 
+    /// Ordinary requests: a page of functions or a batch of signatures, which the server answers quickly.
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
+
+    /// Uploading a large binary, and the server hashing and storing it before it answers, takes far
+    /// longer than any other request.
+    private static final Duration UPLOAD_TIMEOUT = Duration.ofMinutes(5);
+
+    /// Every instance owns its client. The SDK's default client is process-global, so configuring it
+    /// here let the setup wizard's throwaway validation instance re-target the running session, and
+    /// stacked one more logging interceptor onto it per instance.
+    public TypedApiImplementation(String baseUrl, String apiKey) {
+        var userAgent = userAgent();
+        var apiClient = newClient(baseUrl, apiKey, userAgent, REQUEST_TIMEOUT);
+        this.apiClient = apiClient;
+        this.uploadClient = newClient(baseUrl, apiKey, userAgent, UPLOAD_TIMEOUT);
+        this.uploadApi = new BinariesApi(uploadClient);
+
+        this.analysisCoreApi = new AnalysesCoreApi(apiClient);
+        this.searchApi = new SearchApi(apiClient);
+        this.collectionsApi = new CollectionsApi(apiClient);
+        this.functionsCoreApi = new FunctionsCoreApi(apiClient);
+        this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
+        this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
+        this.dataTypesApi = new DataTypesApi(apiClient);
+        this.configApi = new ConfigApi(apiClient);
+        this.iamUsersApi = new IamUsersApi(apiClient);
+        this.authenticationUsersApi = new AuthenticationUsersApi(apiClient);
+    }
+
+
+    public TypedApiImplementation(ApiInfo info){
+        this(info.hostURI().toString(), info.apiKey());
+    }
+
+    /// The configured client this instance talks through, for SDK APIs it does not wrap.
+    public ApiClient apiClient() {
+        return apiClient;
+    }
+
+    /// The client uploads go through, with a longer timeout than {@link #apiClient()}.
+    ApiClient uploadClient() {
+        return uploadClient;
+    }
+
+    private static String userAgent() {
         String pluginVersion = "unknown";
         try {
             // This file comes from the release.yml running in the CI
@@ -78,36 +126,32 @@ public class TypedApiImplementation implements TypedApiInterface {
         }
         // Looks like:
         // Ghidra/11.3.2-PUBLIC (LINUX(Linux) X86_64(amd64)) RevEng.AI_Plugin/v0.15
-        var userAgent = "%s/%s-%s (%s) RevEng.AI_Plugin/%s".formatted(Application.getName(), Application.getApplicationVersion(), Platform.CURRENT_PLATFORM, Application.getApplicationReleaseName(), pluginVersion);
+        return "%s/%s-%s (%s) RevEng.AI_Plugin/%s".formatted(Application.getName(), Application.getApplicationVersion(), Platform.CURRENT_PLATFORM, Application.getApplicationReleaseName(), pluginVersion);
+    }
 
+    private static ApiClient newClient(String baseUrl, String apiKey, String userAgent, Duration timeout) {
+        var apiClient = new ApiClient();
+        apiClient.setBasePath(baseUrl);
         apiClient.setUserAgent(userAgent);
         apiClient.addDefaultHeader("X-RevEng-Application", userAgent);
 
         // Use a custom HTTP client to add Ghidra specific logging
         // Set withResponseBody to true if debugging issues with the API to see the full response body
-        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder().addInterceptor(ghidraLogger(false)).build());
+        // Bound DNS too: the connect timeout below doesn't cover it, and offline it can hang for minutes
+        // Retry sits ahead of the logger so that every attempt is logged
+        apiClient.setHttpClient(apiClient.getHttpClient().newBuilder()
+                .addInterceptor(RetryInterceptor.standard())
+                .addInterceptor(ghidraLogger(false))
+                .dns(new TimeoutDns(Dns.SYSTEM, Duration.ofSeconds(5)))
+                .build());
 
         apiClient.setConnectTimeout(5000);
-        apiClient.setReadTimeout(15000);
-        apiClient.setWriteTimeout(15000);
+        apiClient.setReadTimeout(Math.toIntExact(timeout.toMillis()));
+        apiClient.setWriteTimeout(Math.toIntExact(timeout.toMillis()));
 
         ApiKeyAuth APIKey = (ApiKeyAuth) apiClient.getAuthentication("APIKey");
         APIKey.setApiKey(apiKey);
-
-        this.analysisCoreApi = new AnalysesCoreApi(apiClient);
-        this.searchApi = new SearchApi(apiClient);
-        this.collectionsApi = new CollectionsApi(apiClient);
-        this.functionsCoreApi = new FunctionsCoreApi(apiClient);
-        this.functionsRenamingHistoryApi = new FunctionsRenamingHistoryApi(apiClient);
-        this.functionsAiDecompilationApi = new FunctionsAiDecompilationApi(apiClient);
-        this.dataTypesApi = new DataTypesApi(apiClient);
-        this.configApi = new ConfigApi(apiClient);
-        this.iamUsersApi = new IamUsersApi(apiClient);
-    }
-
-
-    public TypedApiImplementation(ApiInfo info){
-        this(info.hostURI().toString(), info.apiKey());
+        return apiClient;
     }
 
     public BinaryHash upload(Path binPath) throws FileNotFoundException, ApiException {
@@ -116,9 +160,12 @@ public class TypedApiImplementation implements TypedApiInterface {
         if (!bin.exists())
             throw new FileNotFoundException("Binary to upload does not exist");
 
-        var result = this.analysisCoreApi.uploadFile(UploadFileType.fromValue("BINARY"), bin, null, true);
+        var result = this.uploadApi.v3UploadFile(bin, "BINARY", true);
 
-        return new BinaryHash(result.getData().getSha256Hash());
+        if (result.getSha256Hash() == null) {
+            throw new ApiException("Upload response carried no hash");
+        }
+        return new BinaryHash(result.getSha256Hash());
     }
 
     /// GET /v3/analyses, filtered to one binary hash and paged to exhaustion.
@@ -150,16 +197,30 @@ public class TypedApiImplementation implements TypedApiInterface {
         return results;
     }
 
+    /// POST /v3/analyses
+    ///
+    /// Answers with a long-running operation: the analysis id rides on its metadata while pending
+    /// and on its response once done.
     @Override
     public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
         var analysisRequest = options.toAnalysisCreateRequest();
-        var result = this.analysisCoreApi.createAnalysis(analysisRequest, null);
-        return new AnalysisID(result.getData().getAnalysisId());
+        var operation = this.analysisCoreApi.v3CreateAnalysis(analysisRequest, null);
+        Long analysisId = operation.getMetadata() != null ? operation.getMetadata().getAnalysisId() : null;
+        if (analysisId == null && operation.getResponse() != null) {
+            analysisId = operation.getResponse().getAnalysisId();
+        }
+        if (analysisId == null) {
+            throw new ApiException("Create-analysis operation " + operation.getName() + " carried no analysis id");
+        }
+        return new AnalysisID(Math.toIntExact(analysisId));
     }
 
     @Override
     public AnalysisStatus status(AnalysisID analysisID) throws ApiException {
         var status = analysisCoreApi.getAnalysisStatus(analysisID.id());
+        if (status.getData() == null) {
+            throw new ApiException("Analysis status response carried no data");
+        }
         return AnalysisStatus.fromApiValue(status.getData().getAnalysisStatus());
     }
 
@@ -193,8 +254,11 @@ public class TypedApiImplementation implements TypedApiInterface {
                             new FunctionID(f.getFunctionId()),
                             f.getFunctionName(),
                             // The mangled name is optional here; an unmangled symbol carries none,
-                            // and callers rely on this field being populated.
-                            f.getMangledName() != null ? f.getMangledName() : f.getFunctionName(),
+                            // and callers rely on this field being populated. The server also sends
+                            // it as "" rather than leaving it out, which would otherwise slip past
+                            // the FUN_/sub_ guard on renames.
+                            f.getMangledName() == null || f.getMangledName().isBlank()
+                                    ? f.getFunctionName() : f.getMangledName(),
                             f.getFunctionVaddr(),
                             Math.toIntExact(f.getFunctionSize())
                     )
@@ -286,7 +350,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             }
             return new FunctionSignatureBatch(items, dataTypes);
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -302,7 +366,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             return ServerDataTypeReader.readEntries(
                     executeForJsonObject(call, "list analysis data types"), "items");
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -350,7 +414,7 @@ public class TypedApiImplementation implements TypedApiInterface {
                     .getVersions();
             return versions == null ? List.of() : versions;
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -359,7 +423,8 @@ public class TypedApiImplementation implements TypedApiInterface {
             okhttp3.ResponseBody responseBody = response.body();
             String text = responseBody == null ? "" : responseBody.string();
             if (!response.isSuccessful()) {
-                throw new ApiException(response.code(), "Failed to %s: HTTP %d".formatted(what, response.code()));
+                throw new ApiException("Failed to %s: HTTP %d".formatted(what, response.code()),
+                        response.code(), response.headers().toMultimap(), text);
             }
             JsonElement parsed = JsonParser.parseString(text);
             if (!parsed.isJsonObject()) {
@@ -456,12 +521,12 @@ public class TypedApiImplementation implements TypedApiInterface {
                     inlineComments,
                     decompilationProgress);
         } catch (ApiException e) {
+            // A function that was never decompiled is a 200 with status UNINITIALISED; a 404 means the
+            // function itself was not found, and treating it as "not started yet" polled for ever.
             if (e.getCode() == 404) {
-                return new AIDecompilationStatus(
-                        DecompilationData.StatusEnum.UNINITIALISED,
-                        null, null, null, null, null, List.of(), null);
+                throw new RuntimeException("RevEng.AI could not find function %d (HTTP 404)".formatted(functionID.value()), e);
             }
-            throw new RuntimeException("Failed to poll AI decompilation status", e);
+            throw new RuntimeException("Failed to poll AI decompilation status: " + describeApiException(e), e);
         }
     }
 
@@ -513,10 +578,20 @@ public class TypedApiImplementation implements TypedApiInterface {
         functionsAiDecompilationApi.deleteAiDecompilationInlineComment(functionID.value(), line);
     }
 
-    private static String describeApiException(ApiException e) {
-        // The SDK's ApiException carries the HTTP status and response body separately from the message;
-        // surface both so callers logging only getMessage() can still diagnose server-side failures.
-        return "HTTP " + e.getCode() + " — " + (e.getResponseBody() != null ? e.getResponseBody() : e.getMessage());
+    /// The status and the server's `error.message`, falling back to the raw body, then the exception's
+    /// own message. {@link ApiException#getMessage()} itself dumps the body and every header.
+    public static String describeApiException(ApiException e) {
+        String body = e.getResponseBody();
+        String detail = body != null && !body.isBlank() ? body : e.getMessage();
+        try {
+            JsonElement message = JsonParser.parseString(body).getAsJsonObject()
+                    .getAsJsonObject("error").get("message");
+            if (message != null && message.isJsonPrimitive() && !message.getAsString().isBlank()) {
+                detail = message.getAsString();
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return "HTTP " + e.getCode() + " — " + detail;
     }
 
     /// POST /v3/functions/rename, with a one-item body: v3 has no per-function rename route.
@@ -534,7 +609,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             response = functionsRenamingHistoryApi.batchRenameFunctions(request);
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
         Long renamedCount = response == null ? null : response.getRenamedCount();
         if (renamedCount == null || renamedCount < 1) {
@@ -548,7 +623,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return FunctionDetails.fromServerResponse(functionsCoreApi.getFunctionDetails_0(id.value()));
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -591,6 +666,12 @@ public class TypedApiImplementation implements TypedApiInterface {
     @Override
     public List<BinarySearchResult> searchBinaries(String partialBinaryName, String modelName) throws ApiException {
         return this.searchApi.searchBinaries(1, 10, partialBinaryName, null, null, modelName, null, null, null).getData().getResults();
+    }
+
+    @Override
+    public List<PublicUserBody> searchUsers(String searchTerm) throws ApiException {
+        var results = this.authenticationUsersApi.v3ListUsers(searchTerm).getResults();
+        return results != null ? results : List.of();
     }
 
     @Override
@@ -640,8 +721,10 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public void batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
-        this.functionsRenamingHistoryApi.batchRenameFunctions(request);
+    public long batchRenameFunctions(BatchRenameInputBody request) throws ApiException {
+        var response = this.functionsRenamingHistoryApi.batchRenameFunctions(request);
+        Long renamedCount = response == null ? null : response.getRenamedCount();
+        return renamedCount == null ? 0 : renamedCount;
     }
 
     /// GET /v3/functions/{function_id}/blocks
@@ -657,7 +740,7 @@ public class TypedApiImplementation implements TypedApiInterface {
             DisassemblyOutputBody disassembly = this.functionsCoreApi.getFunctionBlocks_0(id.value());
             return DisassemblyBlocksReader.readAssembly(disassembly.getBasicBlocks());
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -688,7 +771,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return this.configApi.getConfig().getData();
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 
@@ -697,7 +780,7 @@ public class TypedApiImplementation implements TypedApiInterface {
         try {
             return this.iamUsersApi.getMe();
         } catch (ApiException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(describeApiException(e), e);
         }
     }
 }

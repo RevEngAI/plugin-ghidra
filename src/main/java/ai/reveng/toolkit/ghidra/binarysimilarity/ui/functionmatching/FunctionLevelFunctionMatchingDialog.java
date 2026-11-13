@@ -10,19 +10,24 @@ import ghidra.program.model.listing.Function;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.ArrayList;
 import java.util.List;
 
 public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
     private final Function function;
 
-    public FunctionLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID, Function function) {
+    public FunctionLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID,
+                                               AnalysisBasicInfoOutputBody analysisBasicInfo, Function function) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool.getService(GhidraRevengService.class), programWithBinaryID);
+              tool, programWithBinaryID, analysisBasicInfo);
         this.function = function;
     }
 
     private List<Long> matchingFunctionIds;
+
+    @Override
+    protected void dialogShown() {
+        filterResults();
+    }
 
     @Override
     protected MatchingProgress startMatching() throws ApiException {
@@ -35,7 +40,7 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
         var request = new StartMatchingForFunctionsInputBody();
         request.setFunctionIds(matchingFunctionIds);
         request.setMinSimilarity((double) getThreshold());
-        request.setResultsPerFunction(25L);
+        request.setResultsPerFunction(5L);
         request.setFilters(buildMatchFilters());
 
         var response = revengService.startFunctionsMatching(request);
@@ -59,24 +64,6 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
         return flattenMatches(revengService.getFunctionsMatches(matchingFunctionIds).getMatches());
     }
 
-    private MatchFilters buildMatchFilters() {
-        var filters = new MatchFilters();
-        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
-                .map(Integer::longValue).toList());
-        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
-                .map(Integer::longValue).toList());
-
-        if (isDebugSymbolsEnabled()) {
-            var debugTypes = new ArrayList<String>();
-            debugTypes.add("SYSTEM");
-            if (isUserSubmittedDebugSymbolsEnabled()) {
-                debugTypes.add("USER");
-            }
-            filters.setDebugTypes(debugTypes);
-        }
-        return filters;
-    }
-
     @Override
     protected String[] getTableColumnNames() {
         return new String[]{"Matched Function", "Similarity", "Confidence", "Matched Hash", "Matched Binary"};
@@ -91,11 +78,6 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
             result.functionMatch().nearest_neighbor_sha_256_hash().sha256(),
             result.functionMatch().nearest_neighbor_binary_name()
         };
-    }
-
-    @Override
-    protected String getTableTitle() {
-        return "Function Matching Results";
     }
 
     @Override
@@ -145,14 +127,13 @@ public class FunctionLevelFunctionMatchingDialog extends AbstractFunctionMatchin
     }
 
     @Override
-    protected JPanel createRenameButtonsPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+    protected JPanel createTransferButtonsPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
-        // Only show "Rename Selected" button for function-level matching
+        // Only offer the selected match for function-level matching,
         // since we're only matching a single function
-        JButton renameSelectedButton = new JButton("Rename Selected");
-        renameSelectedButton.addActionListener(e -> onRenameSelectedButtonClicked());
-        panel.add(renameSelectedButton);
+        panel.add(createTransferButton("Transfer Symbol", this::onTransferSelected));
 
         return panel;
     }

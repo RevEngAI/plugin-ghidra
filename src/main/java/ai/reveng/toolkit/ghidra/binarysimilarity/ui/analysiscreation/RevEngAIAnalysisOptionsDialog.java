@@ -13,6 +13,7 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.Swing;
+import generic.theme.GThemeDefaults.Colors.Messages;
 
 import javax.annotation.Nullable;
 import javax.swing.*;
@@ -73,13 +74,9 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         var workPanel = new JPanel();
         workPanel.setLayout(new BoxLayout(workPanel, BoxLayout.Y_AXIS));
 
-        // Create title panel
-        JPanel titlePanel = createTitlePanel("Create new analysis for this binary");
-        workPanel.add(titlePanel, BorderLayout.NORTH);
-
         // File size warning label (hidden by default)
         fileSizeWarningLabel = new JLabel();
-        fileSizeWarningLabel.setForeground(Color.RED);
+        fileSizeWarningLabel.setForeground(Messages.ERROR);
         fileSizeWarningLabel.setHorizontalAlignment(SwingConstants.CENTER);
         fileSizeWarningLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         fileSizeWarningLabel.setVisible(false);
@@ -143,16 +140,23 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         // Loading indicator (shown while fetching config)
         loadingLabel = new JLabel("Checking file size limits...");
-        loadingLabel.setForeground(Color.GRAY);
+        loadingLabel.setForeground(Messages.HINT);
         loadingLabel.setHorizontalAlignment(SwingConstants.CENTER);
         loadingLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         loadingLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         workPanel.add(loadingLabel);
 
+        var optionsColumn = new JPanel(new BorderLayout());
+        optionsColumn.add(workPanel, BorderLayout.NORTH);
+
         var contentPanel = new JPanel(new BorderLayout(12, 0));
-        contentPanel.add(workPanel, BorderLayout.WEST);
+        contentPanel.add(optionsColumn, BorderLayout.WEST);
         contentPanel.add(buildFunctionSelectionPanel(), BorderLayout.CENTER);
-        addWorkPanel(contentPanel);
+
+        var rootPanel = new JPanel(new BorderLayout());
+        rootPanel.add(createTitlePanel("Create new analysis for this binary"), BorderLayout.NORTH);
+        rootPanel.add(contentPanel, BorderLayout.CENTER);
+        addWorkPanel(rootPanel);
 
         addCancelButton();
         addOKButton();
@@ -169,10 +173,9 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         var options = AnalysisOptionsBuilder.forProgram(program,
                 function -> includedEntryPoints.contains(function.getEntryPoint()));
 
-        // Capability generation and advanced analysis are not offered by this dialog and are
-        // always off for analyses the plugin creates.
+        // Capability generation is not offered by this dialog and is always off for analyses
+        // the plugin creates.
         options.skipCapabilities(true);
-        options.advancedAnalysis(false);
 
         if (privateScope.isSelected() && privateScope.isEnabled()) {
             options.scope(AnalysisScope.PRIVATE);

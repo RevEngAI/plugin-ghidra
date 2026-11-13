@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 import javax.swing.*;
 
-import ai.reveng.model.AnalysisCreateRequest;
+import ai.reveng.model.CreateRequest;
 import ai.reveng.model.User;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
@@ -71,7 +71,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
 
     /**
      * Pins the analysis configuration the dialog submits. The dialog offers no controls for
-     * capability generation, advanced analysis, third-party scraping or sandbox execution, so
+     * capability generation, third-party scraping or sandbox execution, so
      * every analysis it creates must carry these fixed values.
      */
     @Test
@@ -95,12 +95,11 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
 
         var options = dialog.getOptionsFromUI();
         assertNotNull(options);
-        AnalysisCreateRequest request = options.toAnalysisCreateRequest();
+        CreateRequest request = options.toAnalysisCreateRequest();
 
         var analysisConfig = request.getAnalysisConfig();
         assertNotNull("The request must always carry an analysis config", analysisConfig);
         assertEquals("Capabilities are never generated", Boolean.FALSE, analysisConfig.getGenerateCapabilities());
-        assertEquals("Advanced analysis is never requested", Boolean.FALSE, analysisConfig.getAdvancedAnalysis());
         assertNull("Third-party scraping is never requested", analysisConfig.getScrapeThirdPartyConfig());
         assertNull("Sandbox execution is never requested", analysisConfig.getSandboxConfig());
 
