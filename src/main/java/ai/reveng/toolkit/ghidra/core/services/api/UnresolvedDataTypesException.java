@@ -11,14 +11,29 @@ import java.util.Set;
 public final class UnresolvedDataTypesException extends Exception {
 
     private final Set<String> typeNames;
+    private final boolean pastClosureLimit;
 
-    public UnresolvedDataTypesException(Set<String> typeNames) {
-        super(describe(typeNames));
+    /// @param typeNames        the types the function reaches that could not be written in full
+    /// @param pastClosureLimit whether the function reaches more types than
+    ///                         {@link GhidraDataTypeEncoder#MAX_TYPES}, which is then the cause
+    ///                         rather than the portal
+    public UnresolvedDataTypesException(Set<String> typeNames, boolean pastClosureLimit) {
+        super(pastClosureLimit ? describeLimit() : describe(typeNames));
         this.typeNames = Set.copyOf(typeNames);
+        this.pastClosureLimit = pastClosureLimit;
     }
 
     public Set<String> typeNames() {
         return typeNames;
+    }
+
+    public boolean pastClosureLimit() {
+        return pastClosureLimit;
+    }
+
+    private static String describeLimit() {
+        return ("it reaches more than %d data types, the most the plugin pushes for one function, so "
+                + "the signature was not sent").formatted(GhidraDataTypeEncoder.MAX_TYPES);
     }
 
     private static String describe(Set<String> typeNames) {

@@ -76,18 +76,7 @@ public class PushFunctionTypesTest extends RevEngMockableHeadedIntegrationTest {
         public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
                                                             CreateAnalysisDataTypesInputBody request) {
             calls.add("create");
-            List<ServerDataType> created = new ArrayList<>();
-            for (var entry : request.getDataTypes()) {
-                Object instance = entry.getActualInstance();
-                if (uncreatable.contains(string(instance, "getName"))) {
-                    continue;
-                }
-                created.add(new ServerDataType(nextId++, string(instance, "getNamespace"),
-                        string(instance, "getName"),
-                        ServerDataType.Kind.fromJson(string(instance, "getKind")),
-                        null, "USER", false, null, null, null));
-            }
-            return created;
+            return CreatedDataTypes.echo(request, () -> nextId++, name -> !uncreatable.contains(name));
         }
 
         @Override
@@ -113,14 +102,6 @@ public class PushFunctionTypesTest extends RevEngMockableHeadedIntegrationTest {
             signatures.add(signature);
         }
 
-        private static String string(Object target, String method) {
-            try {
-                Object value = target.getClass().getMethod(method).invoke(target);
-                return value == null ? null : value.toString();
-            } catch (ReflectiveOperationException e) {
-                throw new RuntimeException(e);
-            }
-        }
     }
 
     private record Fixture(GhidraRevengService service,
@@ -410,6 +391,47 @@ public class PushFunctionTypesTest extends RevEngMockableHeadedIntegrationTest {
             assertFalse("its signature was never sent", fixture.api().signedFunctions.contains(new FunctionID(2)));
         } finally {
             sync.dispose();
+        }
+    }
+
+    /// One function whose own closure is over the cap: its struct has more distinct member types
+    /// than the walk takes. The types at the edge of the walk refer to ones it never reached, so the
+    /// signature and those definitions would carry null ids; the function is held back instead, and
+    /// the reason names the limit rather than blaming the portal.
+    @Test
+    public void aFunctionOverTheClosureCapOnItsOwnSendsNoNullIdsAndStaysUnpushed() throws Exception {
+        var api = new RecordingApi();
+        var service = new GhidraRevengService(api);
+        var builder = newX64Program("push");
+        builder.createMemory("code", "0x4000", 0x400);
+        Function big = functionReachingStructs(builder, "first", "0x4000", 600);
+        var program = builder.getProgram();
+        var programWithID = service.registerAnalysisForProgram(program, new AnalysisID(1));
+        var analysedProgram = service.registerFinishedAnalysisForProgram(programWithID, TaskMonitor.DUMMY);
+
+        try {
+            service.pushFunctionTypes(analysedProgram, big);
+            fail("the push should have been held back");
+        } catch (UnresolvedDataTypesException e) {
+            assertTrue("the limit is the cause", e.pastClosureLimit());
+            assertTrue(e.getMessage(), e.getMessage().contains("more than 500 data types"));
+        }
+
+        UnpushedEdits.mark(program, UnpushedEdits.Kind.TYPES, big.getEntryPoint());
+        var flush = service.pushUnpushedEdits(analysedProgram);
+
+        assertTrue("no signature was sent", api.signedFunctions.isEmpty());
+        assertTrue("the edit is still marked",
+                UnpushedEdits.isMarked(program, UnpushedEdits.Kind.TYPES, big.getEntryPoint()));
+        assertEquals(1, flush.rejected().size());
+        for (var request : api.updates) {
+            for (var entry : request.getDataTypes()) {
+                assertFalse("no type write names a null type",
+                        referencedIds(entry.getActualInstance()).contains(null));
+                if (entry.getActualInstance() instanceof ai.reveng.model.UpdateStructDataType struct) {
+                    assertFalse("the struct is not written in part", struct.getName().equals("first_state"));
+                }
+            }
         }
     }
 

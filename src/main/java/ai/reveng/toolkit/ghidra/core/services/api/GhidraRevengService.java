@@ -497,7 +497,8 @@ public class GhidraRevengService {
             var function = entry.getKey();
             var unresolved = GhidraDataTypeEncoder.unresolvedTypes(function, reachable.get(function), ids);
             if (!unresolved.isEmpty()) {
-                withheld.put(function, new UnresolvedDataTypesException(unresolved));
+                withheld.put(function, new UnresolvedDataTypesException(unresolved,
+                        GhidraDataTypeEncoder.exceedsClosureLimit(reachable.get(function))));
                 continue;
             }
             var signature = GhidraDataTypeEncoder.signatureOf(function, ids);
@@ -506,6 +507,22 @@ public class GhidraRevengService {
             }
         }
         return new TypePush(pushed, withheld);
+    }
+
+    /// Log the functions a backfill held back as one line: on a large binary there can be many.
+    private static void logWithheld(ReaiLoggingService log, Map<Function, UnresolvedDataTypesException> withheld) {
+        if (withheld.isEmpty()) {
+            return;
+        }
+        final int shown = 5;
+        String examples = withheld.entrySet().stream().limit(shown)
+                .map(entry -> "\"%s\" at %s (%s)".formatted(entry.getKey().getName(),
+                        entry.getKey().getEntryPoint(), entry.getValue().getMessage()))
+                .collect(java.util.stream.Collectors.joining("; "));
+        if (withheld.size() > shown) {
+            examples += "; and %d more".formatted(withheld.size() - shown);
+        }
+        log.warn("Did not push the types of %d function(s): %s".formatted(withheld.size(), examples));
     }
 
     /// Breakdown of a bidirectional analysis sync, shown to the user afterwards.
@@ -1038,9 +1055,7 @@ public class GhidraRevengService {
             int pushed = push.signaturesWritten();
             log.info("Pushed local types for %d of %d functions the portal had none for"
                     .formatted(pushed, candidates.size()));
-            push.withheld().forEach((function, reason) -> log.warn(
-                    "Did not push the types of \"%s\" at %s: %s"
-                            .formatted(function.getName(), function.getEntryPoint(), reason.getMessage())));
+            logWithheld(log, push.withheld());
             return pushed;
         } catch (ApiException e) {
             Msg.warn(this, "Failed to push local types during sync", e);

@@ -60,7 +60,12 @@ public final class GhidraDataTypeEncoder {
     /// separately and hands the union to {@link AnalysisDataTypesService#ensureTypes}, which chunks its
     /// writes to the endpoints' limits. Capping the union instead made whether a function's types got
     /// ids depend on which other functions happened to share its batch.
-    private static final int MAX_TYPES = 500;
+    ///
+    /// A function whose own closure is larger than this cannot be pushed: the types at the edge of
+    /// the walk refer to types it never reached, which have no id, so the function is held back
+    /// rather than written with null references. {@link #exceedsClosureLimit} tells that case apart
+    /// from a type the server gave no id.
+    public static final int MAX_TYPES = 500;
 
     /// Ghidra's placeholders for "no calling convention recorded", which the API would rather not
     /// have at all than have as a literal.
@@ -153,6 +158,26 @@ public final class GhidraDataTypeEncoder {
             }
         }
         return unresolved;
+    }
+
+    /// Whether `reachable` ({@link #reachableTypes}) was cut short by {@link #MAX_TYPES}: some type
+    /// in it refers to a type the walk never reached.
+    public static boolean exceedsClosureLimit(Collection<DataType> reachable) {
+        if (reachable.size() < MAX_TYPES) {
+            return false;
+        }
+        Set<TypeKey> reached = new java.util.HashSet<>();
+        for (DataType type : reachable) {
+            reached.add(keyOf(type));
+        }
+        for (DataType type : reachable) {
+            for (DataType dependency : dependenciesOf(type)) {
+                if (!reached.contains(keyOf(dependency))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// The server's identity for a Ghidra type.

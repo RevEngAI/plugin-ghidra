@@ -5,6 +5,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType;
 
 import java.util.List;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /// What a mock server answers a data-type create with: each type as it was sent, under a new id.
 ///
@@ -16,14 +17,20 @@ final class CreatedDataTypes {
     private CreatedDataTypes() {}
 
     static List<ServerDataType> echo(CreateAnalysisDataTypesInputBody request, LongSupplier nextId) {
+        return echo(request, nextId, name -> true);
+    }
+
+    /// As {@link #echo(CreateAnalysisDataTypesInputBody, LongSupplier)}, but leaving out the types
+    /// whose name `created` rejects, the way a server that will not create a type answers.
+    static List<ServerDataType> echo(CreateAnalysisDataTypesInputBody request, LongSupplier nextId,
+                                     Predicate<String> created) {
         return request.getDataTypes().stream()
-                .map(entry -> {
-                    Object instance = entry.getActualInstance();
-                    return new ServerDataType(nextId.getAsLong(), string(instance, "getNamespace"),
-                            string(instance, "getName"),
-                            ServerDataType.Kind.fromJson(string(instance, "getKind")),
-                            null, "USER", false, null, null, null);
-                })
+                .map(entry -> (Object) entry.getActualInstance())
+                .filter(instance -> created.test(string(instance, "getName")))
+                .map(instance -> new ServerDataType(nextId.getAsLong(), string(instance, "getNamespace"),
+                        string(instance, "getName"),
+                        ServerDataType.Kind.fromJson(string(instance, "getKind")),
+                        null, "USER", false, null, null, null))
                 .toList();
     }
 
