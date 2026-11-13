@@ -51,6 +51,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 /**
  * CorePlugin for accessing the RevEng.AI Platform
@@ -92,6 +93,13 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
 	private PluginTool tool;
 
+	/// Failed analyses whose error has been shown, so each failure is reported once while the program is open
+	private final Set<GhidraRevengService.ProgramWithID> reportedErrors = ConcurrentHashMap.newKeySet();
+
+	/// How many of the last log lines the error dialog shows
+	static final int ERROR_LOG_TAIL_LINES = 15;
+	/// Longer log lines are cut, so one line cannot stretch the dialog
+	static final int ERROR_LOG_LINE_LENGTH = 200;
 
 	public AnalysisManagementPlugin(PluginTool tool) {
 		super(tool);
@@ -212,22 +220,7 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 							"Detach",
 							OptionDialog.QUESTION_MESSAGE);
 					if (result == OptionDialog.YES_OPTION) {
-						// For now this is the only place to trigger the removal of the association
-						// If this changes, the RevEngAIAnalysisStatusChanged event should be changed to accommodate
-						// this kind of event
-						// Stop the background work tied to this analysis first, so none of it runs against the
-						// association while it is being removed, or later against a different analysis.
-						localEditSyncService.detach(program);
-						if (autoUnstripSyncService.stopPolling(knownProgram.get().analysisID())) {
-							var message = "RevEng.AI: stopped waiting for auto-unstrip; the program was detached from "
-									+ displayText + ".";
-							tool.getService(ReaiLoggingService.class).info(message);
-							tool.setStatusInfo(message);
-						}
-						program.withTransaction("Undo binary association", () -> revengService.removeProgramAssociation(program));
-
-						// Refresh action states after detaching
-                        tool.contextChanged(null);
+						detach(knownProgram.get());
 					}
 
 				})
@@ -301,6 +294,30 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                 .buildAndInstall(tool);
 	}
 
+	/// Remove the program's association with its analysis. The Detach action and the analysis error dialog
+	/// both end here, so they do the same thing.
+	private void detach(GhidraRevengService.ProgramWithID knownProgram) {
+		var program = knownProgram.program();
+		var displayText = "analysis " + knownProgram.analysisID().id();
+		// For now these are the only places to trigger the removal of the association
+		// If this changes, the RevEngAIAnalysisStatusChanged event should be changed to accommodate
+		// this kind of event
+		// Stop the background work tied to this analysis first, so none of it runs against the
+		// association while it is being removed, or later against a different analysis.
+		localEditSyncService.detach(program);
+		if (autoUnstripSyncService.stopPolling(knownProgram.analysisID())) {
+			var message = "RevEng.AI: stopped waiting for auto-unstrip; the program was detached from "
+					+ displayText + ".";
+			tool.getService(ReaiLoggingService.class).info(message);
+			tool.setStatusInfo(message);
+		}
+		program.withTransaction("Undo binary association", () -> revengService.removeProgramAssociation(program));
+		reportedErrors.remove(knownProgram);
+
+		// Refresh action states after detaching
+		tool.contextChanged(null);
+	}
+
     @Override
     protected void programOpened(Program program) {
         super.programOpened(program);
@@ -351,9 +368,13 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
 
                             case Error -> {
-                                // The analysis failed on the server side
-                                Msg.showError(AnalysisManagementPlugin.this, null, "Analysis Error",
-                                        "The RevEng.AI analysis for the program " + knownProgram.get() + " is in error state on the server side.");
+                                // The analysis failed on the server side. Reported through the event, so it is
+                                // shown the same way as a failure seen while waiting, see processEvent
+                                tool.firePluginEvent(
+                                        new RevEngAIAnalysisStatusChangedEvent(
+                                                "programOpened",
+                                                knownProgram.get(),
+                                                status));
                             }
                             case Unknown -> {
                                 // Not waited on: an unrecognised status might never change into one that ends the wait
@@ -388,6 +409,8 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
             revengService.getKnownProgram(program)
                     .ifPresent(known -> autoUnstripSyncService.stopPolling(known.analysisID()));
         }
+        // Reopening a program with a failed analysis reports the failure again
+        reportedErrors.removeIf(reported -> reported.program() == program);
     }
 
     @Override
@@ -413,6 +436,8 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
 
                 // If the analysis is complete, we refresh the function signatures from the server
                 loadAnalysisResults(analysisEvent.getProgramWithBinaryID());
+            } else if (analysisEvent.getStatus() == AnalysisStatus.Error) {
+                reportAnalysisError(analysisEvent.getProgramWithBinaryID());
             }
         }
     }
@@ -438,6 +463,34 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                     Msg.error(AnalysisManagementPlugin.this, "Error registering finished analysis for program " + program, e);
                     reportFailedLoad(program, loadFailedMessage(program, e), e);
                 }
+            }
+        }, 0);
+    }
+
+    /// Tell the user that the analysis failed on the server, with the end of its log, and offer to detach it so
+    /// they can create a new analysis or attach to another one. Shown once per failure while the program is open.
+    private void reportAnalysisError(GhidraRevengService.ProgramWithID failed) {
+        if (!reportedErrors.add(failed)) {
+            return;
+        }
+        Msg.info(this, "Received analysis error event for " + failed);
+        // Events arrive on the Swing thread, and fetching the log is a request
+        tool.execute(new Task("Fetch RevEng.AI analysis log", false, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                var fetchedLogs = fetchAnalysisLog(failed);
+                var logs = fetchedLogs != null ? fetchedLogs : analysisLogComponent.getStoredLogs(failed.program());
+                var message = analysisErrorMessage(failed.analysisID().id(), failed.program().getName(),
+                        logTail(logs, ERROR_LOG_TAIL_LINES, ERROR_LOG_LINE_LENGTH));
+                tool.getService(ReaiLoggingService.class).error(
+                        "RevEng.AI: analysis %d failed on the server".formatted(failed.analysisID().id()));
+                SwingUtilities.invokeLater(() -> {
+                    if (fetchedLogs != null) {
+                        // Show the same log in the panel, e.g. when the failure was found on opening the program
+                        analysisLogComponent.consumeLogs(fetchedLogs, failed);
+                    }
+                    offerDetachAfterError(failed, message);
+                });
             }
         }, 0);
     }
@@ -484,6 +537,66 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
     private static String loadCancelledMessage(GhidraRevengService.ProgramWithID program) {
         return "Loading the results of RevEng.AI analysis %d into %s was cancelled"
                 .formatted(program.analysisID().id(), program.program().getName());
+    }
+
+    /// The analysis log, or null when it could not be fetched
+    private String fetchAnalysisLog(GhidraRevengService.ProgramWithID failed) {
+        try {
+            return revengService.getAnalysisLog(failed.analysisID());
+        } catch (Exception e) {
+            // The log only adds detail; the failure is reported with what was received while waiting
+            Msg.warn(this, "Could not fetch the log of failed analysis " + failed, e);
+            return null;
+        }
+    }
+
+    private void offerDetachAfterError(GhidraRevengService.ProgramWithID failed, String message) {
+        if (!isStillAttached(failed)) {
+            // Closed or detached while the log was fetched: there is nothing left to offer
+            return;
+        }
+        var choice = OptionDialog.showOptionNoCancelDialog(
+                tool.getToolFrame(),
+                ReaiPluginPackage.WINDOW_PREFIX + "Analysis failed",
+                message,
+                "Detach",
+                "Keep attached",
+                OptionDialog.ERROR_MESSAGE);
+        // The dialog is modal, but check again: the association is what Detach removes
+        if (choice == OptionDialog.OPTION_ONE && isStillAttached(failed)) {
+            detach(failed);
+        }
+    }
+
+    private boolean isStillAttached(GhidraRevengService.ProgramWithID failed) {
+        return !failed.program().isClosed()
+                && revengService.getKnownProgram(failed.program()).filter(failed::equals).isPresent();
+    }
+
+    /// The last {@code maxLines} non-blank lines of the log, each cut to {@code maxLineLength}; empty when
+    /// there is no log
+    static String logTail(String logs, int maxLines, int maxLineLength) {
+        if (logs == null || logs.isBlank()) {
+            return "";
+        }
+        var lines = logs.lines().map(String::stripTrailing).filter(line -> !line.isBlank()).toList();
+        return lines.subList(Math.max(0, lines.size() - maxLines), lines.size()).stream()
+                .map(line -> line.length() <= maxLineLength ? line : line.substring(0, maxLineLength) + "...")
+                .collect(Collectors.joining("\n"));
+    }
+
+    static String analysisErrorMessage(int analysisId, String programName, String logTail) {
+        var message = new StringBuilder("The RevEng.AI analysis %d of %s failed on the server."
+                .formatted(analysisId, programName));
+        if (logTail.isEmpty()) {
+            message.append("\n\nNo analysis log is available.");
+        } else {
+            message.append("\n\nEnd of the analysis log:\n").append(logTail);
+        }
+        message.append("\n\nDetach the program to create a new analysis or attach to an existing one. "
+                + "Keep it attached to look into the failure with View in portal; you can detach it later from "
+                + ReaiPluginPackage.MENU_GROUP_NAME + " > Analysis > Detach.");
+        return message.toString();
     }
 
     static String unknownStatusOnOpenMessage(GhidraRevengService.ProgramWithID program) {

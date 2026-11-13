@@ -9,15 +9,20 @@ import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
 import ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisStatusChangedEvent;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.*;
+import docking.DefaultActionContext;
+import docking.widgets.OptionDialog;
 import ghidra.program.model.listing.Program;
 import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
+import javax.swing.JTextArea;
+
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
@@ -218,6 +223,162 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         AnalysisLogComponent logComponent = (AnalysisLogComponent) defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
         var trackedPrograms = (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
         assertFalse(trackedPrograms.containsKey(program));
+        // The wait ended in Error, which is reported
+        pressButtonByText(waitForDialogComponent(null, OptionDialog.class, 30_000), "Keep attached");
+    }
+
+    private static final String FAILED_ANALYSIS_LOGS = "Unpacking binary\nDisassembling\nFATAL: worker ran out of memory\n";
+
+    /// An analysis that always reports Error, with a log whose last line says why
+    private static class FailedAnalysisAPI extends UnimplementedAPI {
+        final AtomicInteger logCalls = new AtomicInteger();
+
+        @Override
+        public AnalysisStatus status(AnalysisID analysisID) {
+            return AnalysisStatus.Error;
+        }
+
+        @Override
+        public String getAnalysisLogs(AnalysisID analysisID) {
+            logCalls.incrementAndGet();
+            return FAILED_ANALYSIS_LOGS;
+        }
+    }
+
+    /// The error dialog, once the work that leads to it has run: the Queued event starts the wait (a task), the wait
+    /// fires the Error event (Swing), which starts the log fetch (a task), which shows the dialog (Swing). How many
+    /// rounds that takes varies between machines, so poll for the dialog; the limit only bounds a broken run.
+    private OptionDialog awaitErrorDialog() {
+        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
+        assertNotNull("the failed analysis should be reported", dialog);
+        return dialog;
+    }
+
+    private String logText(AnalysisLogComponent logComponent) {
+        return runSwing(() -> ((JTextArea) getInstanceField("textArea", logComponent)).getText());
+    }
+
+    /// An analysis started in the session that fails on the server is reported with the end of its log, and
+    /// Detach in that report frees the program for a new analysis, like the Detach action does
+    @Test
+    public void testErrorDuringSessionOffersDetach() throws Exception {
+        var tool = env.getTool();
+        var service = addMockedService(tool, new FailedAnalysisAPI());
+        env.addPlugin(AnalysisManagementPlugin.class);
+        var program = newX64Program().getProgram();
+        env.showTool(program);
+        // As StartAnalysisTask does: associate the program, then report the analysis as queued
+        var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
+        tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent("StartAnalysisTask", programWithID, AnalysisStatus.Queued));
+
+        var dialog = awaitErrorDialog();
+        assertTrue(dialog.getMessage(), dialog.getMessage().contains("analysis 7 of " + program.getName() + " failed"));
+        assertTrue(dialog.getMessage(), dialog.getMessage().contains("FATAL: worker ran out of memory"));
+        var context = new DefaultActionContext();
+        assertFalse(getAction(tool, "Create new").isEnabledForContext(context));
+
+        pressButtonByText(dialog, "Detach");
+        waitForSwing();
+
+        assertTrue(service.getKnownProgram(program).isEmpty());
+        assertTrue(getAction(tool, "Create new").isEnabledForContext(context));
+        assertTrue(getAction(tool, "Attach to existing").isEnabledForContext(context));
+        assertFalse(getAction(tool, "Detach").isEnabledForContext(context));
+
+        // The log panel says how the analysis ended instead of stopping at the last log line
+        AnalysisLogComponent logComponent = (AnalysisLogComponent) tool.getComponentProvider(AnalysisLogComponent.NAME);
+        var text = logText(logComponent);
+        assertTrue(text, text.contains("FATAL: worker ran out of memory"));
+        assertTrue(text, text.endsWith(AnalysisLogComponent.terminalStatusLine(AnalysisStatus.Error, 7)));
+    }
+
+    /// Keeping the failed analysis attached leaves the association alone, and the same failure is not reported again
+    @Test
+    public void testKeepAttachedReportsFailureOnce() throws Exception {
+        var tool = env.getTool();
+        var service = addMockedService(tool, new FailedAnalysisAPI());
+        env.addPlugin(AnalysisManagementPlugin.class);
+        var program = newX64Program().getProgram();
+        env.showTool(program);
+        var programWithID = service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
+        tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent("StartAnalysisTask", programWithID, AnalysisStatus.Queued));
+
+        pressButtonByText(awaitErrorDialog(), "Keep attached");
+        waitForSwing();
+        assertEquals(Optional.of(programWithID), service.getKnownProgram(program));
+
+        // The same failure reported again, e.g. by Check status or a repeated event
+        tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Error));
+        waitForSwing();
+        waitForTasks();
+        waitForSwing();
+        assertNull(getDialogComponent(OptionDialog.class));
+    }
+
+    /// A program reopened with an analysis that failed while Ghidra was closed gets the same single report
+    @Test
+    public void testReopenedFailedAnalysisIsReportedOnce() throws Exception {
+        var tool = env.getTool();
+        var api = new FailedAnalysisAPI();
+        var service = addMockedService(tool, api);
+        env.addPlugin(AnalysisManagementPlugin.class);
+        var program = newX64Program().getProgram();
+        service.registerAnalysisForProgram(program, new TypedApiInterface.AnalysisID(7));
+
+        env.showTool(program);
+        var dialog = waitForDialogComponent(null, OptionDialog.class, 30_000);
+        assertTrue(dialog.getMessage(), dialog.getMessage().contains("FATAL: worker ran out of memory"));
+        pressButtonByText(dialog, "Detach");
+        waitForSwing();
+        waitForTasks();
+
+        assertTrue(service.getKnownProgram(program).isEmpty());
+        assertNull(getDialogComponent(OptionDialog.class));
+        // Only the report fetched the log: nothing waits on an analysis that has already ended
+        assertEquals(1, api.logCalls.get());
+    }
+
+    @Test
+    public void testTerminalStatusText() {
+        assertEquals("RevEng.AI: analysis 3 completed.", AnalysisLogComponent.terminalStatusLine(AnalysisStatus.Complete, 3));
+        var error = AnalysisLogComponent.terminalStatusLine(AnalysisStatus.Error, 3);
+        assertTrue(error, error.contains("analysis 3 failed on the server"));
+        assertTrue(error, error.contains("Detach"));
+        assertNull(AnalysisLogComponent.terminalStatusLine(AnalysisStatus.Processing, 3));
+
+        assertEquals(AnalysisLogComponent.NO_LOGS, AnalysisLogComponent.withTerminalStatus(null, null));
+        assertEquals("a\nb", AnalysisLogComponent.withTerminalStatus("a\nb", null));
+        assertEquals("done", AnalysisLogComponent.withTerminalStatus("  ", "done"));
+        assertEquals("a\nb\n\ndone", AnalysisLogComponent.withTerminalStatus("a\nb\n", "done"));
+    }
+
+    /// A new analysis for the program clears how the previous one ended
+    @Test
+    public void testNewAnalysisClearsTerminalStatus() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Queued;
+            }
+        });
+        env.addPlugin(AnalysisManagementPlugin.class);
+        var program = newX64Program().getProgram();
+        env.showTool(program);
+        AnalysisLogComponent logComponent = (AnalysisLogComponent) tool.getComponentProvider(AnalysisLogComponent.NAME);
+        var finished = new GhidraRevengService.ProgramWithID(program, new TypedApiInterface.AnalysisID(3));
+        // Delivered to the log component directly: the plugin would load results for a Complete event
+        runSwing(() -> logComponent.processEvent(
+                new RevEngAIAnalysisStatusChangedEvent("Test", finished, AnalysisStatus.Complete)));
+        assertEquals(AnalysisLogComponent.terminalStatusLine(AnalysisStatus.Complete, 3), logText(logComponent));
+
+        var next = new GhidraRevengService.ProgramWithID(program, new TypedApiInterface.AnalysisID(4));
+        runSwing(() -> logComponent.processEvent(
+                new RevEngAIAnalysisStatusChangedEvent("Test", next, AnalysisStatus.Queued)));
+        assertEquals(AnalysisLogComponent.NO_LOGS, logText(logComponent));
+        TaskMonitorComponent taskMonitor = (TaskMonitorComponent) getInstanceField("taskMonitorComponent", logComponent);
+        taskMonitor.cancel();
+        waitForTasks();
     }
 
     /// An analysis reporting an unrecognised status on reopen is reported, not waited on
