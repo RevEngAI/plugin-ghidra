@@ -169,7 +169,8 @@ public class RejectedLocalEditsTest extends RevEngMockableHeadedIntegrationTest 
         rename(second, "second_name");
         waitForCondition(() -> api.renamed.size() == 2, "the earlier rename should follow the one that got through");
         assertEquals(Map.of(1L, "first_name_again", 2L, "second_name"), api.renamed);
-        assertFalse(marked(first));
+        // The mock records the rename inside the send, and the mark is cleared only once the send returns.
+        waitForCondition(() -> !marked(first), "the earlier rename should no longer be marked");
         waitForCondition(() -> !statusInfos.isEmpty(), "the edits that followed should be reported");
         assertTrue(statusInfos.get(0), statusInfos.get(0).contains("pushed 1 local edit"));
     }

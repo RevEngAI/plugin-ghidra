@@ -189,13 +189,26 @@ public class GhidraRevengService {
         // may have arrived. One transaction around the whole load is rolled back when any part of it fails, so the
         // program is left as it was, the load can be retried, and the undo history holds nothing to bring it back.
         var program = programWithID.program();
+        // Fetched before the transaction opens, so a Detach during the request does not join it
+        var functionInfo = api.getFunctionInfo(programWithID.analysisID());
+        requireStillAttached(programWithID);
         var transactionId = program.startTransaction("RevEng.AI: Load analysis results");
         boolean loaded = false;
         FunctionAssociation association;
         try {
-            association = associateFunctionInfo(programWithID);
+            association = associateFunctionInfo(programWithID, functionInfo);
             pullFunctionInfoFromAnalysis(association.analysedProgram(), monitor);
             monitor.checkCancelled();
+            if (!isStillAttached(programWithID)) {
+                // Detached during the pull. Its change to the options joined this transaction, so rolling back
+                // would undo the Detach too. Remove the function ids instead, so the program is not taken to
+                // be analysed by the analysis it has left.
+                if (!program.isClosed()) {
+                    clearFunctionAssociation(program);
+                }
+                loaded = true;
+                throw new DetachedDuringLoadException(programWithID);
+            }
             loaded = true;
         } finally {
             // A program closed during the load takes no more transactions, and must not hide why the load failed
@@ -207,9 +220,29 @@ public class GhidraRevengService {
         return association.analysedProgram();
     }
 
-    /// What {@link #associateFunctionInfo(ProgramWithID)} produced, with the summary to show once the
+    /// What {@link #associateFunctionInfo(ProgramWithID, List)} produced, with the summary to show once the
     /// rest of the load has succeeded too.
     private record FunctionAssociation(AnalysedProgram analysedProgram, String summary) {}
+
+    /// The program was detached from the analysis, or attached to another one, while its results were loading.
+    /// The program is left without that analysis' function ids.
+    public static class DetachedDuringLoadException extends RuntimeException {
+        public DetachedDuringLoadException(ProgramWithID programWithID) {
+            super("%s was detached from analysis %d while its results were loading"
+                    .formatted(programWithID.program().getName(), programWithID.analysisID().id()));
+        }
+    }
+
+    private boolean isStillAttached(ProgramWithID programWithID) {
+        return !programWithID.program().isClosed()
+                && getKnownProgram(programWithID.program()).filter(programWithID::equals).isPresent();
+    }
+
+    private void requireStillAttached(ProgramWithID programWithID) {
+        if (!isStillAttached(programWithID)) {
+            throw new DetachedDuringLoadException(programWithID);
+        }
+    }
 
     private ProgramWithID addAnalysisIDtoProgramOptions(Program program, TypedApiInterface.AnalysisID analysisID){
         var transactionId = program.startTransaction("Associate Binary ID with Program");
@@ -251,11 +284,9 @@ public class GhidraRevengService {
     ///
     /// Any association already on the program is replaced, so an earlier load that stopped part way does
     /// not block this one.
-    private FunctionAssociation associateFunctionInfo(ProgramWithID knownProgram) {
+    private FunctionAssociation associateFunctionInfo(ProgramWithID knownProgram, List<FunctionInfo> functionInfo) {
         var analysisID = knownProgram.analysisID();
         var program = knownProgram.program();
-        List<FunctionInfo> functionInfo = null;
-        functionInfo = api.getFunctionInfo(analysisID);
         var transactionID = program.startTransaction("Associate Function Info");
         clearFunctionAssociation(program);
 
@@ -1153,7 +1184,7 @@ public class GhidraRevengService {
     /// * the type signature of the function
     ///
     /// It assumes that the initial load already happened, i.e. the functions have an associated FunctionID already.
-    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID)}
+    /// The initial association happens in {@link #associateFunctionInfo(ProgramWithID, List)}
     ///
     public List<RenameResult> pullFunctionInfoFromAnalysis(AnalysedProgram analysedProgram, TaskMonitor monitor) {
         var transactionId = startServerTransaction(analysedProgram.program(), "RevEng.AI: Pull Function Info from Analysis");
