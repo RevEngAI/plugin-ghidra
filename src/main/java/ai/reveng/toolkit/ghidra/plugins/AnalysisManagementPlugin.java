@@ -351,31 +351,22 @@ public class AnalysisManagementPlugin extends ProgramPlugin {
                         }
                         switch (status) {
                             case Complete -> {
-                                tool.firePluginEvent(
-                                        new RevEngAIAnalysisStatusChangedEvent(
-                                                "programOpened",
-                                                knownProgram.get(),
-                                                status));
+                                new RevEngAIAnalysisStatusChangedEvent("programOpened", knownProgram.get(), status)
+                                        .fireLater(tool);
                             }
                             case Uploaded, Queued, Processing -> {
                                 // This is the same code as above, but it has the implicit assumption that someone
                                 /// Currently this is done by {@link AnalysisLogComponent#processEvent(RevEngAIAnalysisStatusChangedEvent)}
-                                tool.firePluginEvent(
-                                        new RevEngAIAnalysisStatusChangedEvent(
-                                                "programOpened",
-                                                knownProgram.get(),
-                                                status));
+                                new RevEngAIAnalysisStatusChangedEvent("programOpened", knownProgram.get(), status)
+                                        .fireLater(tool);
                             }
 
 
                             case Error -> {
                                 // The analysis failed on the server side. Reported through the event, so it is
                                 // shown the same way as a failure seen while waiting, see processEvent
-                                tool.firePluginEvent(
-                                        new RevEngAIAnalysisStatusChangedEvent(
-                                                "programOpened",
-                                                knownProgram.get(),
-                                                status));
+                                new RevEngAIAnalysisStatusChangedEvent("programOpened", knownProgram.get(), status)
+                                        .fireLater(tool);
                             }
                             case Unknown -> {
                                 // Not waited on: an unrecognised status might never change into one that ends the wait

@@ -75,11 +75,8 @@ public class StartAnalysisTask extends Task {
             loggingService.info(successMessage);
         }
 
-        tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(
-                "StartAnalysisTask",
-                programWithID,
-                AnalysisStatus.Queued)
-        );
+        new RevEngAIAnalysisStatusChangedEvent("StartAnalysisTask", programWithID, AnalysisStatus.Queued)
+                .fireLater(tool);
     }
 
     private void reportFailure(TaskMonitor monitor,
