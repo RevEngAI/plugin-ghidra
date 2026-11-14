@@ -9,7 +9,6 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
 import ai.reveng.toolkit.ghidra.plugins.AnalysisManagementPlugin;
-import docking.DialogComponentProvider;
 import docking.widgets.OptionDialog;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.plugintool.PluginTool;
@@ -18,7 +17,6 @@ import ghidra.util.task.Task;
 import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -119,18 +117,6 @@ public class DetachDuringAnalysisTest extends RevEngMockableHeadedIntegrationTes
         pressButtonByText(awaitDialog(OptionDialog.class), "Detach");
         waitForSwing();
         assertTrue(fixture.service().getKnownProgram(fixture.program()).isEmpty());
-    }
-
-    /// Polls for a dialog against this test's own deadline: the timeout that waitForDialogComponent takes is
-    /// ignored in favour of Ghidra's 2s default
-    private static <T extends DialogComponentProvider> T awaitDialog(Class<T> type) {
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-        T dialog;
-        while ((dialog = getDialogComponent(type)) == null && System.nanoTime() < deadline) {
-            sleep(DEFAULT_WAIT_DELAY);
-        }
-        assertNotNull("timed out waiting for " + type.getSimpleName(), dialog);
-        return dialog;
     }
 
     private static boolean hasFunctionIds(Program program) {

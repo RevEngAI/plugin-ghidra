@@ -84,8 +84,23 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
         while ((dialog = getDialogComponent(type)) == null && System.nanoTime() < deadline) {
             sleep(DEFAULT_WAIT_DELAY);
         }
+        if (dialog == null) {
+            // Only seen on CI so far; the stacks show where the work that leads to the dialog stopped
+            System.err.println("awaitDialog timed out: " + message + "\n" + threadDump());
+        }
         assertNotNull(message, dialog);
         return dialog;
+    }
+
+    private static String threadDump() {
+        var dump = new StringBuilder();
+        Thread.getAllStackTraces().forEach((thread, stack) -> {
+            dump.append('"').append(thread.getName()).append("\" ").append(thread.getState()).append('\n');
+            for (var frame : stack) {
+                dump.append("    at ").append(frame).append('\n');
+            }
+        });
+        return dump.toString();
     }
 
     /// Like waitForCondition, but against this test's own 30s deadline: Ghidra's default limit is about 2s, which
