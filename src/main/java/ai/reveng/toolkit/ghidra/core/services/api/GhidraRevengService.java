@@ -462,46 +462,98 @@ public class GhidraRevengService {
     }
 
     /// Push the local signature and variables of a function back to the portal.
-    public TypePushOutcome pushFunctionTypes(AnalysedProgram analysedProgram, Function function) throws ApiException {
+    ///
+    /// @throws UnresolvedDataTypesException if a type the function reaches could not be given an id,
+    ///                                      so its signature was held back
+    public TypePushOutcome pushFunctionTypes(AnalysedProgram analysedProgram, Function function)
+            throws ApiException, UnresolvedDataTypesException {
         if (analysedProgram.getIDForFunction(function).isEmpty()) {
             return TypePushOutcome.NOT_MATCHED;
         }
         // The function is known to the analysis, so the type pass below ran for it; only the
         // signature write can still decline.
-        return pushFunctionTypes(analysedProgram, List.of(function)) > 0
+        var push = pushFunctionTypes(analysedProgram, List.of(function));
+        var withheld = push.withheld().get(function);
+        if (withheld != null) {
+            throw withheld;
+        }
+        return push.signaturesWritten() > 0
                 ? TypePushOutcome.SIGNATURE_WRITTEN
                 : TypePushOutcome.TYPES_ONLY;
     }
 
-    /// Push the local signatures of several functions, and answer with how many the server took.
+    /// What a push of several functions' types achieved.
+    ///
+    /// @param signaturesWritten how many signatures the portal took
+    /// @param withheld          the functions whose signature was not sent because a type they reach
+    ///                          has no id, each with the reason; their edits have not gone up
+    public record TypePush(int signaturesWritten, Map<Function, UnresolvedDataTypesException> withheld) {}
+
+    /// Push the local signatures of several functions, and answer with how many the server took and
+    /// which were held back.
     ///
     /// The two halves of the write path compose here, and only here. Data-type management is a
     /// batch affair — the union of everything the functions reach is resolved against the analysis'
     /// catalogue and created where it is missing, in one pass — while a signature is written one
     /// function at a time. Running the type pass once for the whole set is the point of keeping the
     /// two apart: the alternative re-resolves the same closure per function.
-    public int pushFunctionTypes(AnalysedProgram analysedProgram, Collection<Function> functions) throws ApiException {
+    ///
+    /// Each function's closure is capped on its own and only the union is handed to the type pass,
+    /// so how many functions share a batch does not decide which of them get ids. A function that
+    /// still reaches a type without one is not sent at all: its signature, or a struct it depends
+    /// on, would otherwise go up with a null type and erase what the portal holds.
+    public TypePush pushFunctionTypes(AnalysedProgram analysedProgram, Collection<Function> functions)
+            throws ApiException {
         Map<Function, TypedApiInterface.FunctionID> known = new LinkedHashMap<>();
         for (Function function : functions) {
             analysedProgram.getIDForFunction(function)
                     .ifPresent(withId -> known.put(function, withId.functionID()));
         }
         if (known.isEmpty()) {
-            return 0;
+            return new TypePush(0, Map.of());
         }
 
-        List<DataType> roots = new ArrayList<>();
-        known.keySet().forEach(function -> roots.addAll(GhidraDataTypeEncoder.reachableTypes(function)));
-        var ids = analysisDataTypes().ensure(analysedProgram.analysisID(), roots);
+        Map<Function, List<DataType>> reachable = new LinkedHashMap<>();
+        List<DataType> union = new ArrayList<>();
+        for (Function function : known.keySet()) {
+            var types = GhidraDataTypeEncoder.reachableTypes(function);
+            reachable.put(function, types);
+            union.addAll(types);
+        }
+        var ids = GhidraDataTypeEncoder.Ids.of(analysisDataTypes().ensureTypes(analysedProgram.analysisID(), union));
 
         int pushed = 0;
+        Map<Function, UnresolvedDataTypesException> withheld = new LinkedHashMap<>();
         for (var entry : known.entrySet()) {
-            var signature = GhidraDataTypeEncoder.signatureOf(entry.getKey(), ids);
+            var function = entry.getKey();
+            var unresolved = GhidraDataTypeEncoder.unresolvedTypes(function, reachable.get(function), ids);
+            if (!unresolved.isEmpty()) {
+                withheld.put(function, new UnresolvedDataTypesException(unresolved,
+                        GhidraDataTypeEncoder.exceedsClosureLimit(reachable.get(function))));
+                continue;
+            }
+            var signature = GhidraDataTypeEncoder.signatureOf(function, ids);
             if (signatures().put(analysedProgram.analysisID(), entry.getValue(), signature)) {
                 pushed++;
             }
         }
-        return pushed;
+        return new TypePush(pushed, withheld);
+    }
+
+    /// Log the functions a backfill held back as one line: on a large binary there can be many.
+    private static void logWithheld(ReaiLoggingService log, Map<Function, UnresolvedDataTypesException> withheld) {
+        if (withheld.isEmpty()) {
+            return;
+        }
+        final int shown = 5;
+        String examples = withheld.entrySet().stream().limit(shown)
+                .map(entry -> "\"%s\" at %s (%s)".formatted(entry.getKey().getName(),
+                        entry.getKey().getEntryPoint(), entry.getValue().getMessage()))
+                .collect(java.util.stream.Collectors.joining("; "));
+        if (withheld.size() > shown) {
+            examples += "; and %d more".formatted(withheld.size() - shown);
+        }
+        log.warn("Did not push the types of %d function(s): %s".formatted(withheld.size(), examples));
     }
 
     /// Breakdown of a bidirectional analysis sync, shown to the user afterwards.
@@ -701,7 +753,7 @@ public class GhidraRevengService {
         var flush = new FlushTally();
         Map<Function, Address> renamed = markedFunctions(program, UnpushedEdits.Kind.NAME);
         sendIsolatingRejections(program, UnpushedEdits.Kind.NAME, renamed, flush,
-                functions -> pushFunctionRenames(analysedProgram, functions).size(),
+                functions -> new Sent(pushFunctionRenames(analysedProgram, functions).size(), Map.of()),
                 function -> "rename of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
 
         Map<Function, Address> retyped = markedFunctions(program, UnpushedEdits.Kind.TYPES);
@@ -714,11 +766,11 @@ public class GhidraRevengService {
             return unknown;
         });
         // A signature the portal has no extraction for is declined, but its types went up, which is
-        // all this push can do.
+        // all this push can do. One held back for want of a type id has not gone up, and stays marked.
         sendIsolatingRejections(program, UnpushedEdits.Kind.TYPES, retyped, flush,
                 functions -> {
-                    pushFunctionTypes(analysedProgram, functions);
-                    return functions.size();
+                    var push = pushFunctionTypes(analysedProgram, functions);
+                    return new Sent(functions.size() - push.withheld().size(), Map.copyOf(push.withheld()));
                 },
                 function -> "types of \"%s\" at %s".formatted(function.getName(), function.getEntryPoint()));
         return new LocalEditFlush(flush.pushed, flush.unsent, flush.unsentError, List.copyOf(flush.rejected));
@@ -734,8 +786,12 @@ public class GhidraRevengService {
     @FunctionalInterface
     private interface EditSender {
         /// Send the edits of these functions and answer with how many went up.
-        int send(List<Function> functions) throws Exception;
+        Sent send(List<Function> functions) throws Exception;
     }
+
+    /// @param pushed  how many edits went up
+    /// @param failed  the functions whose edit was held back without failing the rest, with why
+    private record Sent(int pushed, Map<Function, ? extends Exception> failed) {}
 
     /// The functions with a `kind` edit marked, each with the address it is marked at. A mark whose
     /// function is gone is cleared, since nothing is left to send.
@@ -765,8 +821,7 @@ public class GhidraRevengService {
         }
         List<Function> functions = List.copyOf(marked.keySet());
         try {
-            flush.pushed += sender.send(functions);
-            marked.values().forEach(entryPoint -> UnpushedEdits.clear(program, kind, entryPoint));
+            settle(program, kind, marked, functions, sender.send(functions), flush, describe);
             return;
         } catch (Exception e) {
             if (PushFailure.of(e) != PushFailure.REJECTED || functions.size() == 1) {
@@ -776,10 +831,24 @@ public class GhidraRevengService {
         }
         for (Function function : functions) {
             try {
-                flush.pushed += sender.send(List.of(function));
-                UnpushedEdits.clear(program, kind, marked.get(function));
+                settle(program, kind, marked, List.of(function), sender.send(List.of(function)), flush, describe);
             } catch (Exception e) {
                 record(flush, List.of(function), e, describe);
+            }
+        }
+    }
+
+    /// Clear the marks of the `sent` edits that went up, and record the ones held back.
+    private static void settle(Program program, UnpushedEdits.Kind kind, Map<Function, Address> marked,
+                               List<Function> functions, Sent sent, FlushTally flush,
+                               java.util.function.Function<Function, String> describe) {
+        flush.pushed += sent.pushed();
+        for (Function function : functions) {
+            Exception failure = sent.failed().get(function);
+            if (failure == null) {
+                UnpushedEdits.clear(program, kind, marked.get(function));
+            } else {
+                record(flush, List.of(function), failure, describe);
             }
         }
     }
@@ -1013,9 +1082,11 @@ public class GhidraRevengService {
         }
         try {
             // One type pass over the union of every candidate's types, then a signature write each.
-            int pushed = pushFunctionTypes(analysedProgram, candidates);
+            var push = pushFunctionTypes(analysedProgram, candidates);
+            int pushed = push.signaturesWritten();
             log.info("Pushed local types for %d of %d functions the portal had none for"
                     .formatted(pushed, candidates.size()));
+            logWithheld(log, push.withheld());
             return pushed;
         } catch (ApiException e) {
             Msg.warn(this, "Failed to push local types during sync", e);
@@ -1574,7 +1645,7 @@ public class GhidraRevengService {
                         if (currentStatus != lastStatus[0]) {
                             lastStatus[0] = currentStatus;
                             if (tool != null) {
-                                tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
+                                new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus).fireLater(tool);
                             }
                         }
                         return switch (currentStatus) {
