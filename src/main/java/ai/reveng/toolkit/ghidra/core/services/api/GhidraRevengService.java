@@ -1645,7 +1645,7 @@ public class GhidraRevengService {
                         if (currentStatus != lastStatus[0]) {
                             lastStatus[0] = currentStatus;
                             if (tool != null) {
-                                tool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus));
+                                new RevEngAIAnalysisStatusChangedEvent(null, programWithID, currentStatus).fireLater(tool);
                             }
                         }
                         return switch (currentStatus) {
