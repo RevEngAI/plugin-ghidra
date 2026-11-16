@@ -66,6 +66,7 @@ jobs:
         run: $GHIDRA_INSTALL_DIR/support/sleigh $GHIDRA_INSTALL_DIR/Ghidra/Processors/x86/data/languages/x86-64.slaspec
 
       - name: Run tests
+        id: tests
         run: xvfb-run ./gradlew test
 
       - name: Upload test results
@@ -76,6 +77,7 @@ jobs:
           path: build/reports/tests/test/
 
       - name: Publish test report
+        id: report
         if: always()
         # Updating the check run right after creating it intermittently 404s, which failed jobs whose
         # tests had passed. Failing tests already fail "Run tests", so the report is display only.
@@ -85,3 +87,34 @@ jobs:
           name: Tests (Ghidra ${{ matrix.ghidra }})
           path: build/test-results/test/*.xml
           reporter: java-junit
+
+      - name: Complete a test report left in progress
+        # When the reporter's update 404s, the check run it created stays "in progress" for good, so the PR never
+        # shows all checks finished. Complete it with the outcome of the tests. Display only, like the report.
+        if: always() && steps.report.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_NAME: Tests (Ghidra ${{ matrix.ghidra }})
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CONCLUSION: ${{ steps.tests.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          summary="The test reporter could not attach the results to this check (HTTP 404). See the Run tests step and the test-results artifact."
+          # The check run may not be visible to the API yet, which is what made the reporter's update fail
+          for attempt in 1 2 3 4 5; do
+            ids=$(gh api -X GET "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs" \
+                -f check_name="$CHECK_NAME" -f filter=all \
+                --jq '.check_runs[] | select(.status != "completed") | .id') || ids=""
+            completed=true
+            for id in $ids; do
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$id" \
+                  -f status=completed -f conclusion="$CONCLUSION" \
+                  -f "output[title]=$CHECK_NAME" -f "output[summary]=$summary" >/dev/null || completed=false
+            done
+            if [ -n "$ids" ] && [ "$completed" = true ]; then
+              echo "Completed '$CHECK_NAME' ($ids) as $CONCLUSION"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::Could not find or complete an in-progress '$CHECK_NAME' check"
