@@ -190,6 +190,8 @@ public class PortalAnalysisIntegrationTest extends RevEngMockableHeadedIntegrati
                 ), false
         );
 
+        // The results are loaded in a background task
+        waitForTasks();
         waitForSwing();
         // Check that we received the results loaded event, i.e. other plugins would have been notified
         assertTrue(receivedResultsLoadedEvent.get());

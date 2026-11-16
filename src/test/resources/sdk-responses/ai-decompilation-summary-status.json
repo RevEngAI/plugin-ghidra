@@ -1,0 +1,1 @@
+{"status":"COMPLETED","step":"storing_summary","step_index":2,"steps_total":2,"percent":100,"step_share":0,"messages":[{"timestamp":"2026-11-13T10:05:02.114502Z","step":"summarising","level":"INFO","text":"Generating summary"},{"timestamp":"2026-11-13T10:05:06.870331Z","step":"storing_summary","level":"INFO","text":"Storing summary"}]}

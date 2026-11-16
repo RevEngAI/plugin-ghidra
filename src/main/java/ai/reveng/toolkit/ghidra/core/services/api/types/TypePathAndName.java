@@ -2,6 +2,8 @@ package ai.reveng.toolkit.ghidra.core.services.api.types;
 
 import ghidra.program.model.data.CategoryPath;
 
+import java.util.Arrays;
+
 /// A scoped type name split into its Ghidra {@link CategoryPath} and its leaf name.
 ///
 /// The server reports a type's scope in a `namespace` field, using `::` as the separator, e.g.
@@ -20,7 +22,10 @@ public record TypePathAndName(
     public static TypePathAndName fromString(String str){
         // split into path and name on "::"
         if (str.contains("::")) {
-            String[] pathPlusType = str.split("::");
+            String[] pathPlusType = Arrays.stream(str.split("::", -1)).filter(s -> !s.isEmpty()).toArray(String[]::new);
+            if (pathPlusType.length == 0) {
+                return new TypePathAndName("", new String[0]);
+            }
             var baseType = pathPlusType[pathPlusType.length - 1];
 
             String[] parts = new String[pathPlusType.length - 1];

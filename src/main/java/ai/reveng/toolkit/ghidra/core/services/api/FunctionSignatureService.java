@@ -40,11 +40,30 @@ public final class FunctionSignatureService {
     /// One function's signature together with the types it references.
     public record Resolved(BatchFunctionSignatureEntry entry, List<ServerDataType> dataTypes) {}
 
+    /// Whether the entry carries a signature worth applying: the server holds one, and it is more than
+    /// the placeholder described at {@link #isPlaceholder}.
+    public static boolean hasUsableSignature(BatchFunctionSignatureEntry entry) {
+        return Boolean.TRUE.equals(entry.getHasSignature()) && !isPlaceholder(entry);
+    }
+
+    /// Type extraction stores a signature for every function it reaches, including the ones Ghidra had
+    /// nothing for, and those come back as `undefined f(void)` with `has_signature` true: source SYSTEM,
+    /// no parameters, and a return type of data type id 0 — always Ghidra's `undefined` in an analysis'
+    /// type table — or none at all. Applying one erases whatever the function had locally, and counting
+    /// it as present stops the better local signature from being pushed. A real `void f(void)` returns
+    /// `void`, not `undefined`, so it is not mistaken for one.
+    public static boolean isPlaceholder(BatchFunctionSignatureEntry entry) {
+        Long returnType = entry.getReturnDataTypeId();
+        return entry.getSourceType() == BatchFunctionSignatureEntry.SourceTypeEnum.SYSTEM
+                && (entry.getParameters() == null || entry.getParameters().isEmpty())
+                && (returnType == null || returnType == 0L);
+    }
+
     /// The signature of a single function, or empty when the server holds none for it.
     public Optional<Resolved> get(FunctionID functionID) {
         FunctionSignatureBatch batch = getMany(List.of(functionID));
         return batch.items().stream()
-                .filter(entry -> Boolean.TRUE.equals(entry.getHasSignature()))
+                .filter(FunctionSignatureService::hasUsableSignature)
                 .findFirst()
                 .map(entry -> new Resolved(entry, batch.dataTypesFor(analysisOf(entry))));
     }

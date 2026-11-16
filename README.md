@@ -42,6 +42,25 @@ and use it for Binary Code Similarity to help you Reverse Engineer stripped bina
 
 ## Installation
 
+### Install script
+
+Close Ghidra, then run:
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/RevEngAI/plugin-ghidra/main/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/RevEngAI/plugin-ghidra/main/install.ps1 | iex
+```
+
+The script finds your Ghidra installs (asking which one if several), downloads the matching release, installs it and enables the plugins in the CodeBrowser.
+Set `GHIDRA_INSTALL_DIR` to target a specific install, or `REVENG_PLUGIN_VERSION` (e.g. `v1.1.2`) to pin a release.
+
+### Manual installation
+
 The builds for latest stable version of the RevEng.AI Ghidra plugin for common Ghidra versions can be downloaded from the [Releases](https://github.com/revengai/plugin-ghidra/releases/latest) page.
 
 ### Supported Ghidra versions

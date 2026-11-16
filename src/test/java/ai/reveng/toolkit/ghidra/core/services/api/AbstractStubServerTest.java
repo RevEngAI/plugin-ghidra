@@ -1,7 +1,5 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
@@ -19,17 +17,9 @@ import java.nio.charset.StandardCharsets;
 public abstract class AbstractStubServerTest extends AbstractGhidraHeadlessIntegrationTest {
 
     protected HttpServer server;
-    private ApiClient originalApiClient;
 
     @Before
     public void startStubServer() throws Exception {
-        // TypedApiImplementation mutates the ApiClient that Configuration holds as a process-global
-        // singleton (base path, stacked interceptors). The test task forks in parallel and runs
-        // several classes per fork, so without this save/restore one class leaks its client into
-        // whichever class runs next in the same fork.
-        originalApiClient = Configuration.getDefaultApiClient();
-        Configuration.setDefaultApiClient(new ApiClient());
-
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         configureStubs(server);
         server.start();
@@ -39,9 +29,6 @@ public abstract class AbstractStubServerTest extends AbstractGhidraHeadlessInteg
     public void stopStubServer() {
         if (server != null) {
             server.stop(0);
-        }
-        if (originalApiClient != null) {
-            Configuration.setDefaultApiClient(originalApiClient);
         }
     }
 

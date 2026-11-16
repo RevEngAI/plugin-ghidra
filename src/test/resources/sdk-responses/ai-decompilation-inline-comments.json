@@ -1,0 +1,1 @@
+{"task_status":"COMPLETED","inline_comments":[{"line":3,"comment":"Reject buffers too short to hold the 8-byte header."},{"line":6,"comment":"Skip the 4-byte magic and parse the length field."}]}

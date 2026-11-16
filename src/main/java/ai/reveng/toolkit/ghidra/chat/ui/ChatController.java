@@ -113,7 +113,7 @@ public class ChatController {
                     lastEventId = null;
                     setState(withTitle);
                 });
-            } catch (ChatServiceException e) {
+            } catch (ChatServiceException | RuntimeException e) {
                 log.warn("Failed to load conversation: " + e.getMessage());
             }
         });
@@ -245,7 +245,7 @@ public class ChatController {
                 }
                 service.stream(id, resumeFromEventId, stopped::get,
                         event -> runOnUi(() -> onStreamEvent(event)));
-            } catch (ChatServiceException e) {
+            } catch (ChatServiceException | RuntimeException e) {
                 if (!stopped.get()) {
                     runOnUi(() -> setState(ChatReducer.reduce(state, new ApiError(e.getMessage()))));
                 }

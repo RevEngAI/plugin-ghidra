@@ -1,22 +1,34 @@
 package ai.reveng;
 
 import ai.reveng.model.*;
+import ai.reveng.toolkit.ghidra.binarysimilarity.cmds.ApplyMatchCmd;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.AbstractFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
+import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
+import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
+import ai.reveng.toolkit.ghidra.core.services.sync.LocalEditSyncService;
 import ai.reveng.toolkit.ghidra.plugins.BinarySimilarityPlugin;
+import docking.AbstractErrDialog;
 import docking.DockingWindowManager;
 import ghidra.program.model.data.Undefined;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
-import ghidra.util.task.TaskMonitorComponent;
 import org.junit.Test;
 
 import javax.swing.*;
+import generic.theme.GColor;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.FunctionSignatureBatch;
@@ -51,7 +63,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         // Create and show the dialog
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -98,7 +110,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         // Create the dialog
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -133,7 +145,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -146,6 +158,47 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         assertNotNull("Assembly diff panel should exist", assemblyDiffPanel);
 
         // Close the dialog
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    public void testUserSubmittedDebugSymbolsAlwaysVisibleAndEnabledByParent() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JCheckBox debugSymbols = (JCheckBox) getInstanceField("debugSymbolsCheckBox", foundDialog);
+        JCheckBox userSubmitted = (JCheckBox) getInstanceField("userSubmittedDebugSymbolsCheckBox", foundDialog);
+
+        assertTrue(userSubmitted.isVisible());
+        assertFalse(userSubmitted.isEnabled());
+
+        setToggleButtonSelected(debugSymbols, true);
+        assertTrue(userSubmitted.isVisible());
+        assertTrue(userSubmitted.isEnabled());
+
+        setToggleButtonSelected(debugSymbols, false);
+        assertTrue(userSubmitted.isVisible());
+        assertFalse(userSubmitted.isEnabled());
+
         close(foundDialog);
         waitForSwing();
     }
@@ -167,7 +220,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -175,13 +228,66 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
         assertNotNull("Dialog should be shown", foundDialog);
 
-        // Verify the initial status message
-        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
-        assertNotNull("Status label should exist", statusLabel);
-        assertTrue("Status should show ready message",
-                statusLabel.getText().contains("Ready"));
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+        waitForCondition(() -> resultsTable.getRowCount() > 0,
+                "Results table should populate without pressing Match Functions");
+        assertTrue("Function matching API should have been called", mockApi.functionMatchingCalled);
+        assertEquals("Should request 5 results per function",
+                Long.valueOf(5L), mockApi.lastMatchingRequest.getResultsPerFunction());
 
         // Close the dialog
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testPlatformAndArchitectureTogglesAreSentAsMatchFilters() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        // The automatic run on open leaves platform, architecture and user unfiltered, i.e. any
+        waitForCondition(() -> mockApi.lastMatchingRequest != null, "Matching should start when the dialog opens");
+        MatchFilters initialFilters = mockApi.lastMatchingRequest.getFilters();
+        assertNull(initialFilters.getPlatforms());
+        assertNull(initialFilters.getArchitectures());
+        assertNull(initialFilters.getUserIds());
+        waitForTasks();
+
+        var platforms = (java.util.Map<MatchFilters.PlatformsEnum, JCheckBox>) getInstanceField("platformCheckBoxes", foundDialog);
+        var architectures = (java.util.Map<MatchFilters.ArchitecturesEnum, JCheckBox>) getInstanceField("architectureCheckBoxes", foundDialog);
+        setToggleButtonSelected(platforms.get(MatchFilters.PlatformsEnum.LINUX), true);
+        setToggleButtonSelected(architectures.get(MatchFilters.ArchitecturesEnum.ARM_64), true);
+
+        waitForMatchingIdle(foundDialog);
+        var firstRequest = mockApi.lastMatchingRequest;
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new match");
+        waitForTasks();
+
+        MatchFilters filters = mockApi.lastMatchingRequest.getFilters();
+        assertEquals(List.of(MatchFilters.PlatformsEnum.LINUX), filters.getPlatforms());
+        assertEquals(List.of(MatchFilters.ArchitecturesEnum.ARM_64), filters.getArchitectures());
+        assertNull(filters.getUserIds());
+
         close(foundDialog);
         waitForSwing();
     }
@@ -203,7 +309,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         // Show dialog without blocking, then wait for it to appear
@@ -211,16 +317,17 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
         assertNotNull("Dialog should be shown", foundDialog);
 
-        // Get the results table before clicking
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
         assertNotNull("Results table should exist", resultsTable);
-        assertEquals("Results table should be empty initially", 0, resultsTable.getRowCount());
 
-        // Find and click the "Match Functions" button
+        // Find and click the "Match Functions" button once the automatic match on open is done
+        waitForMatchingIdle(foundDialog);
+        var firstRequest = mockApi.lastMatchingRequest;
         JButton matchButton = findButtonByText(foundDialog.getComponent(), "Match Functions");
         assertNotNull("Match Functions button should exist", matchButton);
 
         pressButton(matchButton);
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new match");
 
         // Wait for the API call to complete and results to be processed
         // The mock API returns COMPLETED status immediately, so we just need to wait for Swing
@@ -244,9 +351,8 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
                 "Status label should stop saying it is loading once matching has finished");
         assertTrue("The finished status should report the matches, was: " + statusLabel.getText(),
                 statusLabel.getText().contains("Matching complete"));
-        TaskMonitorComponent monitor =
-                (TaskMonitorComponent) getInstanceField("taskMonitorComponent", foundDialog);
-        assertFalse("The progress bar should not be left spinning", monitor.isVisible());
+        JProgressBar progressBar = (JProgressBar) getInstanceField("matchingProgressBar", foundDialog);
+        assertFalse("The progress bar should not be left spinning", progressBar.isVisible());
 
         // Close the dialog
         close(foundDialog);
@@ -275,7 +381,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         waitForSwing();
 
         FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
-            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, testFunction)
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
         );
 
         runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
@@ -284,6 +390,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
 
+        waitForMatchingIdle(foundDialog);
         pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
         waitForTasks();
         waitForSwing();
@@ -320,6 +427,260 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
 
         close(foundDialog);
         waitForSwing();
+    }
+
+    @Test
+    public void testSortBySimilarityAndConfidence() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new MultiMatchMockApi() {
+            @Override
+            public GetMatchesOutputBody getFunctionsMatches(List<Long> functionIds) {
+                var response = super.getFunctionsMatches(functionIds);
+                var matches = response.getMatches().get(0).getMatchedFunctions();
+                matches.get(0).setConfidence(0.0);
+                matches.get(2).setConfidence(null);
+                return response;
+            }
+        };
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+
+        waitForMatchingIdle(foundDialog);
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() == 3,
+                "Results table should hold all three mocked matches");
+
+        // Similarity: zeta 0.50, alpha 0.95, mid 0.72
+        runSwing(() -> resultsTable.getRowSorter().toggleSortOrder(1));
+        waitForSwing();
+        assertEquals("zeta_match", resultsTable.getValueAt(0, 0));
+        assertEquals("mid_match", resultsTable.getValueAt(1, 0));
+        assertEquals("alpha_match", resultsTable.getValueAt(2, 0));
+
+        // Confidence: zeta 0, alpha 0.95, mid null
+        runSwing(() -> resultsTable.getRowSorter().toggleSortOrder(2));
+        waitForSwing();
+        assertEquals("mid_match", resultsTable.getValueAt(0, 0));
+        assertEquals("zeta_match", resultsTable.getValueAt(1, 0));
+        assertEquals("alpha_match", resultsTable.getValueAt(2, 0));
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    public void testSimilarityAndConfidenceCellsAreColorCoded() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new FunctionMatchingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+
+        waitForMatchingIdle(foundDialog);
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() > 0, "Results table should have rows");
+
+        // Similarity (1) and Confidence (2) hold BigDecimal values on a 0-100 scale
+        for (int column : new int[]{1, 2}) {
+            var renderer = runSwing(() -> resultsTable.getCellRenderer(0, column));
+            var high = runSwing(() -> renderer.getTableCellRendererComponent(
+                    resultsTable, new BigDecimal("99.93"), false, false, 0, column).getForeground());
+            assertEquals(new GColor("color.fg.reveng.similarity.low"), high);
+            var low = runSwing(() -> renderer.getTableCellRendererComponent(
+                    resultsTable, BigDecimal.ZERO, false, false, 0, column).getForeground());
+            assertEquals(new GColor("color.fg.reveng.similarity.critical"), low);
+        }
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    @Test
+    public void testRightClickOffersMatchedBinaryInPortal() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new MultiMatchMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JTable resultsTable = (JTable) getInstanceField("resultsTable", foundDialog);
+        assertNull(invokeInstanceMethod("getSelectedMatchedAnalysisID", foundDialog));
+
+        waitForMatchingIdle(foundDialog);
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForTasks();
+        waitForSwing();
+        waitForCondition(() -> resultsTable.getRowCount() == 3,
+                "Results table should hold all three mocked matches");
+
+        var cell = runSwing(() -> resultsTable.getCellRect(1, 0, true));
+        var rightClick = new java.awt.event.MouseEvent(resultsTable, java.awt.event.MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(), java.awt.event.InputEvent.BUTTON3_DOWN_MASK,
+                cell.x + 1, cell.y + 1, 1, true, java.awt.event.MouseEvent.BUTTON3);
+        runSwing(() -> resultsTable.dispatchEvent(rightClick));
+        var popup = (JPopupMenu) getInstanceField("portalPopup", foundDialog);
+        assertTrue("Right click should show the portal popup", runSwing(popup::isVisible));
+        assertTrue("Right click should not reach the docking popup", rightClick.isConsumed());
+        assertEquals("Right click should select the row under the cursor", 1, resultsTable.getSelectedRow());
+        var item = (JMenuItem) popup.getComponent(0);
+        assertEquals("Open in Portal", item.getText());
+        assertTrue(item.isEnabled());
+        assertEquals(new TypedApiInterface.AnalysisID(12345),
+                invokeInstanceMethod("getSelectedMatchedAnalysisID", foundDialog));
+        runSwing(() -> popup.setVisible(false));
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    /**
+     * Transferring names must rename on the portal exactly the functions it renamed locally, once each.
+     * A function whose name the analyst set is skipped locally, so pushing the matched name for it would
+     * leave the portal holding a different name from the one kept in Ghidra.
+     */
+    @Test
+    public void testTransferOnlyRenamesOnThePortalWhatItAppliedLocally() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new RenameRecordingMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var otherFunction = builder.createEmptyFunction("other_function", "0x2000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        var program = analysedProgram.program();
+        env.showTool(program);
+        waitForSwing();
+
+        // A name the analyst set is kept, so nothing about its match may reach the portal
+        program.withTransaction("analyst rename", () -> testFunction.setName("analyst_name", SourceType.USER_DEFINED));
+        program.withTransaction("analysis name", () -> otherFunction.setName("analysis_name", SourceType.ANALYSIS));
+
+        var sync = new LocalEditSyncService(service, tool.getService(ReaiLoggingService.class), (message, warning) -> {});
+        sync.attach(program);
+        try {
+            FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+            );
+            runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+            var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+            waitForMatchingIdle(foundDialog);
+
+            var matches = List.of(
+                    matchFor(testFunction, 100, "similar_function"),
+                    matchFor(otherFunction, 101, "other_similar_function"));
+            var applied = invokeInstanceMethod("applyMatches", foundDialog,
+                    new Class<?>[] {List.class, ApplyMatchCmd.Transfer.class},
+                    new Object[] {matches, ApplyMatchCmd.Transfer.NAME});
+            assertEquals(1, applied);
+            assertEquals("analyst_name", testFunction.getName());
+            assertEquals("other_similar_function", otherFunction.getName());
+
+            waitForCondition(() -> !mockApi.renameRequests.isEmpty(), "the applied rename should be pushed");
+            Thread.sleep(1000);
+            assertEquals("Each applied rename should be pushed once: " + mockApi.renameRequests,
+                    1, mockApi.renameRequests.size());
+            var pushed = mockApi.renameRequests.get(0).getFunctions();
+            assertEquals(1, pushed.size());
+            assertEquals(Long.valueOf(101), pushed.get(0).getFunctionId());
+            assertEquals("other_similar_function", pushed.get(0).getNewName());
+
+            close(foundDialog);
+            waitForSwing();
+        } finally {
+            sync.dispose();
+        }
+    }
+
+    private static GhidraFunctionMatchWithSignature matchFor(ghidra.program.model.listing.Function function,
+                                                             long functionId, String matchedName) {
+        return new GhidraFunctionMatchWithSignature(function, new FunctionMatch(
+                new TypedApiInterface.FunctionID(functionId),
+                new TypedApiInterface.FunctionID(functionId + 100),
+                matchedName,
+                matchedName,
+                "libc.so",
+                new TypedApiInterface.BinaryHash("1".repeat(64)),
+                false,
+                BigDecimal.valueOf(0.95),
+                BigDecimal.valueOf(0.87),
+                null), null);
+    }
+
+    /// Knows a second function, and records the renames sent to the portal.
+    static class RenameRecordingMockApi extends FunctionMatchingMockApi {
+        final List<BatchRenameInputBody> renameRequests = new CopyOnWriteArrayList<>();
+
+        @Override
+        public List<FunctionInfo> getFunctionInfo(TypedApiInterface.AnalysisID analysisID) {
+            return List.of(
+                    new FunctionInfo(new TypedApiInterface.FunctionID(100), "test_function", "test_function", 0x1000L, 50),
+                    new FunctionInfo(new TypedApiInterface.FunctionID(101), "other_function", "other_function", 0x2000L, 50));
+        }
+
+        @Override
+        public long batchRenameFunctions(BatchRenameInputBody request) {
+            renameRequests.add(request);
+            return request.getFunctions().size();
+        }
     }
 
     /**
@@ -366,6 +727,244 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
     }
 
+    /// The function-level dialog matches by itself when it opens, and its Match button reads Cancel while
+    /// a run is going. Waits for that first run to finish, so that pressing Match starts a new run rather
+    /// than, on a slow machine, cancelling the one that started after the button was looked up.
+    /// A status the SDK does not model (the server's CANCELLED) ends the wait instead of polling for ever
+    @Test
+    public void testUnrecognisedMatchingStatusStopsPolling() throws Exception {
+        var tool = env.getTool();
+        var statusPolls = new java.util.concurrent.atomic.AtomicInteger();
+        var mockApi = new FunctionMatchingMockApi() {
+            @Override
+            public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
+                super.startFunctionsMatching(request);
+                var response = new StartMatchingOutputBody();
+                response.setStatus(StartMatchingOutputBody.StatusEnum.RUNNING);
+                return response;
+            }
+
+            @Override
+            public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) {
+                statusPolls.incrementAndGet();
+                var response = new GetMatchesStatusOutputBody();
+                response.setStatus(GetMatchesStatusOutputBody.StatusEnum.fromValue("CANCELLED"));
+                return response;
+            }
+        };
+        var service = addMockedService(tool, mockApi);
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+                new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        JButton matchButton = (JButton) getInstanceField("matchButton", foundDialog);
+        // The dialog sleeps a 2s poll interval before it sees CANCELLED, as long as waitForCondition's own limit
+        awaitCondition(() -> runSwing(() -> statusLabel.getText().equals("Stopped waiting for function matching")
+                        && getInstanceField("matchingThread", foundDialog) == null
+                        && matchButton.getText().equals("Match Functions")),
+                "An unrecognised status should end the matching run");
+        JTextArea errorArea = (JTextArea) getInstanceField("errorArea", foundDialog);
+        assertTrue(errorArea.getText(), errorArea.getText().contains("does not recognise"));
+        assertEquals(1, statusPolls.get());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    private void waitForMatchingIdle(FunctionLevelFunctionMatchingDialog dialog) {
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", dialog);
+        JButton matchButton = (JButton) getInstanceField("matchButton", dialog);
+        // Checked on the EDT: the run is marked finished and the button relabelled in one Swing update,
+        // which a check from the test thread can otherwise see half done
+        waitForCondition(() -> runSwing(() -> statusLabel.getText().startsWith("Matching complete")
+                        && getInstanceField("matchingThread", dialog) == null
+                        && matchButton.getText().equals("Match Functions")),
+                "The automatic match on open should finish");
+    }
+
+    /// A run that is cancelled and replaced must not reach the UI. Its thread, once its request came back,
+    /// used to hide the progress bar of the run that replaced it on the way out.
+    @Test
+    public void testCancelledRunDoesNotHideTheNextRunsProgress() throws Exception {
+        var tool = env.getTool();
+
+        var mockApi = new StillRunningMockApi();
+        var service = addMockedService(tool, mockApi);
+
+        env.addPlugin(BinarySimilarityPlugin.class);
+
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        FunctionLevelFunctionMatchingDialog dialog = runSwing(() ->
+            new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo(service, analysedProgram), testFunction)
+        );
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(FunctionLevelFunctionMatchingDialog.class);
+
+        JProgressBar progressBar = (JProgressBar) getInstanceField("matchingProgressBar", foundDialog);
+        JLabel statusLabel = (JLabel) getInstanceField("statusLabel", foundDialog);
+        // The first run's request is held by the mock, as a slow server would; while running, the Match button cancels
+        waitForCondition(() -> mockApi.lastMatchingRequest != null, "Matching should start when the dialog opens");
+        pressButton(findButtonByText(foundDialog.getComponent(), "Cancel"));
+        waitForSwing();
+        assertFalse("Cancelling should hide the progress bar", progressBar.isVisible());
+
+        var firstRequest = mockApi.lastMatchingRequest;
+        pressButton(findButtonByText(foundDialog.getComponent(), "Match Functions"));
+        waitForCondition(() -> mockApi.lastMatchingRequest != firstRequest, "Pressing Match Functions should start a new run");
+        waitForCondition(() -> statusLabel.getText().contains("step 2 of 4"),
+                "The step reported by the server should be shown");
+
+        // Only now does the cancelled run's request come back
+        mockApi.firstStartGate.countDown();
+        waitForCondition(() -> mockApi.firstStartReturned, "The cancelled run's request should return");
+        Thread.sleep(200);
+        waitForSwing();
+        assertTrue("The cancelled run must not hide the new run's progress bar", progressBar.isVisible());
+
+        close(foundDialog);
+        waitForSwing();
+    }
+
+    /// Reports matching as still running, on the second of four steps, so a run never finishes on its own.
+    /// The first request to start matching is held until {@link #firstStartGate} opens.
+    static class StillRunningMockApi extends FunctionMatchingMockApi {
+        final CountDownLatch firstStartGate = new CountDownLatch(1);
+        volatile boolean firstStartReturned = false;
+        private final AtomicInteger starts = new AtomicInteger();
+
+        @Override
+        public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
+            boolean first = starts.getAndIncrement() == 0;
+            super.startFunctionsMatching(request);
+            if (first) {
+                // Like a blocking HTTP call, cancelling (an interrupt) doesn't cut this short
+                boolean interrupted = false;
+                while (true) {
+                    try {
+                        firstStartGate.await();
+                        break;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                firstStartReturned = true;
+            }
+            var response = new StartMatchingOutputBody();
+            response.setStatus(StartMatchingOutputBody.StatusEnum.RUNNING);
+            response.setStep("Searching for similar functions");
+            response.setStepIndex(1L);
+            response.setStepsTotal(4L);
+            return response;
+        }
+
+        @Override
+        public GetMatchesStatusOutputBody getFunctionsMatchingStatus(List<Long> functionIds) {
+            var response = new GetMatchesStatusOutputBody();
+            response.setStatus(GetMatchesStatusOutputBody.StatusEnum.RUNNING);
+            response.setStep("Searching for similar functions");
+            response.setStepIndex(1L);
+            response.setStepsTotal(4L);
+            return response;
+        }
+    }
+
+    /// The plugin actions open the dialog through showWhenLoaded, which fetches the analysis details off the
+    /// Swing thread and builds the dialog with them
+    @Test
+    public void testAnalysisDetailsLoadOffTheSwingThreadBeforeTheDialogOpens() throws Exception {
+        var tool = env.getTool();
+        var fetchedOnSwingThread = new java.util.concurrent.atomic.AtomicReference<Boolean>();
+        var service = addMockedService(tool, new FunctionMatchingMockApi() {
+            @Override
+            public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                    throws ai.reveng.invoker.ApiException {
+                fetchedOnSwingThread.set(SwingUtilities.isEventDispatchThread());
+                return super.getAnalysisBasicInfo(analysisID);
+            }
+        });
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        runSwing(() -> AbstractFunctionMatchingDialog.showWhenLoaded(tool, analysedProgram,
+                basicInfo -> new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo, testFunction)), false);
+
+        var dialog = awaitDialog(FunctionLevelFunctionMatchingDialog.class);
+        assertEquals("the details should be fetched, and not on the Swing thread", Boolean.FALSE, fetchedOnSwingThread.get());
+        var loaded = (AnalysisBasicInfoOutputBody) getInstanceField("analysisBasicInfo", dialog);
+        assertEquals("test-model", loaded.getModelName());
+
+        close(dialog);
+        waitForSwing();
+    }
+
+    /// When the details cannot be fetched the user is told why, and no half-built dialog is shown
+    @Test
+    public void testFailedAnalysisDetailsShowAnErrorInsteadOfTheDialog() throws Exception {
+        setErrorGUIEnabled(true);
+        var tool = env.getTool();
+        var service = addMockedService(tool, new FunctionMatchingMockApi() {
+            @Override
+            public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                    throws ai.reveng.invoker.ApiException {
+                throw new ai.reveng.invoker.ApiException(503, "Service Unavailable");
+            }
+        });
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program("test_binary");
+        var testFunction = builder.createEmptyFunction("test_function", "0x1000", 50, Undefined.getUndefinedDataType(4));
+        var analysedProgram = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        env.showTool(analysedProgram.program());
+        waitForSwing();
+
+        var factoryCalls = new AtomicInteger();
+        runSwing(() -> AbstractFunctionMatchingDialog.showWhenLoaded(tool, analysedProgram, basicInfo -> {
+            factoryCalls.incrementAndGet();
+            return new FunctionLevelFunctionMatchingDialog(tool, analysedProgram, basicInfo, testFunction);
+        }), false);
+
+        var error = awaitDialog(AbstractErrDialog.class);
+        assertTrue(error.getMessage(), error.getMessage().contains("Failed to fetch the details of analysis 12345"));
+        assertTrue(error.getMessage(), error.getMessage().contains("HTTP 503"));
+        close(error);
+        waitForSwing();
+
+        assertEquals("no dialog should be built without the details", 0, factoryCalls.get());
+        assertNull(getDialogComponent(FunctionLevelFunctionMatchingDialog.class));
+    }
+
+    private static AnalysisBasicInfoOutputBody basicInfo(GhidraRevengService service,
+                                                         GhidraRevengService.AnalysedProgram program) {
+        try {
+            return service.getBasicDetailsForAnalysis(program.analysisID());
+        } catch (ai.reveng.invoker.ApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * Mock API implementation for function matching dialog tests.
      * Provides necessary responses for the dialog to function without a real server.
@@ -373,6 +972,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
     static class FunctionMatchingMockApi extends UnimplementedAPI {
         private final AnalysisStatus currentStatus = AnalysisStatus.Complete;
         boolean functionMatchingCalled = false;
+        volatile StartMatchingForFunctionsInputBody lastMatchingRequest;
 
         @Override
         public TypedApiInterface.AnalysisID analyse(AnalysisOptionsBuilder options) {
@@ -399,7 +999,8 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         }
 
         @Override
-        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID) {
+        public AnalysisBasicInfoOutputBody getAnalysisBasicInfo(TypedApiInterface.AnalysisID analysisID)
+                throws ai.reveng.invoker.ApiException {
             var basic = new AnalysisBasicInfoOutputBody();
             basic.setModelId(1L);
             basic.setModelName("test-model");
@@ -411,6 +1012,7 @@ public class FunctionLevelFunctionMatchingDialogTest extends RevEngMockableHeade
         @Override
         public StartMatchingOutputBody startFunctionsMatching(StartMatchingForFunctionsInputBody request) {
             functionMatchingCalled = true;
+            lastMatchingRequest = request;
             var response = new StartMatchingOutputBody();
             response.setStatus(StartMatchingOutputBody.StatusEnum.COMPLETED);
             return response;

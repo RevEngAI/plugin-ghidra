@@ -92,6 +92,20 @@ public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
                 functions.stream().map(FunctionInfo::functionMangledName).collect(Collectors.toList()));
     }
 
+    /**
+     * Staging sends mangled_name as "" for functions with no mangled symbol. Kept as-is, an empty
+     * name never starts with FUN_ or sub_, so the rename guard would let a placeholder through.
+     */
+    @Test
+    public void getFunctionInfo_treatsAnEmptyMangledNameAsAbsent() {
+        allFunctionIds = List.of(10L, EMPTY_MANGLED_ID, BLANK_MANGLED_ID);
+
+        List<FunctionInfo> functions = fetch();
+
+        assertEquals(List.of("mangled_10", "func_" + EMPTY_MANGLED_ID, "func_" + BLANK_MANGLED_ID),
+                functions.stream().map(FunctionInfo::functionMangledName).collect(Collectors.toList()));
+    }
+
     private List<FunctionInfo> fetch() {
         return api().getFunctionInfo(new TypedApiInterface.AnalysisID(ANALYSIS_ID));
     }
@@ -124,9 +138,21 @@ public class GetFunctionInfoPaginationTest extends AbstractStubServerTest {
 
     /** The id whose entry the stub serves without a mangled_name. */
     private static final long UNMANGLED_ID = 99L;
+    /** The ids whose entries carry an empty and a whitespace-only mangled_name. */
+    private static final long EMPTY_MANGLED_ID = 98L;
+    private static final long BLANK_MANGLED_ID = 97L;
 
     private static String functionJson(long id) {
-        String mangledName = id == UNMANGLED_ID ? "" : "\"mangled_name\":\"mangled_%d\",".formatted(id);
+        String mangledName;
+        if (id == UNMANGLED_ID) {
+            mangledName = "";
+        } else if (id == EMPTY_MANGLED_ID) {
+            mangledName = "\"mangled_name\":\"\",";
+        } else if (id == BLANK_MANGLED_ID) {
+            mangledName = "\"mangled_name\":\" \",";
+        } else {
+            mangledName = "\"mangled_name\":\"mangled_%d\",".formatted(id);
+        }
         return """
                 {"function_id":%d,"function_name":"func_%d",%s\
                 "function_vaddr":%d,"function_size":32,"binary_id":7,"debug":false,\

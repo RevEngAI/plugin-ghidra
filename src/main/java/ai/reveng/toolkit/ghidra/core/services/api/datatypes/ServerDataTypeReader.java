@@ -7,6 +7,7 @@ import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Reads the spec's {@code DataTypeEntry} JSON straight into the flattened {@link ServerDataType},
@@ -60,7 +61,9 @@ public final class ServerDataTypeReader implements JsonDeserializer<ServerDataTy
         }
         List<ServerDataType> entries = new ArrayList<>();
         for (JsonElement entry : array.getAsJsonArray()) {
-            entries.add(readEntry(entry));
+            if (!entry.isJsonNull()) {
+                entries.add(readEntry(entry));
+            }
         }
         return entries;
     }
@@ -108,7 +111,7 @@ public final class ServerDataTypeReader implements JsonDeserializer<ServerDataTy
             return List.of();
         }
         List<T> items = context.deserialize(array, type);
-        return items == null ? List.of() : items;
+        return items == null ? List.of() : items.stream().filter(Objects::nonNull).toList();
     }
 
     private static String string(JsonObject owner, String field) {

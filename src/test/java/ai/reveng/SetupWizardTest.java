@@ -179,6 +179,47 @@ public class SetupWizardTest extends RevEngMockableHeadedIntegrationTest {
                 tool.getOptions(REAI_OPTIONS_CATEGORY).getString(ReaiPluginPackage.OPTION_KEY_APIKEY, null));
     }
 
+    /**
+     * Hostnames without a scheme, with surrounding whitespace or trailing slashes are normalised before saving.
+     */
+    @Test
+    public void testHostnamesAreNormalised() throws Exception {
+        var tool = env.getTool();
+
+        var wizardState = new WizardState<SetupWizardStateKey>();
+        wizardState.put(SetupWizardStateKey.CREDENTIAL_VALIDATOR,
+                (CredentialValidator) apiInfo -> {});
+        var tempConfigFile = createTempDirectory("reai-wizard-test").toPath().resolve("reai.json");
+        wizardState.put(SetupWizardStateKey.CONFIGFILE, tempConfigFile.toString());
+
+        SetupWizardManager setupManager = new SetupWizardManager(wizardState, tool);
+        WizardManager wizardManager = new WizardManager("RevEng.AI: Configuration", true, setupManager);
+        runSwing(() -> wizardManager.showWizard(tool.getToolFrame()), false);
+        var dialog = waitForDialogComponent("RevEng.AI: Configuration");
+
+        JTextField apiKeyField = (JTextField) findComponentByName(dialog.getComponent(), "apiKey");
+        JTextField hostnameField = (JTextField) findComponentByName(dialog.getComponent(), "apiHostname");
+        JTextField portalField = (JTextField) findComponentByName(dialog.getComponent(), "portalHostname");
+        setText(apiKeyField, "test-api-key");
+        setText(hostnameField, "api.test.example.com:8443/ ");
+        setText(portalField, " https://portal.test.example.com/");
+
+        JButton validateButton = findButtonByText(dialog.getComponent(), "Validate Credentials");
+        pressButton(validateButton);
+        waitForTasks();
+        waitForSwing();
+
+        JButton finishButton = findButtonByText(dialog.getComponent(), "Finish");
+        assertTrue("Finish should be enabled after validation", finishButton.isEnabled());
+        pressButton(finishButton);
+        waitForSwing();
+
+        assertEquals("https://api.test.example.com:8443",
+                tool.getOptions(REAI_OPTIONS_CATEGORY).getString(ReaiPluginPackage.OPTION_KEY_HOSTNAME, null));
+        assertEquals("https://portal.test.example.com",
+                tool.getOptions(REAI_OPTIONS_CATEGORY).getString(ReaiPluginPackage.OPTION_KEY_PORTAL_HOSTNAME, null));
+    }
+
     @Test
     public void testUserCredentialsPanel() throws Exception {
         var tool = env.getTool();

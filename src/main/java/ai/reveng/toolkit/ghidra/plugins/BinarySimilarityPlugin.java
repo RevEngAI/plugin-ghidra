@@ -16,6 +16,7 @@
 package ai.reveng.toolkit.ghidra.plugins;
 
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.aidecompiler.AIDecompilationdWindow;
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.AbstractFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.BinaryLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.FunctionLevelFunctionMatchingDialog;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.functionmatching.SimilarFunctionsWindow;
@@ -134,8 +135,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                         return;
                     }
 
-                    var functionMatchingDialog = new BinaryLevelFunctionMatchingDialog(tool, knownProgram.get());
-                    tool.showDialog(functionMatchingDialog);
+                    AbstractFunctionMatchingDialog.showWhenLoaded(tool, knownProgram.get(),
+                            basicInfo -> new BinaryLevelFunctionMatchingDialog(tool, knownProgram.get(), basicInfo));
                 })
                 .buildAndInstall(tool);
 
@@ -181,7 +182,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
                     var apiService = getApiService();
-                    if (apiService == null) return false;
+                    if (apiService == null || context.getAddress() == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -196,8 +197,8 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 
-                    var functionMatchingDialog = new FunctionLevelFunctionMatchingDialog(tool, knownProgram, func);
-                    tool.showDialog(functionMatchingDialog);
+                    AbstractFunctionMatchingDialog.showWhenLoaded(tool, knownProgram,
+                            basicInfo -> new FunctionLevelFunctionMatchingDialog(tool, knownProgram, basicInfo, func));
                 })
                 .popupMenuPath(new String[] { "Match function" })
                 .popupMenuIcon(ReaiPluginPackage.REVENG_16)
@@ -209,7 +210,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				.withContext(ProgramLocationActionContext.class)
 				.enabledWhen(context -> {
 					var apiService = getApiService();
-					if (apiService == null) return false;
+					if (apiService == null || context.getAddress() == null) return false;
 					var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
 					return func != null
                             // Exclude thunks and external functions because we do not support them in the portal
@@ -243,7 +244,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
                 .withContext(ProgramLocationActionContext.class)
                 .enabledWhen(context -> {
                     var apiService = getApiService();
-                    if (apiService == null) return false;
+                    if (apiService == null || context.getAddress() == null) return false;
                     var func = context.getProgram().getFunctionManager().getFunctionContaining(context.getAddress());
                     return func != null
                             && apiService.getAnalysedProgram(context.getProgram()).isPresent();
@@ -283,7 +284,7 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 	}
 
 	private static String formatSyncSummary(GhidraRevengService.SyncSummary summary) {
-		return ("Synced %d matched function(s) with the portal.\n" +
+		var text = new StringBuilder(("Synced %d matched function(s) with the portal.\n" +
 				"Applied %d remote name(s) and %d remote signature(s); canonicalized %d and de-duplicated %d.\n" +
 				"Pushed %d name(s) and %d type set(s) back to the portal.").formatted(
 				summary.matchedFunctions(),
@@ -292,7 +293,21 @@ public class BinarySimilarityPlugin extends ProgramPlugin {
 				summary.canonicalizedNames(),
 				summary.dedupedNames(),
 				summary.pushedNames(),
-				summary.pushedTypeSets());
+				summary.pushedTypeSets()));
+		if (summary.pushedLocalEdits() > 0) {
+			text.append("\nPushed %d local edit(s) that had not reached the portal yet."
+					.formatted(summary.pushedLocalEdits()));
+		}
+		if (summary.failedLocalEdits() > 0) {
+			text.append("\n%d local edit(s) still could not be pushed; the RevEng.AI log says why, and they are kept for the next sync."
+					.formatted(summary.failedLocalEdits()));
+		}
+		if (summary.nameConflicts() > 0 || summary.signatureConflicts() > 0) {
+			text.append(("\n%d name(s) and %d signature(s) differ between Ghidra and the portal and were left "
+					+ "as they are locally; the RevEng.AI log lists them.")
+					.formatted(summary.nameConflicts(), summary.signatureConflicts()));
+		}
+		return text.toString();
 	}
 
 	@Override

@@ -231,4 +231,21 @@ public class ChatControllerTest {
 
         assertEquals("Prior chat", view.lastState.title());
     }
+
+    /// An unchecked failure in the worker must end the run, or Send stays disabled.
+    @Test
+    public void uncheckedWorkerFailureEndsTheRun() {
+        var service = new FakeChatService() {
+            @Override
+            public void sendMessage(String conversationId, String content, ConversationContext context) {
+                throw new IllegalStateException("boom");
+            }
+        };
+        var view = new RecordingView();
+        var controller = controller(service, view, new RecordingCallbacks());
+
+        controller.send("hello");
+
+        assertEquals("error", view.lastState.runStatus());
+    }
 }

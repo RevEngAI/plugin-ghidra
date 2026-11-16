@@ -1,5 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.components;
 
+import docking.widgets.textfield.HintTextField;
+
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -19,7 +21,7 @@ import java.util.function.Function;
  * Uses dynamic API-based collection fetching only.
  */
 public class SimpleAutocompleteField extends JPanel {
-    private JTextField textField;
+    private HintTextField textField;
     private JList<String> suggestionsList;
     private JScrollPane suggestionsScrollPane;
     private JPopupMenu suggestionsPopup;
@@ -45,7 +47,7 @@ public class SimpleAutocompleteField extends JPanel {
         setLayout(new BorderLayout());
 
         // Create text field
-        textField = new JTextField();
+        textField = new HintTextField("");
         textField.setPreferredSize(new Dimension(250, textField.getPreferredSize().height));
         add(textField, BorderLayout.CENTER);
 
@@ -232,6 +234,11 @@ public class SimpleAutocompleteField extends JPanel {
 
     public void setText(String text) {
         textField.setText(text);
+    }
+
+    /// Greyed-out text shown while the field is empty
+    public void setHint(String hint) {
+        textField.setHint(hint);
     }
 
     public void clear() {

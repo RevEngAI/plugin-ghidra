@@ -6,16 +6,17 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.GhidraFunctionMatchWithSignature;
 import ghidra.framework.plugintool.PluginTool;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
+import generic.theme.Gui;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.ArrayList;
 
 public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingDialog {
 
-    public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID) {
+    public BinaryLevelFunctionMatchingDialog(PluginTool tool, GhidraRevengService.AnalysedProgram programWithBinaryID,
+                                             AnalysisBasicInfoOutputBody analysisBasicInfo) {
         super(ReaiPluginPackage.WINDOW_PREFIX + "Function Matching", true,
-              tool.getService(GhidraRevengService.class), programWithBinaryID);
+              tool, programWithBinaryID, analysisBasicInfo);
     }
 
     @Override
@@ -46,24 +47,6 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
         return flattenMatches(revengService.getAnalysisFunctionMatches(analyzedProgram.analysisID()).getMatches());
     }
 
-    private MatchFilters buildMatchFilters() {
-        var filters = new MatchFilters();
-        filters.setCollectionIds(collectionSelector.getSelectedCollectionIds().stream()
-                .map(Integer::longValue).toList());
-        filters.setBinaryIds(binarySelector.getSelectedBinaryIds().stream()
-                .map(Integer::longValue).toList());
-
-        if (isDebugSymbolsEnabled()) {
-            var debugTypes = new ArrayList<String>();
-            debugTypes.add("SYSTEM");
-            if (isUserSubmittedDebugSymbolsEnabled()) {
-                debugTypes.add("USER");
-            }
-            filters.setDebugTypes(debugTypes);
-        }
-        return filters;
-    }
-
     @Override
     protected String[] getTableColumnNames() {
         return new String[]{"Virtual Address", "Function Name", "Matched Function", "Similarity", "Confidence", "Matched Hash", "Matched Binary"};
@@ -83,11 +66,6 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
     }
 
     @Override
-    protected String getTableTitle() {
-        return "Function matching results";
-    }
-
-    @Override
     protected int getTableSelectionMode() {
         return ListSelectionModel.MULTIPLE_INTERVAL_SELECTION;
     }
@@ -101,7 +79,7 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
                 public Component getTableCellRendererComponent(JTable table, Object value,
                                                                boolean isSelected, boolean hasFocus, int row, int column) {
                     Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-                    c.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+                    c.setFont(Gui.getFont("font.monospaced"));
                     return c;
                 }
             });
@@ -139,6 +117,11 @@ public class BinaryLevelFunctionMatchingDialog extends AbstractFunctionMatchingD
     @Override
     protected String getDialogDescription() {
         return "Match functions in this binary against previously seen samples";
+    }
+
+    @Override
+    protected String getFunctionFilterHint() {
+        return "Virtual address, function name, matched function name, hash or binary";
     }
 
     @Override

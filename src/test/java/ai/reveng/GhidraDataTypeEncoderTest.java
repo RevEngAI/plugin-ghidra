@@ -307,6 +307,21 @@ public class GhidraDataTypeEncoderTest extends ghidra.test.AbstractGhidraHeadles
                         new PointerDataType(new StructureDataType("Unknown", 4)), 1L, key -> null).isEmpty());
     }
 
+    /// A struct whose members' types are only partly resolved is withheld whole: writing it would
+    /// send the rest as null types and erase them on the portal.
+    @Test
+    public void aCompositeWithAnUnresolvedMemberProducesNoUpdate() {
+        var resolved = new StructureDataType("Resolved", 4);
+        var unresolved = new StructureDataType("Unresolved", 4);
+        var struct = new StructureDataType("Mixed", 0);
+        struct.add(resolved, "a", null);
+        struct.add(unresolved, "b", null);
+        TypeKey resolvedKey = GhidraDataTypeEncoder.keyOf(resolved);
+
+        assertTrue(GhidraDataTypeEncoder.updateEntry(struct, 1L,
+                key -> key.equals(resolvedKey) ? 2L : null).isEmpty());
+    }
+
     /// The namespace round-trips through the category path, which is how a type the plugin pulled
     /// from the server resolves back to the same entry instead of being created again.
     @Test

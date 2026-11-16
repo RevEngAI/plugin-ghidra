@@ -1,0 +1,1 @@
+{"status":"RUNNING","step":"matching","step_index":1,"steps_total":3,"percent":3,"step_share":85,"messages":[{"timestamp":"2026-11-13T09:29:41.007112Z","step":"resolving_analysis","level":"INFO","text":"Resolving function IDs for the analysis"},{"timestamp":"2026-11-13T09:29:41.552390Z","step":"matching","level":"INFO","text":"Searching for similar functions"}]}

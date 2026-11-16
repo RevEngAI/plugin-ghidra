@@ -1,7 +1,5 @@
 package ai.reveng.toolkit.ghidra.core.services.api;
 
-import ai.reveng.invoker.ApiClient;
-import ai.reveng.invoker.Configuration;
 import ai.reveng.toolkit.ghidra.chat.model.Conversations.ConversationReplay;
 import ai.reveng.toolkit.ghidra.chat.service.ChatServiceException;
 import ai.reveng.toolkit.ghidra.chat.service.ConversationsApiChatService;
@@ -31,9 +29,8 @@ public class ConversationReplayTest extends AbstractStubServerTest {
     }
 
     private ConversationReplay replay() throws ChatServiceException {
-        ApiClient client = Configuration.getDefaultApiClient();
-        client.setBasePath("http://127.0.0.1:" + server.getAddress().getPort());
-        return new ConversationsApiChatService().getConversation(UUID);
+        var client = api().apiClient();
+        return new ConversationsApiChatService(() -> client).getConversation(UUID);
     }
 
     @Test

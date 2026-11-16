@@ -4,6 +4,7 @@ import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponent
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import docking.widgets.label.GLabel;
 import ghidra.framework.plugintool.PluginTool;
+import generic.theme.GThemeDefaults.Colors.Messages;
 
 import javax.swing.*;
 
@@ -248,7 +249,7 @@ public class HelpDialog extends RevEngDialogComponentProvider {
 
         JLabel descLabel = new JLabel(htmlDescription);
         descLabel.setFont(descLabel.getFont().deriveFont(Font.ITALIC));
-        descLabel.setForeground(Color.GRAY);
+        descLabel.setForeground(Messages.HINT);
         descLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         descLabel.setBorder(BorderFactory.createEmptyBorder(0, 20, 0, 0));
 
@@ -266,7 +267,7 @@ public class HelpDialog extends RevEngDialogComponentProvider {
 
         JLabel label = new JLabel(htmlText);
         label.setFont(label.getFont().deriveFont(Font.ITALIC));
-        label.setForeground(Color.GRAY);
+        label.setForeground(Messages.HINT);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setBorder(BorderFactory.createEmptyBorder(0, paddingLeft, 5, 0));
         return label;

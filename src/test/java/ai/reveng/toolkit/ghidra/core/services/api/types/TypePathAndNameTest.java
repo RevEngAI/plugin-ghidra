@@ -22,4 +22,20 @@ public class TypePathAndNameTest {
         assertEquals("PlainName", path.name());
         assertArrayEquals("an unqualified name has no path segments", new String[]{}, path.path());
     }
+
+    @Test
+    public void fromString_ignoresEmptySegments() {
+        var path = TypePathAndName.fromString("a::::b");
+
+        assertEquals("b", path.name());
+        assertArrayEquals(new String[]{"a"}, path.path());
+    }
+
+    @Test
+    public void fromString_acceptsABareSeparator() {
+        var path = TypePathAndName.fromString("::");
+
+        assertEquals("", path.name());
+        assertArrayEquals(new String[]{}, path.path());
+    }
 }

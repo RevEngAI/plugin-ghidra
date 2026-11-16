@@ -247,8 +247,8 @@ public class UserCredentialsPanel extends AbstractMageJPanel<SetupWizardStateKey
 	public void updateStateObjectWithPanelInfo(WizardState<SetupWizardStateKey> state) {
         // Save the entered information into the state object
 		state.put(SetupWizardStateKey.API_KEY, tfApiKey.getText());
-		state.put(SetupWizardStateKey.HOSTNAME, tfApiHostname.getText());
-		state.put(SetupWizardStateKey.PORTAL_HOSTNAME, tfPortalHostname.getText());
+		state.put(SetupWizardStateKey.HOSTNAME, ApiInfo.normaliseHost(tfApiHostname.getText()));
+		state.put(SetupWizardStateKey.PORTAL_HOSTNAME, ApiInfo.normaliseHost(tfPortalHostname.getText()));
 		state.put(SetupWizardStateKey.CREDENTIALS_VALIDATED, credentialsValidated);
 	}
 

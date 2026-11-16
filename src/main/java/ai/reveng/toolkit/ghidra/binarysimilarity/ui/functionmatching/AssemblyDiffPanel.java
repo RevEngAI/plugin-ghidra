@@ -8,13 +8,17 @@ import com.github.difflib.DiffUtils;
 import com.github.difflib.patch.AbstractDelta;
 import com.github.difflib.patch.DeltaType;
 import com.github.difflib.patch.Patch;
+import generic.theme.GColor;
+import generic.theme.Gui;
 import ghidra.util.Msg;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
+import org.fife.ui.rsyntaxtextarea.Theme;
 import org.fife.ui.rtextarea.RTextScrollPane;
 
 import javax.swing.*;
 import java.awt.*;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -25,10 +29,10 @@ public class AssemblyDiffPanel extends JPanel {
     private static final String PLACEHOLDER_TEXT = "Select a row to view assembly comparison";
 
     // Diff highlighting colors
-    private static final Color DIFF_COLOR_CHANGED = new Color(255, 255, 180);  // Light yellow
-    private static final Color DIFF_COLOR_DELETED = new Color(255, 200, 200);  // Light red
-    private static final Color DIFF_COLOR_INSERTED = new Color(200, 255, 200); // Light green
-    private static final Color DIFF_COLOR_PLACEHOLDER = new Color(240, 240, 240); // Light gray
+    private static final Color DIFF_COLOR_CHANGED = new GColor("color.bg.reveng.diff.changed");
+    private static final Color DIFF_COLOR_DELETED = new GColor("color.bg.reveng.diff.deleted");
+    private static final Color DIFF_COLOR_INSERTED = new GColor("color.bg.reveng.diff.inserted");
+    private static final Color DIFF_COLOR_PLACEHOLDER = new GColor("color.bg.reveng.diff.placeholder");
 
     private final RSyntaxTextArea localAssemblyTextArea;
     private final RSyntaxTextArea matchedAssemblyTextArea;
@@ -76,6 +80,14 @@ public class AssemblyDiffPanel extends JPanel {
         textArea.setEditable(false);
         textArea.setLineWrap(false);
         textArea.setHighlightCurrentLine(false);
+        if (Gui.isDarkTheme()) {
+            try (var in = RSyntaxTextArea.class.getResourceAsStream("themes/dark.xml")) {
+                Theme.load(in).apply(textArea);
+            } catch (IOException e) {
+                Msg.warn(this, "Failed to load dark editor theme", e);
+            }
+        }
+        textArea.setFont(Gui.getFont("font.monospaced"));
         textArea.setText(PLACEHOLDER_TEXT);
         return textArea;
     }

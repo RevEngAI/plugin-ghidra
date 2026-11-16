@@ -23,6 +23,7 @@ import java.io.IOException;
 import javax.swing.*;
 import javax.swing.border.TitledBorder;
 
+import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import docking.DockingWindowManager;
 import docking.ReusableDialogComponentProvider;
 import docking.widgets.EmptyBorderButton;
@@ -33,7 +34,6 @@ import ghidra.util.*;
 import help.Help;
 import help.HelpService;
 import resources.Icons;
-import resources.ResourceManager;
 
 /**
  * A dialog that controls the panels for going to "Next" and "Previous" in some
@@ -221,40 +221,11 @@ public class WizardManager extends ReusableDialogComponentProvider implements Wi
 			}
 		});
 
-		// Load custom icon from resources if wizardIcon is null
-		if (wizardIcon == null) {
-			try {
-				wizardIcon = ResourceManager.loadImage("images/icon_50.png");
-			} catch (Exception e) {
-				// If loading fails, fall back to no icon
-				wizardIcon = null;
-			}
-		}
-
-		// Create title label without icon - icon will be handled separately
 		titleLabel = new GDLabel(INIT_TITLE);
-        // Make the title text bold
-        Font currentFont = titleLabel.getFont();
-        titleLabel.setFont(currentFont.deriveFont(Font.BOLD));
-
-		JPanel titlePanel = new JPanel(new BorderLayout());
-		titlePanel.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createEtchedBorder(),
-			BorderFactory.createEmptyBorder(5, 5, 5, 5)));
-
-		// Add icon to the left if available
+		JPanel titlePanel = RevEngDialogComponentProvider.createTitlePanel(titleLabel);
 		if (wizardIcon != null) {
-			JLabel iconLabel = new JLabel(wizardIcon);
-			titlePanel.add(iconLabel, BorderLayout.WEST);
+			titleLabel.setIcon(wizardIcon);
 		}
-
-		// Create a centered panel for the title text
-		JPanel centerPanel = new JPanel();
-		centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.X_AXIS));
-		centerPanel.add(Box.createHorizontalGlue());
-		centerPanel.add(titleLabel);
-		centerPanel.add(Box.createHorizontalGlue());
-
-		titlePanel.add(centerPanel, BorderLayout.CENTER);
 
 		mainJPanel = new JPanel(new BorderLayout());
 		mainJPanel.add(titlePanel, BorderLayout.NORTH);

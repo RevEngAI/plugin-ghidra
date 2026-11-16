@@ -8,10 +8,14 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.model.AnalysisRecordBody;
 import docking.DockingWindowManager;
+import ghidra.framework.Log4jErrorLogger;
+import ghidra.util.DefaultErrorLogger;
+import ghidra.util.Msg;
 import org.junit.Test;
 
 import javax.swing.*;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -108,6 +112,53 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     }
 
     @Test
+    public void testDoubleClickPicksAnalysisAndRightClickOffersPortal() throws Exception {
+        var tool = env.getTool();
+        var service = addMockedService(tool, new RecentAnalysesMockApi());
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        AtomicBoolean eventReceived = new AtomicBoolean(false);
+        tool.addEventListener(RevEngAIAnalysisStatusChangedEvent.class, e -> eventReceived.set(true));
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+        @SuppressWarnings("unchecked")
+        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<AnalysisRecordBody, ?>)
+                getInstanceField("recentAnalysesTableModel", foundDialog);
+        waitForTableModel(tableModel);
+        @SuppressWarnings("unchecked")
+        var table = ((ghidra.util.table.GhidraFilterTable<AnalysisRecordBody>)
+                getInstanceField("recentAnalysesTable", foundDialog)).getTable();
+
+        clickTableCell(table, 0, 0, 1);
+        assertFalse("Single click should only select", eventReceived.get());
+
+        var cell = runSwing(() -> table.getCellRect(0, 0, true));
+        var rightClick = new java.awt.event.MouseEvent(table, java.awt.event.MouseEvent.MOUSE_PRESSED,
+                System.currentTimeMillis(), java.awt.event.InputEvent.BUTTON3_DOWN_MASK,
+                cell.x + 1, cell.y + 1, 1, true, java.awt.event.MouseEvent.BUTTON3);
+        runSwing(() -> table.dispatchEvent(rightClick));
+        var popup = (JPopupMenu) getInstanceField("portalPopup", foundDialog);
+        assertTrue("Right click should show the portal popup", runSwing(popup::isVisible));
+        assertTrue("Right click should not reach the docking popup", rightClick.isConsumed());
+        assertEquals(1, popup.getComponentCount());
+        assertEquals("Open in Portal", ((JMenuItem) popup.getComponent(0)).getText());
+        runSwing(() -> popup.setVisible(false));
+
+        clickTableCell(table, 0, 0, 2);
+        waitForCondition(eventReceived::get, "Double click should pick the analysis");
+        assertEquals(RecentAnalysesMockApi.MOCK_ANALYSIS_ID,
+                service.getKnownProgram(program).orElseThrow().analysisID().id());
+    }
+
+    @Test
     public void testDialogShowsRecentAnalyses() throws Exception {
         var tool = env.getTool();
 
@@ -143,6 +194,68 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         // Close the dialog
         close(foundDialog);
         waitForSwing();
+    }
+
+    @Test
+    public void testPickSelectedWithoutSelectionDoesNothing() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new RecentAnalysesMockApi());
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        List<Object> errors = new CopyOnWriteArrayList<>();
+        Msg.setErrorLogger(new DefaultErrorLogger() {
+            @Override
+            public void error(Object originator, Object message, Throwable throwable) {
+                errors.add(message);
+            }
+        });
+        try {
+            RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+            runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+            var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+            pressButton(findButtonByText(foundDialog.getComponent(), "Pick selected"));
+            waitForTasks();
+            waitForSwing();
+
+            assertEquals(List.of(), errors);
+            close(foundDialog);
+        } finally {
+            Msg.setErrorLogger(new Log4jErrorLogger());
+        }
+    }
+
+    @Test
+    public void testPickMostRecentWithoutAnalysesDoesNothing() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
+                return List.of();
+            }
+        });
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+        waitForTasks();
+
+        pressButton(findButtonByText(foundDialog.getComponent(), "Pick most recent"));
+        waitForSwing();
+
+        assertTrue("dialog should stay open", foundDialog.isVisible());
+        close(foundDialog);
     }
 
     /**

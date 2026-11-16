@@ -108,4 +108,29 @@ public class ReaiAPIServicePluginTest extends RevEngMockableHeadedIntegrationTes
         var service = tool.getService(GhidraRevengService.class);
         assertNull("GhidraRevengService should not be registered with bad config", service);
     }
+
+    /// Valid JSON lacking `pluginSettings` must be reported like a malformed file, not crash the plugin.
+    @Test
+    public void testPluginFailsToLoadWithConfigFileMissingPluginSettings() throws Exception {
+        setErrorGUIEnabled(true);
+        var tool = env.getTool();
+
+        Path configFile = createTempDirectory("reai-test").toPath().resolve("reai.json");
+        Files.writeString(configFile, "{}");
+
+        TestableReaiAPIServicePlugin.setConfigPathOverride(configFile);
+
+        runSwing(() -> {
+            try {
+                tool.addPlugin(TestableReaiAPIServicePlugin.class.getName());
+            } catch (Exception e) {
+                // Expected — plugin should fail after showing error dialog
+            }
+        }, false);
+
+        var errorDialog = waitForDialogComponent("Load Config");
+        assertNotNull("Error dialog should appear for config without pluginSettings", errorDialog);
+        close(errorDialog);
+        waitForSwing();
+    }
 }

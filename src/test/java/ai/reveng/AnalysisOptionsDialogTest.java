@@ -22,8 +22,8 @@ import java.util.concurrent.TimeUnit;
 
 import javax.swing.*;
 
-import ai.reveng.model.AnalysisCreateRequest;
-import ai.reveng.model.User;
+import ai.reveng.model.CreateRequest;
+import ai.reveng.model.CurrentUser;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
@@ -71,7 +71,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
 
     /**
      * Pins the analysis configuration the dialog submits. The dialog offers no controls for
-     * capability generation, advanced analysis, third-party scraping or sandbox execution, so
+     * capability generation, third-party scraping or sandbox execution, so
      * every analysis it creates must carry these fixed values.
      */
     @Test
@@ -95,12 +95,11 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
 
         var options = dialog.getOptionsFromUI();
         assertNotNull(options);
-        AnalysisCreateRequest request = options.toAnalysisCreateRequest();
+        CreateRequest request = options.toAnalysisCreateRequest();
 
         var analysisConfig = request.getAnalysisConfig();
         assertNotNull("The request must always carry an analysis config", analysisConfig);
         assertEquals("Capabilities are never generated", Boolean.FALSE, analysisConfig.getGenerateCapabilities());
-        assertEquals("Advanced analysis is never requested", Boolean.FALSE, analysisConfig.getAdvancedAnalysis());
         assertNull("Third-party scraping is never requested", analysisConfig.getScrapeThirdPartyConfig());
         assertNull("Sandbox execution is never requested", analysisConfig.getSandboxConfig());
 
@@ -113,8 +112,8 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testPrivateScopeDisabledForEnthusiast() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {
             @Override
-            public User getMe() {
-                return new User().tier(User.TierEnum.ENTHUSIAST);
+            public CurrentUser getMe() {
+                return new CurrentUser().tier(CurrentUser.TierEnum.ENTHUSIAST);
             }
         });
         var builder = newX64Program();
@@ -151,8 +150,8 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testPrivateScopeEnabledForNonEnthusiast() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {
             @Override
-            public User getMe() {
-                return new User().tier(User.TierEnum.REVERSER);
+            public CurrentUser getMe() {
+                return new CurrentUser().tier(CurrentUser.TierEnum.REVERSER);
             }
         });
         var builder = newX64Program();
@@ -185,7 +184,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testPrivateScopeDisabledWhenTierFetchFails() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {
             @Override
-            public User getMe() {
+            public CurrentUser getMe() {
                 throw new RuntimeException("tier lookup failed");
             }
         });
@@ -226,13 +225,13 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         CountDownLatch release = new CountDownLatch(1);
         var reService = new GhidraRevengService(new MockApi() {
             @Override
-            public User getMe() {
+            public CurrentUser getMe() {
                 try {
                     release.await(10, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                return new User().tier(User.TierEnum.REVERSER);
+                return new CurrentUser().tier(CurrentUser.TierEnum.REVERSER);
             }
         });
         var builder = newX64Program();
@@ -268,8 +267,8 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     public void testGetOptionsIgnoresDisabledPrivateSelection() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {
             @Override
-            public User getMe() {
-                return new User().tier(User.TierEnum.ENTHUSIAST);
+            public CurrentUser getMe() {
+                return new CurrentUser().tier(CurrentUser.TierEnum.ENTHUSIAST);
             }
         });
         var builder = newX64Program();
