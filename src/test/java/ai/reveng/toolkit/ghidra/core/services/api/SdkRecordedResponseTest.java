@@ -3,7 +3,7 @@ package ai.reveng.toolkit.ghidra.core.services.api;
 import ai.reveng.model.DecompilationData;
 import ai.reveng.model.GetMatchesStatusOutputBody;
 import ai.reveng.model.ProgressMessage;
-import ai.reveng.model.User;
+import ai.reveng.model.CurrentUser;
 import ai.reveng.model.WorkflowProgress;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AIDecompilationStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionMatch;
@@ -130,7 +130,7 @@ public class SdkRecordedResponseTest extends AbstractStubServerTest {
 
     @Test
     public void currentUserCarriesTier() {
-        assertEquals(User.TierEnum.REVERSER, api().getMe().getTier());
+        assertEquals(CurrentUser.TierEnum.REVERSER, api().getMe().getTier());
     }
 
     @Test

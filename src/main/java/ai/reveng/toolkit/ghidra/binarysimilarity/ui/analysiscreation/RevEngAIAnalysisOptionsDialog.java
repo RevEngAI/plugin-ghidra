@@ -1,7 +1,7 @@
 package ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation;
 
 import ai.reveng.model.ConfigResponse;
-import ai.reveng.model.User;
+import ai.reveng.model.CurrentUser;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
@@ -417,10 +417,10 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         });
     }
 
-    private void handleUserResponse(@Nullable User user) {
+    private void handleUserResponse(@Nullable CurrentUser user) {
         tierResolved = true;
 
-        if (user != null && user.getTier() != User.TierEnum.ENTHUSIAST) {
+        if (user != null && user.getTier() != CurrentUser.TierEnum.ENTHUSIAST) {
             privateScope.setEnabled(true);
             privateScope.setToolTipText(null);
             privateScopePanel.setToolTipText(null);
