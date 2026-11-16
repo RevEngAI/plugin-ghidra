@@ -121,6 +121,11 @@ public class AnalysisLogComponent extends ComponentProviderAdapter implements An
             // Unknown: the wait for it has already ended, so starting another would end at once and loop
             case Unknown -> {}
             default -> {
+                if (event.isFromWait()) {
+                    // Progress from a wait, which is tracked already, or has ended since it reported this: starting
+                    // another here would resume a wait the user cancelled
+                    return;
+                }
                 // A new or resumed analysis: an earlier ending no longer applies
                 if (terminalStatusLines.remove(event.getProgram()) != null) {
                     refreshIfActive(event.getProgram());

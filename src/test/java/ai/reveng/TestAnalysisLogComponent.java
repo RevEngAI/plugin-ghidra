@@ -207,6 +207,42 @@ public class TestAnalysisLogComponent extends RevEngMockableHeadedIntegrationTes
         assertFalse(taskMonitorComponent.isVisible());
     }
 
+    /// A wait's statuses are delivered after it reported them, so one can arrive once the wait has been cancelled.
+    /// It must not start the wait again.
+    @Test
+    public void testStatusFromACancelledWaitDoesNotResumeIt() throws Exception {
+        var defaultTool = env.showTool();
+        var programWithID = getPlaceHolderID();
+        var statusCalls = new AtomicInteger();
+        var service = addMockedService(defaultTool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                statusCalls.incrementAndGet();
+                return AnalysisStatus.Queued;
+            }
+        });
+        attach(service, programWithID);
+        env.addPlugin(AnalysisManagementPlugin.class);
+        defaultTool.firePluginEvent(
+                new RevEngAIAnalysisStatusChangedEvent("Test", programWithID, AnalysisStatus.Queued));
+
+        AnalysisLogComponent logComponent = (AnalysisLogComponent) defaultTool.getComponentProvider(AnalysisLogComponent.NAME);
+        var trackedPrograms = (Map<Program, Task>) getInstanceField("trackedPrograms", logComponent);
+        ((TaskMonitorComponent) getInstanceField("taskMonitorComponent", logComponent)).cancel();
+        waitForTasks();
+        assertFalse(trackedPrograms.containsKey(programWithID.program()));
+
+        // The Queued the cancelled wait reported, arriving late
+        runSwing(() -> defaultTool.firePluginEvent(new RevEngAIAnalysisStatusChangedEvent(
+                RevEngAIAnalysisStatusChangedEvent.WAIT_SOURCE, programWithID, AnalysisStatus.Queued)));
+        waitForSwing();
+        int callsAfterCancel = statusCalls.get();
+        waitForTasks();
+
+        assertFalse("a late status must not start another wait", trackedPrograms.containsKey(programWithID.program()));
+        assertEquals("no polling after the cancel", callsAfterCancel, statusCalls.get());
+    }
+
     /// An analysis that was still Uploaded when Ghidra closed is waited on again when the program is reopened
     @Test
     public void testReopenedUploadedAnalysisIsWaitedOn() throws Exception {
