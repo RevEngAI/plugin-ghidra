@@ -211,7 +211,7 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.CanonicalizeNamesOutputBody", "getResults");
         requireMethods(missing, "ai.reveng.model.CanonicalName", "getName", "getCanonicalName");
 
-        requireMethods(missing, "ai.reveng.model.User", "getTier");
+        requireMethods(missing, "ai.reveng.model.CurrentUser", "getTier");
         requireMethods(missing, "ai.reveng.model.BaseResponseConfigResponse", "getData");
         requireMethods(missing, "ai.reveng.model.ConfigResponse", "getMaxFileSizeBytes");
 

@@ -776,7 +776,7 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
-    public User getMe() {
+    public CurrentUser getMe() {
         try {
             return this.iamUsersApi.getMe();
         } catch (ApiException e) {
