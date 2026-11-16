@@ -21,6 +21,9 @@ import ghidra.util.Swing;
  * (e.g. function info). Use {@link ai.reveng.toolkit.ghidra.core.RevEngAIAnalysisResultsLoaded} for that.
  */
 public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
+    /// The source of the statuses a running wait reports, see {@link #isFromWait()}
+    public static final String WAIT_SOURCE = "RevEng.AI analysis wait";
+
     private final AnalysisStatus status;
     private final GhidraRevengService.ProgramWithID programWithID;
 
@@ -39,6 +42,12 @@ public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
     /// while the Queued event that started the wait was still being delivered.
     public void fireLater(PluginTool tool) {
         Swing.runLater(() -> tool.firePluginEvent(this));
+    }
+
+    /// Whether a running wait reported this status. Such a status is delivered later than it was seen (see
+    /// {@link #fireLater}), so the wait may already have ended, e.g. because it was cancelled.
+    public boolean isFromWait() {
+        return WAIT_SOURCE.equals(getSourceName());
     }
 
     public AnalysisStatus getStatus() {
