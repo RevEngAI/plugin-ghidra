@@ -4,6 +4,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraDataTypeEncoder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService.AnalysedProgram;
 import ai.reveng.toolkit.ghidra.core.services.api.PushFailure;
+import ai.reveng.toolkit.ghidra.core.services.api.UnresolvedDataTypesException;
 import ai.reveng.toolkit.ghidra.core.services.logging.ReaiLoggingService;
 import ghidra.framework.model.DomainObjectChangeRecord;
 import ghidra.framework.model.DomainObjectListener;
@@ -398,7 +399,12 @@ public class LocalEditSyncService {
     /// portal could not be reached, and otherwise a retry straight away, which sends the marked edits
     /// one at a time where needed and finds out which ones the portal will not take.
     private void onPushFailed(Program program, String detail, Exception e) {
-        Msg.warn(this, "%s: %s".formatted(detail, reasonOf(e)), e);
+        if (e instanceof UnresolvedDataTypesException) {
+            // An expected outcome, not a fault: the message says all there is to say.
+            Msg.warn(this, "%s: %s".formatted(detail, reasonOf(e)));
+        } else {
+            Msg.warn(this, "%s: %s".formatted(detail, reasonOf(e)), e);
+        }
         if (PushFailure.of(e) == PushFailure.TRANSIENT) {
             reportOutage(e);
             scheduleRetry(program, nextDelay(program));

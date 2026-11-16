@@ -80,10 +80,7 @@ public class LocalEditSyncScopeTest extends RevEngMockableHeadedIntegrationTest 
         @Override
         public List<ServerDataType> createAnalysisDataTypes(AnalysisID analysisID,
                                                             CreateAnalysisDataTypesInputBody request) {
-            return request.getDataTypes().stream()
-                    .map(type -> new ServerDataType(nextDataTypeId.getAndIncrement(), "", "pushed",
-                            ServerDataType.Kind.BASE, null, "USER", false, null, null, null))
-                    .toList();
+            return CreatedDataTypes.echo(request, nextDataTypeId::getAndIncrement);
         }
 
         @Override

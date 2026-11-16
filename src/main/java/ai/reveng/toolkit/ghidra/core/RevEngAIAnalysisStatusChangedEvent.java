@@ -3,7 +3,9 @@ package ai.reveng.toolkit.ghidra.core;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ghidra.framework.plugintool.PluginEvent;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
+import ghidra.util.Swing;
 
 /**
  * Event that is fired when a RevEng.AI analysis result with some program changes.
@@ -29,6 +31,14 @@ public class RevEngAIAnalysisStatusChangedEvent extends PluginEvent {
         }
         this.status = status;
         this.programWithID = programWithID;
+    }
+
+    /// Fires the event on the Swing thread, after the event being delivered there (if any) has finished. Ghidra
+    /// drops an event fired while another of the same type is being delivered, taking it for an event loop, so a
+    /// status reported from a background thread at that moment was lost: e.g. a wait's Error or Complete arriving
+    /// while the Queued event that started the wait was still being delivered.
+    public void fireLater(PluginTool tool) {
+        Swing.runLater(() -> tool.firePluginEvent(this));
     }
 
     public AnalysisStatus getStatus() {
