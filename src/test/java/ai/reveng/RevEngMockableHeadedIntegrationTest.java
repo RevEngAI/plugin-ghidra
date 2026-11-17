@@ -13,7 +13,6 @@ import ghidra.framework.plugintool.mgr.ServiceManager;
 import ghidra.framework.plugintool.util.PluginException;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.listing.Program;
-import generic.hash.HashUtilities;
 import ghidra.util.task.TaskMonitor;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.test.TestEnv;
@@ -24,8 +23,10 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
@@ -83,7 +84,7 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
         try {
             program.setExecutablePath(path);
             if (content != null) {
-                program.setExecutableSHA256(HashUtilities.getHash(HashUtilities.SHA256_ALGORITHM, content));
+                program.setExecutableSHA256(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
                 program.getMemory().createFileBytes(Path.of(path).getFileName().toString(), 0, content.length,
                         new ByteArrayInputStream(content), TaskMonitor.DUMMY);
             }
