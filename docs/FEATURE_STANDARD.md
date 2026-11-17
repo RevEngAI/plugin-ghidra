@@ -16,7 +16,7 @@ Feature support is declared in [`scripts/emit_features.py`](../scripts/emit_feat
 - `build_manifest()` merges the two.
 
 `.revengai/features.json` is generated from this script — never edit the JSON by hand. The
-script is build tooling (a small Python script, like `.github/scripts/bump_revengai.py`)
+script is build tooling (a small Python script)
 and is not part of the Ghidra extension under `src/`.
 
 ## Status values
