@@ -14,11 +14,14 @@ import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
@@ -68,6 +71,41 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
         var e = assertThrows(RuntimeException.class, () -> service.upload(program));
 
         assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot read " + bin));
+    }
+
+    /// A shared project records the importer's path, missing on other machines; the bytes Ghidra stored must be uploaded.
+    @Test
+    public void testUploadUsesBytesStoredInProgramWhenFileIsMissing() throws Exception {
+        byte[] content = "original binary".getBytes();
+        var program = newX64Program().getProgram();
+        importedFrom(program, "/nonexistent/original.bin", content);
+        var uploaded = new byte[1][];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public BinaryHash upload(Path binPath) {
+                try {
+                    uploaded[0] = Files.readAllBytes(binPath);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return new BinaryHash(program.getExecutableSHA256());
+            }
+        });
+
+        service.upload(program);
+
+        assertArrayEquals(content, uploaded[0]);
+    }
+
+    @Test
+    public void testUploadOfMissingFileWithoutStoredBytesExplainsWhy() throws Exception {
+        var program = newX64Program().getProgram();
+        importedFrom(program, "/nonexistent/original.bin", null);
+        var service = new GhidraRevengService(new UnimplementedAPI());
+
+        var e = assertThrows(RuntimeException.class, () -> service.upload(program));
+
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Original binary not found at /nonexistent/original.bin"));
     }
 
     @Test

@@ -12,15 +12,21 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.mgr.ServiceManager;
 import ghidra.framework.plugintool.util.PluginException;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.listing.Program;
+import ghidra.util.task.TaskMonitor;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.test.TestEnv;
 import org.junit.After;
 import org.junit.Before;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
@@ -69,6 +75,22 @@ abstract class RevEngMockableHeadedIntegrationTest extends AbstractGhidraHeadedI
     /// An empty x86-64 program owned by this test, for tests whose program name is load bearing.
     protected ProgramBuilder newX64Program(String name) throws Exception {
         return new ProgramBuilder(name, ProgramBuilder._X64, this);
+    }
+
+    /// Records `program` as imported from `path`, as a shared project does for every machine but the importer's.
+    /// Ghidra keeps `content` in the program when it is not null, as its loaders do.
+    protected static void importedFrom(Program program, String path, byte[] content) throws Exception {
+        int tx = program.startTransaction("import");
+        try {
+            program.setExecutablePath(path);
+            if (content != null) {
+                program.setExecutableSHA256(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+                program.getMemory().createFileBytes(Path.of(path).getFileName().toString(), 0, content.length,
+                        new ByteArrayInputStream(content), TaskMonitor.DUMMY);
+            }
+        } finally {
+            program.endTransaction(tx, true);
+        }
     }
 
     /// Polls for a dialog against this test's own deadline: the timeout that waitForDialogComponent takes is
