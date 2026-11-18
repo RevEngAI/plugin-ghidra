@@ -63,6 +63,14 @@ Set `GHIDRA_INSTALL_DIR` to target a specific install, or `REVENG_PLUGIN_VERSION
 
 The builds for latest stable version of the RevEng.AI Ghidra plugin for common Ghidra versions can be downloaded from the [Releases](https://github.com/revengai/plugin-ghidra/releases/latest) page.
 
+### Updating
+
+The plugin checks GitHub for a new release when Ghidra starts. If it finds one, it downloads the build for your Ghidra version in the background and checks it against the SHA-256 checksum GitHub publishes for the release. It then installs that build when you close Ghidra, so the new version runs the next time you start Ghidra.
+The download is kept in `reai-plugin-update/` in your Ghidra user settings folder until it is installed.
+
+This only works when the plugin is installed in your user `Extensions` folder, which is where the install script and `Install Extensions` put it.
+You can turn off the check or the automatic install with `Check for updates` and `Install updates automatically` under `Edit` -> `Tool Options...` -> `RevEngAI Options` in the CodeBrowser. With the automatic install off, the plugin only tells you about new releases and links to the download.
+
 ### Supported Ghidra versions
 
 We support all versions compatible with Ghidra 11.4+. Ghidra 11.4 through 12.1.x run on Java 21;

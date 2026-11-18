@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /** Unit tests for the pure parts of {@link UpdateChecker}. */
@@ -14,7 +15,8 @@ public class UpdateCheckerTest {
              "html_url": "https://github.com/RevEngAI/plugin-ghidra/releases/tag/v1.2.0",
              "assets": [
                {"name": "ghidra_12.1.3_plugin-ghidra.zip", "browser_download_url": "https://example/12.1.3.zip"},
-               {"name": "ghidra_12.2_plugin-ghidra.zip", "browser_download_url": "https://example/12.2.zip"}
+               {"name": "ghidra_12.2_plugin-ghidra.zip", "browser_download_url": "https://example/12.2.zip",
+                "digest": "sha256:abc123"}
              ]}
             """;
 
@@ -40,6 +42,12 @@ public class UpdateCheckerTest {
         assertEquals("v1.2.0", update.version());
         assertEquals("https://github.com/RevEngAI/plugin-ghidra/releases/tag/v1.2.0", update.releaseUrl());
         assertEquals("https://example/12.2.zip", update.downloadUrl());
+        assertEquals("abc123", update.sha256());
+    }
+
+    @Test
+    public void missingDigestLeavesChecksumUnset() {
+        assertNull(UpdateChecker.findUpdate("v1.1.0", "12.1.3", RELEASE).orElseThrow().sha256());
     }
 
     @Test

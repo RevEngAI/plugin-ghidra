@@ -22,7 +22,11 @@ public class UpdateChecker {
     private static final String LATEST_RELEASE_URL =
             "https://api.github.com/repos/RevEngAI/plugin-ghidra/releases/latest";
 
-    public record UpdateInfo(String version, String releaseUrl, String downloadUrl) {}
+    /**
+     * @param sha256 hex SHA-256 of the download, from GitHub's asset digest, or null when the
+     *               release does not carry one
+     */
+    public record UpdateInfo(String version, String releaseUrl, String downloadUrl, String sha256) {}
 
     /**
      * The installed plugin's release tag, or {@link #UNKNOWN_VERSION} for local builds.
@@ -69,8 +73,10 @@ public class UpdateChecker {
             for (int i = 0; i < assets.length(); i++) {
                 var asset = assets.getJSONObject(i);
                 if (assetName.equals(asset.getString("name"))) {
+                    var digest = asset.optString("digest", "");
+                    var sha256 = digest.startsWith("sha256:") ? digest.substring("sha256:".length()) : null;
                     return Optional.of(new UpdateInfo(latest, release.getString("html_url"),
-                            asset.getString("browser_download_url")));
+                            asset.getString("browser_download_url"), sha256));
                 }
             }
         } catch (JSONException ignored) {
