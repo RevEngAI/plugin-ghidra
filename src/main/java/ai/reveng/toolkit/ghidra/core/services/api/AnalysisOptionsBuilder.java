@@ -100,6 +100,16 @@ public class AnalysisOptionsBuilder {
         return this;
     }
 
+    public AnalysisOptionsBuilder fileFormat(String format) {
+        options.put("file_format", format);
+        return this;
+    }
+
+    public AnalysisOptionsBuilder platform(String platform) {
+        options.put("platform", platform);
+        return this;
+    }
+
     /**
      * Converts the current AnalysisOptionsBuilder to the v3 create-analysis request.
      *
@@ -165,6 +175,14 @@ public class AnalysisOptionsBuilder {
                 var isa = ai.reveng.model.BinaryConfig.IsaEnum.fromValue(isaOption);
                 binaryConfig.setIsa(isa);
             }
+        }
+
+        if (options.has("file_format") && !options.getString("file_format").equals("Auto")) {
+            binaryConfig.setFileFormat(ai.reveng.model.BinaryConfig.FileFormatEnum.fromValue(options.getString("file_format")));
+        }
+
+        if (options.has("platform") && !options.getString("platform").equals("Auto")) {
+            binaryConfig.setPlatform(ai.reveng.model.BinaryConfig.PlatformEnum.fromValue(options.getString("platform")));
         }
 
         request.setBinaryConfig(binaryConfig);
