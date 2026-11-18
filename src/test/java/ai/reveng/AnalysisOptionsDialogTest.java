@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 import javax.swing.*;
 
+import ai.reveng.model.BinaryConfig;
 import ai.reveng.model.CreateRequest;
 import ai.reveng.model.CurrentUser;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.analysiscreation.RevEngAIAnalysisOptionsDialog;
@@ -106,6 +107,30 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         var binaryConfig = request.getBinaryConfig();
         assertNotNull("The request must always carry a binary config", binaryConfig);
         assertNull("The default 'Auto' architecture leaves the ISA unset", binaryConfig.getIsa());
+        assertNull("The default 'Auto' file format leaves it unset", binaryConfig.getFileFormat());
+        assertNull("The default 'Auto' platform leaves it unset", binaryConfig.getPlatform());
+    }
+
+    /** A headerless binary needs file format, ISA and platform set explicitly. */
+    @Test
+    public void testSubmittedBinaryConfigForBlob() throws Exception {
+        var reService = new GhidraRevengService(new MockApi() {});
+        var program = newX64Program().getProgram();
+        var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
+        SwingUtilities.invokeLater(() -> DockingWindowManager.showDialog(null, dialog));
+        waitForSwing();
+        waitFor(() -> ((JButton) getInstanceField("okButton", dialog)).isEnabled());
+        runSwing(() -> {
+            ((JComboBox<?>) getInstanceField("fileFormatComboBox", dialog)).setSelectedItem("blob");
+            ((JComboBox<?>) getInstanceField("architectureComboBox", dialog)).setSelectedItem("arm");
+            ((JComboBox<?>) getInstanceField("platformComboBox", dialog)).setSelectedItem("linux");
+            ((JButton) getInstanceField("okButton", dialog)).doClick();
+        });
+
+        var binaryConfig = dialog.getOptionsFromUI().toAnalysisCreateRequest().getBinaryConfig();
+        assertEquals(BinaryConfig.FileFormatEnum.BLOB, binaryConfig.getFileFormat());
+        assertEquals(BinaryConfig.IsaEnum.ARM, binaryConfig.getIsa());
+        assertEquals(BinaryConfig.PlatformEnum.LINUX, binaryConfig.getPlatform());
     }
 
     @Test

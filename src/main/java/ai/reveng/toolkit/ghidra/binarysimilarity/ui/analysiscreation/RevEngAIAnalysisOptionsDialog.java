@@ -42,6 +42,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
     private JPanel privateScopePanel;
     private JTextField tagsTextBox;
     private JComboBox<String> architectureComboBox;
+    private JComboBox<String> fileFormatComboBox;
+    private JComboBox<String> platformComboBox;
     private boolean okPressed = false;
 
     private boolean fileSizeOk = false;
@@ -124,6 +126,21 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
         workPanel.add(architectureLabel);
         workPanel.add(architectureComboBox);
 
+        // Headerless binaries (e.g. raw firmware) need file format, ISA and platform set explicitly
+        fileFormatComboBox = new JComboBox<>(new String[]{"Auto", "pe", "elf", "blob"});
+        fileFormatComboBox.setMaximumSize(fileFormatComboBox.getPreferredSize());
+        var fileFormatLabel = new JLabel("Select File Format");
+        fileFormatLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        workPanel.add(fileFormatLabel);
+        workPanel.add(fileFormatComboBox);
+
+        platformComboBox = new JComboBox<>(new String[]{"Auto", "linux", "windows", "android"});
+        platformComboBox.setMaximumSize(platformComboBox.getPreferredSize());
+        var platformLabel = new JLabel("Select Platform");
+        platformLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        workPanel.add(platformLabel);
+        workPanel.add(platformComboBox);
+
         workPanel.add(new JSeparator(SwingConstants.HORIZONTAL));
 
         // Add custom tags field
@@ -185,6 +202,8 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
         options.addTags(List.of(tagsTextBox.getText().split(",")));
         options.architecture((String) architectureComboBox.getSelectedItem());
+        options.fileFormat((String) fileFormatComboBox.getSelectedItem());
+        options.platform((String) platformComboBox.getSelectedItem());
         return options;
     }
 

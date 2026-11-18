@@ -126,6 +126,7 @@ public class SdkSchemaTest {
 
         requireMethods(missing, "ai.reveng.model.CreateRequest",
                 "getFilename", "getSha256Hash", "getTags", "getAnalysisScope");
+        requireMethods(missing, "ai.reveng.model.BinaryConfig", "setIsa", "setFileFormat", "setPlatform");
         requireMethods(missing, "ai.reveng.model.UploadOutputBody", "getSha256Hash");
         requireMethods(missing, "ai.reveng.model.OperationCreateMetadataCreateResult",
                 "getMetadata", "getResponse");
