@@ -65,6 +65,7 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
                 "createAiDecompilation", "getAiDecompilation", "getAiDecompilationStatus",
                 "v3GetAiDecompilationTokens", "v3UpsertAiDecompilationOverrides",
+                "v3GetAiDecompilationLineAttributions",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
                 "patchAiDecompilationInlineComment", "deleteAiDecompilationInlineComment",
@@ -194,6 +195,8 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.RenderedToken",
                 "getValue", "getDataTypeId", "getFunctionId", "getImportedFunctionId");
         requireMethods(missing, "ai.reveng.model.Token", "getValue");
+        requireMethods(missing, "ai.reveng.model.LineAttributionsData",
+                "getDisassemblyLineNumberToAiDecompilationLineNumbers");
         requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
 
         // The AI decompilation poll: the decompilation itself, its pipeline progress while it runs,
