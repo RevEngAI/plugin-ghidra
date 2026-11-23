@@ -92,6 +92,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     private ProgramLocation lastLocation;
     /// Program the listing highlight was set on, so only a highlight of ours is cleared.
     private Program highlightedProgram;
+    private boolean settingCode;
+    private int caretLine = -1;
 
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w*");
 
@@ -264,8 +266,6 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
                     handleDoubleClick(e.getPoint());
-                } else if (e.getClickCount() == 1 && SwingUtilities.isLeftMouseButton(e)) {
-                    highlightFromDecompilation(e.getPoint());
                 }
             }
 
@@ -283,6 +283,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 if (e.isPopupTrigger()) {
                     showContextMenu(e.getPoint());
                 }
+            }
+        });
+        textArea.addCaretListener(e -> {
+            if (settingCode) {
+                return;
+            }
+            try {
+                int line = textArea.getLineOfOffset(e.getDot());
+                if (line != caretLine) {
+                    caretLine = line;
+                    highlightFromDecompilation(line);
+                }
+            } catch (BadLocationException ignored) {
+                // The caret outran a re-render; the next move lights its line.
             }
         });
         sp = new RTextScrollPane(textArea);
@@ -471,7 +485,13 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     private void setCode(String code) {
         String text = code;
         textArea.removeAllLineHighlights();
-        textArea.setText(text);
+        settingCode = true;
+        try {
+            textArea.setText(text);
+        } finally {
+            settingCode = false;
+        }
+        caretLine = -1;
     }
 
     private void clear() {
@@ -628,6 +648,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     /// Light the decompilation lines the instruction at {@code loc} fed, and bring the first into view.
     private void highlightFromListing(ProgramLocation loc) {
         textArea.removeAllLineHighlights();
+        caretLine = -1;
         RenderModel model = currentRenderModel;
         Function target = this.function;
         if (loc == null || model == null || target == null || !target.getBody().contains(loc.getAddress())) {
@@ -653,10 +674,10 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         }
     }
 
-    /// Light the clicked decompilation line and the instructions that fed it, and scroll the listing
+    /// Light the caret's decompilation line and the instructions that fed it, and scroll the listing
     /// to them. The cursor stays put, so every attributed instruction shows the same colour.
     /// A line the model attributed nothing to lights nothing.
-    private void highlightFromDecompilation(Point point) {
+    private void highlightFromDecompilation(int displayLine) {
         textArea.removeAllLineHighlights();
         clearListingHighlight();
         RenderModel model = currentRenderModel;
@@ -665,13 +686,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         if (model == null || lines == null) {
             return;
         }
-        Integer sourceLine;
-        try {
-            int offset = textArea.viewToModel2D(point);
-            sourceLine = offset < 0 ? null : model.sourceLine(textArea.getLineOfOffset(offset));
-        } catch (BadLocationException e) {
-            return;
-        }
+        Integer sourceLine = model.sourceLine(displayLine);
         if (sourceLine == null) {
             return;
         }

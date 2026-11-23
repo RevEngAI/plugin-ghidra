@@ -782,6 +782,19 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
         assertTrue("a distant instruction is scrolled into view", listing.getFieldPanel().getVisibleLayouts()
                 .stream().anyMatch(layout -> layout.getIndex().equals(farIndex)));
         assertNotEquals(indexes.getIndex(func1.getEntryPoint()), listing.getFieldPanel().getViewerPosition().getIndex());
+
+        runSwing(() -> {
+            try {
+                textArea.setCaretPosition(textArea.getLineStartOffset(1));
+            } catch (javax.swing.text.BadLocationException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        waitForSwing();
+        highlight = codeBrowser.getProvider().getHighlight();
+        assertTrue("moving the caret by keyboard lights its instructions", highlight.contains(space.getAddress(0x1001)));
+        assertFalse(highlight.contains(space.getAddress(0x1006)));
+        assertEquals(List.of(1), highlightedLines(textArea));
     }
 
     @SuppressWarnings("unchecked")
