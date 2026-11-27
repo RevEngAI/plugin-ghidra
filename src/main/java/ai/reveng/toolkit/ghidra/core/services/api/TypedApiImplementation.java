@@ -784,6 +784,15 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
+    public List<String> getModels() {
+        try {
+            return this.configApi.v3GetModels().getModels();
+        } catch (ApiException e) {
+            throw new RuntimeException(describeApiException(e), e);
+        }
+    }
+
+    @Override
     public CurrentUser getMe() {
         try {
             return this.iamUsersApi.getMe();

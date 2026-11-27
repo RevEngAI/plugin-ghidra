@@ -1354,6 +1354,10 @@ public class GhidraRevengService {
         return api.search(hash);
     }
 
+    public List<String> getModels() {
+        return api.getModels();
+    }
+
     public void removeProgramAssociation(Program program){
         clearFunctionAssociation(program);
         var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);

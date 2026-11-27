@@ -33,12 +33,18 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
         var revEngAIService = serviceProvider.getService(GhidraRevengService.class);
         var loggingService = serviceProvider.getService(ReaiLoggingService.class);
 
+        var supportedModels = revEngAIService.getModels();
         // The search endpoint only returns analyses we have access to so there is no need to filter them.
         revEngAIService.searchForHash(hash).forEach(
                 result -> {
                     // Filter out analyses that are not Complete
                     if (!AnalysisStatus.Complete.name().equals(result.getStatus())) {
                         loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as status is " + result.getStatus());
+                        return;
+                    }
+
+                    if (!supportedModels.contains(result.getModelName())) {
+                        loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as model is " + result.getModelName());
                         return;
                     }
 
