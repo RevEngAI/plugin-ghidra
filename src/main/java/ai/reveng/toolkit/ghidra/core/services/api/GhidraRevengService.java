@@ -324,7 +324,8 @@ public class GhidraRevengService {
             var funcSizeByDistance = func.getBody().getMaxAddress().subtract(func.getEntryPoint()) + 1;
 
             // For unclear reasons the func size is off by one
-            if (funcSizeByAddressCount - 1 != info.functionSize() && funcSizeByAddressCount != info.functionSize()) {
+            if (!sizeMatches(funcSizeByAddressCount, info.functionSize())
+                    && !sizeMatches(funcSizeByDistance, info.functionSize())) {
                 Msg.warn(this, "Function size mismatch for function %s: %d vs %d".formatted(func.getName(), funcSizeByAddressCount, info.functionSize()));
                 continue;
             }
@@ -361,6 +362,10 @@ public class GhidraRevengService {
 
         return new FunctionAssociation(analysedProgram, summary);
 
+    }
+
+    private static boolean sizeMatches(long ghidraSize, long serverSize) {
+        return ghidraSize == serverSize || ghidraSize - 1 == serverSize;
     }
 
     /// Put the synced tag back on a function at an address the analysis still maps to a server
