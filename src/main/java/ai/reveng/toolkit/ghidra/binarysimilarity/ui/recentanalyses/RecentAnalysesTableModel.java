@@ -22,6 +22,8 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
     private final TypedApiInterface.BinaryHash hash;
     private final Address imageBase;
 
+    private static final String SUPPORTED_MODEL = "binnet-1.0";
+
     public RecentAnalysesTableModel(PluginTool tool, TypedApiInterface.BinaryHash hash, Address imageBase) {
         super("Recent Analyses Table Model", tool);
         this.hash = hash;
@@ -39,6 +41,11 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
                     // Filter out analyses that are not Complete
                     if (!AnalysisStatus.Complete.name().equals(result.getStatus())) {
                         loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as status is " + result.getStatus());
+                        return;
+                    }
+
+                    if (!SUPPORTED_MODEL.equals(result.getModelName())) {
+                        loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as model is " + result.getModelName());
                         return;
                     }
 

@@ -197,6 +197,38 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     }
 
     @Test
+    public void testLegacyModelAnalysesAreNotListed() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new RecentAnalysesMockApi() {
+            @Override
+            public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
+                var current = super.search(hash).get(0);
+                var legacy = super.search(hash).get(0).analysisId(1L).modelName("binnet-0.5");
+                return List.of(legacy, current);
+            }
+        });
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+        @SuppressWarnings("unchecked")
+        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<AnalysisRecordBody, ?>)
+                getInstanceField("recentAnalysesTableModel", foundDialog);
+        waitForTableModel(tableModel);
+
+        assertEquals(List.of((long) RecentAnalysesMockApi.MOCK_ANALYSIS_ID),
+                tableModel.getModelData().stream().map(AnalysisRecordBody::getAnalysisId).toList());
+        close(foundDialog);
+    }
+
+    @Test
     public void testPickSelectedWithoutSelectionDoesNothing() throws Exception {
         var tool = env.getTool();
         addMockedService(tool, new RecentAnalysesMockApi());
@@ -276,7 +308,7 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
                     .binaryName("test_binary")
                     .creation(java.time.OffsetDateTime.parse("2024-01-15T10:00:00Z"))
                     .modelId(1L)
-                    .modelName("binnet-0.2-x86-linux")
+                    .modelName("binnet-1.0")
                     .sha256Hash(hash.sha256())
                     .status(AnalysisStatus.Complete.name())
                     .baseAddress(0x0L)  // Default image base for x64 programs
