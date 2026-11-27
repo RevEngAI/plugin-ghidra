@@ -197,6 +197,43 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     }
 
     @Test
+    public void testUnsupportedModelAnalysesAreNotListed() throws Exception {
+        var tool = env.getTool();
+        addMockedService(tool, new RecentAnalysesMockApi() {
+            @Override
+            public List<String> getModels() {
+                return List.of("binnet-1.1");
+            }
+
+            @Override
+            public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
+                var supported = super.search(hash).get(0).modelName("binnet-1.1");
+                var unsupported = super.search(hash).get(0).analysisId(1L);
+                return List.of(unsupported, supported);
+            }
+        });
+
+        var builder = newX64Program("test_binary");
+        builder.createMemory("test", "0x1000", 100);
+        var program = builder.getProgram();
+        env.showTool(program);
+        waitForSwing();
+
+        RecentAnalysisDialog dialog = runSwing(() -> new RecentAnalysisDialog(tool, program));
+        runSwing(() -> DockingWindowManager.showDialog(null, dialog), false);
+        var foundDialog = waitForDialogComponent(RecentAnalysisDialog.class);
+
+        @SuppressWarnings("unchecked")
+        var tableModel = (docking.widgets.table.threaded.ThreadedTableModel<AnalysisRecordBody, ?>)
+                getInstanceField("recentAnalysesTableModel", foundDialog);
+        waitForTableModel(tableModel);
+
+        assertEquals(List.of((long) RecentAnalysesMockApi.MOCK_ANALYSIS_ID),
+                tableModel.getModelData().stream().map(AnalysisRecordBody::getAnalysisId).toList());
+        close(foundDialog);
+    }
+
+    @Test
     public void testPickSelectedWithoutSelectionDoesNothing() throws Exception {
         var tool = env.getTool();
         addMockedService(tool, new RecentAnalysesMockApi());
@@ -235,6 +272,11 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         var tool = env.getTool();
         addMockedService(tool, new UnimplementedAPI() {
             @Override
+            public List<String> getModels() {
+                return List.of("binnet-1.0");
+            }
+
+            @Override
             public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
                 return List.of();
             }
@@ -267,6 +309,11 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         static final int MOCK_BINARY_ID = 88888;
 
         @Override
+        public List<String> getModels() {
+            return List.of("binnet-1.0");
+        }
+
+        @Override
         public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
             // Return a single recent analysis result
             return List.of(
@@ -276,7 +323,7 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
                     .binaryName("test_binary")
                     .creation(java.time.OffsetDateTime.parse("2024-01-15T10:00:00Z"))
                     .modelId(1L)
-                    .modelName("binnet-0.2-x86-linux")
+                    .modelName("binnet-1.0")
                     .sha256Hash(hash.sha256())
                     .status(AnalysisStatus.Complete.name())
                     .baseAddress(0x0L)  // Default image base for x64 programs

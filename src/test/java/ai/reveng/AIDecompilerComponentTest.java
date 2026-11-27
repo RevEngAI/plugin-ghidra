@@ -677,4 +677,137 @@ public class AIDecompilerComponentTest extends RevEngMockableHeadedIntegrationTe
             assertFalse(name, getAction(tool, name).isEnabledForContext(context));
         }
     }
+
+    /// Moving in the listing lights the decompilation lines an instruction fed; clicking a
+    /// decompilation line lights its instructions in the listing.
+    @Test
+    public void lineAttributionsLinkListingAndDecompilation() throws Exception {
+        var tool = env.getTool();
+        var service = addMockedService(tool, new UnimplementedAPI() {
+            @Override
+            public AnalysisStatus status(AnalysisID analysisID) {
+                return AnalysisStatus.Complete;
+            }
+
+            @Override
+            public AnalysisID analyse(AnalysisOptionsBuilder options) throws ApiException {
+                return new AnalysisID(1);
+            }
+
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "portal_func_1", "portal_func_1_mangled", 0x1000L, 0xf1));
+            }
+
+            @Override
+            public AIDecompilationStatus pollAIDecompileStatus(FunctionID functionID) {
+                return new AIDecompilationStatus(
+                        DecompilationData.StatusEnum.COMPLETED,
+                        "int func1() {\n  int a = 1;\n  return a;\n}",
+                        null,
+                        null,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        WorkflowProgress.StatusEnum.COMPLETED,
+                        List.of(),
+                        null);
+            }
+
+            @Override
+            public Map<String, List<Long>> getAIDecompilationLineAttributions(FunctionID functionID) {
+                return Map.of("0", List.of(1L), "1", List.of(2L), "2", List.of(3L));
+            }
+
+            @Override
+            public List<String> getAssembly(FunctionID functionID) {
+                return List.of("0x1000\tPUSH RBP", "0x1001\tMOV EAX,0x1", "0x1006\tRET", "0x10f0\tRET");
+            }
+        });
+
+        var codeBrowser = env.addPlugin(ghidra.app.plugin.core.codebrowser.CodeBrowserPlugin.class);
+        env.addPlugin(BinarySimilarityPlugin.class);
+        var builder = newX64Program();
+        builder.createMemory(".text", "0x1000", 0x100);
+        // PUSH RBP; MOV EAX,0x1; RET
+        builder.setBytes("0x1000", "55 b8 01 00 00 00 c3", true);
+        // A RET far enough down that the function header and it cannot share the screen
+        builder.setBytes("0x10f0", "c3", true);
+        var func1 = builder.createEmptyFunction(null, "0x1000", 0xf1, Undefined.getUndefinedDataType(4));
+        var programWithID = service.analyse(builder.getProgram(), null, TaskMonitor.DUMMY);
+        var program = programWithID.program();
+        env.showTool(program);
+        // Room for the function header and its first few instructions
+        runSwing(() -> tool.getToolFrame().setSize(1200, 1000));
+        waitForSwing();
+
+        var aiDecompComponent = getComponentProvider(AIDecompilationdWindow.class);
+        RSyntaxTextArea textArea = (RSyntaxTextArea) getInstanceField("textArea", aiDecompComponent);
+        var action = getAction(tool, "AI Decompilation");
+        performAction(action, new ProgramLocationActionContext(null, program,
+                new ProgramLocation(program, func1.getEntryPoint()), null, null), true);
+        waitForTasks();
+        waitForSwing();
+
+        goTo(tool, program, program.getAddressFactory().getDefaultAddressSpace().getAddress(0x1001));
+        waitForSwing();
+        assertEquals(List.of(1), highlightedLines(textArea));
+
+        goTo(tool, program, func1.getEntryPoint());
+        waitForSwing();
+        assertEquals(List.of(), highlightedLines(textArea));
+
+        // Scroll the function header off screen, so the click has to bring it back
+        goTo(tool, program, program.getAddressFactory().getDefaultAddressSpace().getAddress(0x10f0));
+        waitForSwing();
+
+        var cursor = codeBrowser.getCurrentAddress();
+        var lineTwo = textArea.modelToView2D(textArea.getLineStartOffset(2)).getBounds();
+        clickMouse(textArea, java.awt.event.MouseEvent.BUTTON1, lineTwo.x + 1, lineTwo.y + 1, 1, 0);
+        waitForSwing();
+        var highlight = codeBrowser.getProvider().getHighlight();
+        var space = program.getAddressFactory().getDefaultAddressSpace();
+        assertTrue(highlight.contains(space.getAddress(0x1006)));
+        assertFalse(highlight.contains(space.getAddress(0x1001)));
+        assertEquals("the cursor must stay put", cursor, codeBrowser.getCurrentAddress());
+        assertEquals(List.of(2), highlightedLines(textArea));
+        assertFalse(textArea.getHighlightCurrentLine());
+        var listing = codeBrowser.getProvider().getListingPanel();
+        var indexes = listing.getAddressIndexMap();
+        assertEquals("a nearby instruction leaves the function header on top",
+                indexes.getIndex(func1.getEntryPoint()), listing.getFieldPanel().getViewerPosition().getIndex());
+
+        var lineThree = textArea.modelToView2D(textArea.getLineStartOffset(3)).getBounds();
+        clickMouse(textArea, java.awt.event.MouseEvent.BUTTON1, lineThree.x + 1, lineThree.y + 1, 1, 0);
+        waitForSwing();
+        var farIndex = indexes.getIndex(space.getAddress(0x10f0));
+        assertTrue("a distant instruction is scrolled into view", listing.getFieldPanel().getVisibleLayouts()
+                .stream().anyMatch(layout -> layout.getIndex().equals(farIndex)));
+        assertNotEquals(indexes.getIndex(func1.getEntryPoint()), listing.getFieldPanel().getViewerPosition().getIndex());
+
+        runSwing(() -> {
+            try {
+                textArea.setCaretPosition(textArea.getLineStartOffset(1));
+            } catch (javax.swing.text.BadLocationException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        waitForSwing();
+        highlight = codeBrowser.getProvider().getHighlight();
+        assertTrue("moving the caret by keyboard lights its instructions", highlight.contains(space.getAddress(0x1001)));
+        assertFalse(highlight.contains(space.getAddress(0x1006)));
+        assertEquals(List.of(1), highlightedLines(textArea));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Integer> highlightedLines(RSyntaxTextArea textArea) throws Exception {
+        Object manager = invokeInstanceMethod("getLineHighlightManager", textArea);
+        if (manager == null) {
+            return List.of();
+        }
+        var lines = new java.util.ArrayList<Integer>();
+        for (Object tag : (List<Object>) invokeInstanceMethod("getCurrentLineHighlightTags", manager)) {
+            lines.add(textArea.getLineOfOffset((int) invokeInstanceMethod("getOffset", tag)));
+        }
+        java.util.Collections.sort(lines);
+        return lines;
+    }
 }

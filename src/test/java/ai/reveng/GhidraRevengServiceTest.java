@@ -10,15 +10,19 @@ import ai.reveng.toolkit.ghidra.core.services.api.TypedApiInterface.FunctionID;
 import ai.reveng.toolkit.ghidra.core.services.api.mocks.UnimplementedAPI;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisStatus;
 import ai.reveng.toolkit.ghidra.core.services.api.types.FunctionInfo;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.data.Undefined;
 import ghidra.util.task.TaskMonitor;
 import org.junit.Test;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
@@ -48,6 +52,30 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
                 statusCallsBefore, mock.statusCalls);
     }
 
+    /// A function with a chunk before its entry is mapped by entry-to-max distance, the size sent at upload.
+    @Test
+    public void testNonContiguousFunctionIsMapped() throws Exception {
+        var mock = new OfflineAfterSetupAPI() {
+            @Override
+            public List<FunctionInfo> getFunctionInfo(AnalysisID analysisID) {
+                return List.of(new FunctionInfo(new FunctionID(1), "f1", "f1_mangled", 0x1000L, 0xf));
+            }
+        };
+        var service = addMockedService(env.getTool(), mock);
+        var builder = newX64Program();
+        var func = builder.createEmptyFunction(null, "0x1000", 0x10, Undefined.getUndefinedDataType(4));
+        var program = builder.getProgram();
+        int tx = program.startTransaction("split body");
+        var body = new AddressSet(builder.addr("0x1000"), builder.addr("0x100f"));
+        body.add(builder.addr("0xf00"), builder.addr("0xf0f"));
+        func.setBody(body);
+        program.endTransaction(tx, true);
+
+        var analysed = service.analyse(program, null, TaskMonitor.DUMMY);
+
+        assertEquals(new FunctionID(1), analysed.getIDForFunction(func).orElseThrow().functionID());
+    }
+
     /// An unreadable binary must fail with the path and reason, not the SDK's raw HTTP 0 dump.
     @Test
     public void testUploadOfUnreadableFileExplainsWhy() throws Exception {
@@ -68,6 +96,41 @@ public class GhidraRevengServiceTest extends RevEngMockableHeadedIntegrationTest
         var e = assertThrows(RuntimeException.class, () -> service.upload(program));
 
         assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot read " + bin));
+    }
+
+    /// A shared project records the importer's path, missing on other machines; the bytes Ghidra stored must be uploaded.
+    @Test
+    public void testUploadUsesBytesStoredInProgramWhenFileIsMissing() throws Exception {
+        byte[] content = "original binary".getBytes();
+        var program = newX64Program().getProgram();
+        importedFrom(program, "/nonexistent/original.bin", content);
+        var uploaded = new byte[1][];
+        var service = new GhidraRevengService(new UnimplementedAPI() {
+            @Override
+            public BinaryHash upload(Path binPath) {
+                try {
+                    uploaded[0] = Files.readAllBytes(binPath);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return new BinaryHash(program.getExecutableSHA256());
+            }
+        });
+
+        service.upload(program);
+
+        assertArrayEquals(content, uploaded[0]);
+    }
+
+    @Test
+    public void testUploadOfMissingFileWithoutStoredBytesExplainsWhy() throws Exception {
+        var program = newX64Program().getProgram();
+        importedFrom(program, "/nonexistent/original.bin", null);
+        var service = new GhidraRevengService(new UnimplementedAPI());
+
+        var e = assertThrows(RuntimeException.class, () -> service.upload(program));
+
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Original binary not found at /nonexistent/original.bin"));
     }
 
     @Test

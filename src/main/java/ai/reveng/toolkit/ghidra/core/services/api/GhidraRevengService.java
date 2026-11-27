@@ -50,7 +50,6 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -325,7 +324,8 @@ public class GhidraRevengService {
             var funcSizeByDistance = func.getBody().getMaxAddress().subtract(func.getEntryPoint()) + 1;
 
             // For unclear reasons the func size is off by one
-            if (funcSizeByAddressCount - 1 != info.functionSize() && funcSizeByAddressCount != info.functionSize()) {
+            if (!sizeMatches(funcSizeByAddressCount, info.functionSize())
+                    && !sizeMatches(funcSizeByDistance, info.functionSize())) {
                 Msg.warn(this, "Function size mismatch for function %s: %d vs %d".formatted(func.getName(), funcSizeByAddressCount, info.functionSize()));
                 continue;
             }
@@ -362,6 +362,10 @@ public class GhidraRevengService {
 
         return new FunctionAssociation(analysedProgram, summary);
 
+    }
+
+    private static boolean sizeMatches(long ghidraSize, long serverSize) {
+        return ghidraSize == serverSize || ghidraSize - 1 == serverSize;
     }
 
     /// Put the synced tag back on a function at an address the analysis still maps to a server
@@ -1355,6 +1359,10 @@ public class GhidraRevengService {
         return api.search(hash);
     }
 
+    public List<String> getModels() {
+        return api.getModels();
+    }
+
     public void removeProgramAssociation(Program program){
         clearFunctionAssociation(program);
         var reaiOptions = program.getOptions(ReaiPluginPackage.REAI_OPTIONS_CATEGORY);
@@ -1419,15 +1427,13 @@ public class GhidraRevengService {
         // TODO: Check if the program is already uploaded on the server
         // But this requires a dedicated API to do cleanly
 
-        Path filePath;
+        Path extracted;
         try {
-            filePath = Path.of(program.getExecutablePath());
-        } catch (InvalidPathException e) {
-            // For windows the returned String isn't a valid input to Path.of
-            //  because they look like "/C:/vfcompat.dll"
-            // we have to drop the first "/" for the path to be valid
-            filePath = Path.of(program.getExecutablePath().substring(1));
+            extracted = OriginalBinary.extract(program).orElse(null);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not extract the binary stored in the program: " + e.getMessage(), e);
         }
+        Path filePath = extracted != null ? extracted : OriginalBinary.importPath(program);
         // The SDK only reports an unreadable file as an opaque HTTP 0, so check up front.
         try (var ignored = Files.newInputStream(filePath)) {
         } catch (IOException e) {
@@ -1448,12 +1454,22 @@ public class GhidraRevengService {
             throw new RuntimeException(e);
         } catch (ApiException e) {
             throw new RuntimeException(TypedApiImplementation.describeApiException(e), e);
+        } finally {
+            if (extracted != null) {
+                try {
+                    OriginalBinary.delete(extracted);
+                } catch (IOException e) {
+                    Msg.warn(this, "Could not delete " + extracted + ": " + e.getMessage());
+                }
+            }
         }
     }
 
     private static String unreadableBinaryMessage(Path path, IOException e) {
-        String reason = e instanceof NoSuchFileException ? "file not found"
-                : e instanceof FileSystemException fse && fse.getReason() != null ? fse.getReason()
+        if (e instanceof NoSuchFileException) {
+            return OriginalBinary.notFoundMessage(path);
+        }
+        String reason = e instanceof FileSystemException fse && fse.getReason() != null ? fse.getReason()
                 : e.getMessage();
         String message = "Cannot read %s (%s).".formatted(path, reason);
         if (Platform.CURRENT_PLATFORM.getOperatingSystem() == OperatingSystem.MAC_OS_X

@@ -31,6 +31,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.mocks.MockApi;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import docking.DockingWindowManager;
 import ghidra.framework.main.FrontEndTool;
+import ghidra.program.database.ProgramBuilder;
 import org.junit.*;
 
 import ghidra.test.TestEnv;
@@ -44,11 +45,18 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
         super();
     }
 
+    /// A program holding the bytes of the binary it was imported from, as Ghidra's loaders store them.
+    private ProgramBuilder newImportedProgram() throws Exception {
+        var builder = newX64Program();
+        importedFrom(builder.getProgram(), "/nonexistent/original.bin", "original binary".getBytes());
+        return builder;
+    }
+
     @Test
     public void testBasicOptionsDialog() throws Exception {
 
         var reService = new GhidraRevengService( new MockApi() {});
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -78,7 +86,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     @Test
     public void testSubmittedAnalysisConfig() throws Exception {
         var reService = new GhidraRevengService(new MockApi() {});
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -141,7 +149,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new CurrentUser().tier(CurrentUser.TierEnum.ENTHUSIAST);
             }
         });
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -179,7 +187,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new CurrentUser().tier(CurrentUser.TierEnum.REVERSER);
             }
         });
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -213,7 +221,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 throw new RuntimeException("tier lookup failed");
             }
         });
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -246,6 +254,21 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
     }
 
     @Test
+    public void testMissingBinaryWithoutStoredBytesBlocksAnalysis() throws Exception {
+        var reService = new GhidraRevengService(new MockApi() {});
+        var program = newX64Program().getProgram();
+        importedFrom(program, "/nonexistent/original.bin", null);
+        var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
+        SwingUtilities.invokeLater(() -> DockingWindowManager.showDialog(null, dialog));
+
+        JLabel warning = (JLabel) getInstanceField("fileSizeWarningLabel", dialog);
+        waitFor(warning::isVisible);
+        JButton okButton = (JButton) getInstanceField("okButton", dialog);
+        assertTrue(warning.getText(), warning.getText().contains("Original binary not found"));
+        assertFalse(okButton.isEnabled());
+    }
+
+    @Test
     public void testStartAnalysisBlockedUntilTierResolves() throws Exception {
         CountDownLatch release = new CountDownLatch(1);
         var reService = new GhidraRevengService(new MockApi() {
@@ -259,7 +282,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new CurrentUser().tier(CurrentUser.TierEnum.REVERSER);
             }
         });
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {
@@ -296,7 +319,7 @@ public class AnalysisOptionsDialogTest extends RevEngMockableHeadedIntegrationTe
                 return new CurrentUser().tier(CurrentUser.TierEnum.ENTHUSIAST);
             }
         });
-        var builder = newX64Program();
+        var builder = newImportedProgram();
         var program = builder.getProgram();
         var dialog = RevEngAIAnalysisOptionsDialog.withModelsFromServer(program, reService);
         SwingUtilities.invokeLater(() -> {

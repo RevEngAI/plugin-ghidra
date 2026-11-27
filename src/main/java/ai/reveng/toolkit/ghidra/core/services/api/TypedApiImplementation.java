@@ -557,6 +557,14 @@ public class TypedApiImplementation implements TypedApiInterface {
     }
 
     @Override
+    public java.util.Map<String, List<Long>> getAIDecompilationLineAttributions(FunctionID functionID) throws ApiException {
+        // GET /v3/functions/{function_id}/ai-decompilation/line-attributions
+        var data = functionsAiDecompilationApi.v3GetAiDecompilationLineAttributions(functionID.value());
+        var attributions = data == null ? null : data.getDisassemblyLineNumberToAiDecompilationLineNumbers();
+        return attributions == null ? java.util.Map.of() : attributions;
+    }
+
+    @Override
     public UpsertOverridesData applyAIDecompilationOverrides(FunctionID functionID, java.util.Map<String, String> overrides) throws ApiException {
         // PUT /v3/functions/{function_id}/ai-decompilation/overrides
         var wrapped = new java.util.LinkedHashMap<String, Token>();
@@ -770,6 +778,15 @@ public class TypedApiImplementation implements TypedApiInterface {
     public ConfigResponse getConfig() {
         try {
             return this.configApi.getConfig().getData();
+        } catch (ApiException e) {
+            throw new RuntimeException(describeApiException(e), e);
+        }
+    }
+
+    @Override
+    public List<String> getModels() {
+        try {
+            return this.configApi.v3GetModels().getModels();
         } catch (ApiException e) {
             throw new RuntimeException(describeApiException(e), e);
         }

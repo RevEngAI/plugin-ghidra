@@ -31,7 +31,7 @@ public class SdkSchemaTest {
     @Test
     public void apiClientsExposeMethodsThePluginCalls() {
         Map<String, String[]> apis = new LinkedHashMap<>();
-        apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
+        apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig", "v3GetModels"});
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AuthenticationUsersApi", new String[]{"v3ListUsers"});
@@ -65,6 +65,7 @@ public class SdkSchemaTest {
         apis.put("ai.reveng.api.FunctionsAiDecompilationApi", new String[]{
                 "createAiDecompilation", "getAiDecompilation", "getAiDecompilationStatus",
                 "v3GetAiDecompilationTokens", "v3UpsertAiDecompilationOverrides",
+                "v3GetAiDecompilationLineAttributions",
                 "getAiDecompilationSummary", "getAiDecompilationSummaryStatus",
                 "getAiDecompilationInlineComments", "getAiDecompilationInlineCommentsStatus",
                 "patchAiDecompilationInlineComment", "deleteAiDecompilationInlineComment",
@@ -165,6 +166,9 @@ public class SdkSchemaTest {
                 "getFunctionId", "getFunctionName", "getMangledName", "getFunctionVaddr",
                 "getFunctionSize");
 
+        // The supported models; analyses on any other model are hidden from the Recent Analyses table.
+        requireMethods(missing, "ai.reveng.model.GetModelsOutputBody", "getModels");
+
         requireMethods(missing, "ai.reveng.model.AnalysisBasicInfoOutputBody",
                 "getBinaryName", "getSha256Hash", "getModelName");
 
@@ -195,6 +199,8 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.RenderedToken",
                 "getValue", "getDataTypeId", "getFunctionId", "getImportedFunctionId");
         requireMethods(missing, "ai.reveng.model.Token", "getValue");
+        requireMethods(missing, "ai.reveng.model.LineAttributionsData",
+                "getDisassemblyLineNumberToAiDecompilationLineNumbers");
         requireMethods(missing, "ai.reveng.model.UpsertOverridesInputBody", "getOverrides");
 
         // The AI decompilation poll: the decompilation itself, its pipeline progress while it runs,

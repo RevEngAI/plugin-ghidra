@@ -119,6 +119,14 @@ public interface TypedApiInterface {
     }
 
     /**
+     * Each 0-based disassembly line of the function mapped to the 0-based AI decompilation lines it
+     * fed. Empty when no completed run produced a correspondence.
+     */
+    default java.util.Map<String, List<Long>> getAIDecompilationLineAttributions(FunctionID functionID) throws ApiException {
+        throw new UnsupportedOperationException("getAIDecompilationLineAttributions not implemented yet");
+    }
+
+    /**
      * Override the display names of variables/types keyed by their tokens. The server re-renders
      * the decompilation with the overrides applied.
      */
@@ -249,6 +257,11 @@ public interface TypedApiInterface {
 
     default List<String> getAssembly(FunctionID functionID) throws ApiException {
         throw new UnsupportedOperationException("getAssembly not implemented yet");
+    }
+
+    /// GET /v3/models: the names of the models the platform supports.
+    default List<String> getModels() {
+        throw new UnsupportedOperationException("getModels not implemented yet");
     }
 
     default ConfigResponse getConfig() throws ApiException {

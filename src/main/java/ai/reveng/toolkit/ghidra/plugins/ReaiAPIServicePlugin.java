@@ -6,6 +6,7 @@ import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
 import ai.reveng.toolkit.ghidra.core.services.api.types.ApiInfo;
 import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker;
 import ai.reveng.toolkit.ghidra.core.services.update.UpdateChecker.UpdateInfo;
+import ai.reveng.toolkit.ghidra.core.services.update.UpdateInstaller;
 import ai.reveng.toolkit.ghidra.core.ui.WebBrowser;
 import ai.reveng.toolkit.ghidra.core.ui.wizard.SetupWizardManager;
 import ai.reveng.toolkit.ghidra.core.ui.wizard.SetupWizardStateKey;
@@ -49,6 +50,7 @@ public class ReaiAPIServicePlugin extends Plugin {
     public static final String REAI_WIZARD_RUN_PREF = "REAISetupWizardRun";
     public static final String CHECK_FOR_UPDATES_PREF = "Check for updates";
     public static final String SKIPPED_UPDATE_PREF = "Skipped update version";
+    public static final String INSTALL_UPDATES_PREF = "Install updates automatically";
 
     public ReaiAPIServicePlugin(PluginTool tool) {
         super(tool);
@@ -56,6 +58,7 @@ public class ReaiAPIServicePlugin extends Plugin {
         tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(REAI_WIZARD_RUN_PREF, "false", null, "If the setup wizard has been run");
         tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(CHECK_FOR_UPDATES_PREF, true, null, "Check GitHub for a newer plugin release on startup");
         tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(SKIPPED_UPDATE_PREF, "", null, "Release the user chose not to be prompted about");
+        tool.getOptions(REAI_OPTIONS_CATEGORY).registerOption(INSTALL_UPDATES_PREF, true, null, "Download new releases in the background and install them when Ghidra closes");
 
         // Try to get API info from config file or tool options
         Optional<ApiInfo> apiInfoOpt = getApiInfoFromConfig()
@@ -80,12 +83,64 @@ public class ReaiAPIServicePlugin extends Plugin {
 
     private void checkForUpdates() {
         var currentVersion = UpdateChecker.currentVersion();
-        if (!tool.getOptions(REAI_OPTIONS_CATEGORY).getBoolean(CHECK_FOR_UPDATES_PREF, true)
+        var options = tool.getOptions(REAI_OPTIONS_CATEGORY);
+        if (!options.getBoolean(CHECK_FOR_UPDATES_PREF, true)
                 || currentVersion.equals(UpdateChecker.UNKNOWN_VERSION)) {
             return;
         }
+        // Empty when updates can't be installed automatically, which also discards anything staged.
+        var installed = options.getBoolean(INSTALL_UPDATES_PREF, true)
+                ? UpdateInstaller.installedExtension()
+                : Optional.<Path>empty();
+        UpdateInstaller.handleStartup(currentVersion, installed);
         UpdateChecker.check(currentVersion, Application.getApplicationVersion())
-                .thenAccept(result -> result.ifPresent(u -> Swing.runLater(() -> notifyUpdate(u))));
+                .thenAccept(result -> result.ifPresent(u -> Swing.runLater(() -> handleUpdate(u, installed))));
+    }
+
+    private void handleUpdate(UpdateInfo u, Optional<Path> installed) {
+        var skipped = u.version().equals(tool.getOptions(REAI_OPTIONS_CATEGORY).getString(SKIPPED_UPDATE_PREF, ""));
+        if (installed.isEmpty() || u.sha256() == null || skipped) {
+            notifyUpdate(u);
+            return;
+        }
+        UpdateInstaller.stage(u, installed.get()).whenComplete((ignored, error) -> Swing.runLater(() -> {
+            if (error != null) {
+                Msg.warn(this, "Could not download RevEng.AI plugin " + u.version() + ", offering a manual download", error);
+                notifyUpdate(u);
+            } else {
+                notifyUpdateReady(u);
+            }
+        }));
+    }
+
+    private void notifyUpdateReady(UpdateInfo u) {
+        if (isDisposed()) {
+            return;
+        }
+        update = Optional.of(u);
+
+        var message = "RevEng.AI plugin " + u.version() + " has been downloaded. You have " + UpdateChecker.currentVersion()
+                + ".\nIt will be installed when you close Ghidra. Restart Ghidra to start using it.";
+        var action = new ActionBuilder("Update ready", this.toString())
+                .withContext(ActionContext.class)
+                .onAction(context -> Msg.showInfo(this, tool.getToolFrame(), "RevEng.AI update ready", message))
+                .menuPath(new String[] { ReaiPluginPackage.MENU_GROUP_NAME, "Update ready (" + u.version() + ") - restart Ghidra" })
+                .menuGroup(REAI_PLUGIN_SETUP_MENU_GROUP, "050")
+                .buildAndInstall(tool);
+        tool.setStatusInfo("RevEng.AI plugin " + u.version() + " will be installed when Ghidra restarts");
+
+        if (updatePromptShown) {
+            return;
+        }
+        updatePromptShown = true;
+        int choice = OptionDialog.showOptionNoCancelDialog(tool.getToolFrame(), "RevEng.AI update ready",
+                message, "OK", "Skip this version", OptionDialog.INFORMATION_MESSAGE);
+        if (choice == OptionDialog.OPTION_TWO) {
+            UpdateInstaller.cancel();
+            tool.getOptions(REAI_OPTIONS_CATEGORY).setString(SKIPPED_UPDATE_PREF, u.version());
+            tool.removeAction(action);
+            tool.setStatusInfo("RevEng.AI plugin " + u.version() + " will not be installed");
+        }
     }
 
     private void notifyUpdate(UpdateInfo u) {

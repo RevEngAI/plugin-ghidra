@@ -2,12 +2,11 @@ package ai.reveng.toolkit.ghidra.core.services.api.datatypes;
 
 import ai.reveng.toolkit.ghidra.core.services.api.datatypes.ServerDataType.*;
 import com.google.gson.*;
-import com.google.gson.reflect.TypeToken;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * Reads the spec's {@code DataTypeEntry} JSON straight into the flattened {@link ServerDataType},
@@ -33,14 +32,9 @@ import java.util.Objects;
  */
 public final class ServerDataTypeReader implements JsonDeserializer<ServerDataType> {
 
-    private static final Type MEMBERS = new TypeToken<List<Member>>() {}.getType();
-    private static final Type VALUES = new TypeToken<List<EnumValue>>() {}.getType();
-    private static final Type PARAMETERS = new TypeToken<List<Parameter>>() {}.getType();
-
-    /// Snake-case naming binds the nested entries' fields ({@code data_type_id}, {@code is_bitfield},
-    /// {@code bit_offset}, ...) reflectively; the entry itself is read by hand below.
+    /// Everything is read by hand: Ghidra < 12.1 loads its own Gson 2.9.0 ahead of the plugin's, and
+    /// 2.9.0 cannot bind records reflectively.
     private static final Gson GSON = new GsonBuilder()
-            .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
             .registerTypeAdapter(ServerDataType.class, new ServerDataTypeReader())
             .create();
 
@@ -83,35 +77,60 @@ public final class ServerDataTypeReader implements JsonDeserializer<ServerDataTy
                 Boolean.TRUE.equals(bool(entry, "has_definition")),
                 number(entry, "source_function_id"),
                 string(entry, "created_at"),
-                definition(kind, entry.get("definition"), context));
+                definition(kind, entry.get("definition")));
     }
 
-    private static Definition definition(Kind kind, JsonElement raw, JsonDeserializationContext context) {
+    private static Definition definition(Kind kind, JsonElement raw) {
         if (raw == null || !raw.isJsonObject()) {
             return null;
         }
         JsonObject def = raw.getAsJsonObject();
         return switch (kind) {
-            case STRUCT -> new StructDefinition(list(def, "members", MEMBERS, context));
-            case UNION -> new UnionDefinition(list(def, "members", MEMBERS, context));
-            case ENUM -> new EnumDefinition(list(def, "values", VALUES, context));
+            case STRUCT -> new StructDefinition(list(def, "members", ServerDataTypeReader::member));
+            case UNION -> new UnionDefinition(list(def, "members", ServerDataTypeReader::member));
+            case ENUM -> new EnumDefinition(list(def, "values", ServerDataTypeReader::enumValue));
             case TYPEDEF -> new TypedefDefinition(number(def, "target_data_type_id"));
             case POINTER -> new PointerDefinition(number(def, "pointee_data_type_id"));
             case ARRAY -> new ArrayDefinition(number(def, "count"), number(def, "element_data_type_id"));
             case FUNCTION_DEFINITION -> new FunctionTypeDefinition(
-                    number(def, "return_data_type_id"), list(def, "parameters", PARAMETERS, context));
+                    number(def, "return_data_type_id"), list(def, "parameters", ServerDataTypeReader::parameter));
             // These kinds never carry a definition; ignore one if the server ever sends it.
             case BASE, BITFIELD, UNKNOWN -> null;
         };
     }
 
-    private static <T> List<T> list(JsonObject owner, String field, Type type, JsonDeserializationContext context) {
+    private static <T> List<T> list(JsonObject owner, String field, Function<JsonObject, T> read) {
         JsonElement array = owner.get(field);
         if (array == null || !array.isJsonArray()) {
             return List.of();
         }
-        List<T> items = context.deserialize(array, type);
-        return items == null ? List.of() : items.stream().filter(Objects::nonNull).toList();
+        List<T> items = new ArrayList<>();
+        for (JsonElement item : array.getAsJsonArray()) {
+            if (item.isJsonObject()) {
+                items.add(read.apply(item.getAsJsonObject()));
+            }
+        }
+        return List.copyOf(items);
+    }
+
+    private static Member member(JsonObject m) {
+        return new Member(string(m, "name"), primitive(m, "offset"), primitive(m, "size"),
+                number(m, "data_type_id"), Boolean.TRUE.equals(bool(m, "is_bitfield")),
+                number(m, "bit_offset"), number(m, "bit_size"));
+    }
+
+    private static EnumValue enumValue(JsonObject v) {
+        return new EnumValue(string(v, "name"), string(v, "value"));
+    }
+
+    private static Parameter parameter(JsonObject p) {
+        return new Parameter(string(p, "name"), primitive(p, "ordinal"), primitive(p, "size"),
+                number(p, "data_type_id"));
+    }
+
+    private static long primitive(JsonObject owner, String field) {
+        Long value = number(owner, field);
+        return value == null ? 0L : value;
     }
 
     private static String string(JsonObject owner, String field) {

@@ -17,11 +17,21 @@ import docking.ActionContext;
 import docking.action.DockingAction;
 import docking.action.ToolBarData;
 import docking.widgets.dialogs.InputDialog;
+import docking.widgets.fieldpanel.FieldPanel;
+import generic.theme.GColor;
 import generic.theme.GIcon;
+import ghidra.app.events.ProgramHighlightPluginEvent;
+import ghidra.app.services.CodeViewerService;
+import ghidra.app.util.viewer.listingpanel.ListingPanel;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Program;
 import ghidra.program.util.ProgramLocation;
+import ghidra.program.util.ProgramSelection;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.*;
@@ -35,6 +45,7 @@ import javax.swing.text.BadLocationException;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.math.BigInteger;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -69,6 +80,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
     /// text area back to a source line/identifier for rename and comment editing. Null while no
     /// completed decompilation is shown.
     private RenderModel currentRenderModel;
+
+    private static final Color ATTRIBUTED_LINE = new GColor("color.bg.highlight");
+
+    /// Line attributions per function, fetched once its decompilation completes. Cleared with the
+    /// decompilation on refresh and regenerate.
+    private final Map<Function, LineAttributions> attributions = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<Function> inFlightAttributions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /// Last listing location, so attributions arriving later can light the line under the cursor.
+    private ProgramLocation lastLocation;
+    /// Program the listing highlight was set on, so only a highlight of ours is cleared.
+    private Program highlightedProgram;
+    private boolean settingCode;
+    private int caretLine = -1;
 
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w*");
 
@@ -231,6 +256,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         textArea = new RSyntaxTextArea(20, 60);
         textArea.setSyntaxEditingStyle(SyntaxConstants.SYNTAX_STYLE_C);
         textArea.setEditable(false);
+        // The highlight colour marks attributed lines; a current-line tint would read as one.
+        textArea.setHighlightCurrentLine(false);
         // The view stays read-only; edits are driven through double-click (rename) and the
         // right-click context menu (comments) so they can be synced back to RevEng.AI.
         textArea.setPopupMenu(null);
@@ -256,6 +283,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
                 if (e.isPopupTrigger()) {
                     showContextMenu(e.getPoint());
                 }
+            }
+        });
+        textArea.addCaretListener(e -> {
+            if (settingCode) {
+                return;
+            }
+            try {
+                int line = textArea.getLineOfOffset(e.getDot());
+                if (line != caretLine) {
+                    caretLine = line;
+                    highlightFromDecompilation(line);
+                }
+            } catch (BadLocationException ignored) {
+                // The caret outran a re-render; the next move lights its line.
             }
         });
         sp = new RTextScrollPane(textArea);
@@ -305,6 +346,8 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         switch (status.status()) {
             case COMPLETED -> {
                 setCode(renderWithMap(status.decompilation(), status.inlineComments()));
+                loadAttributions(function);
+                highlightFromListing(lastLocation);
                 descriptionArea.setText("<html>%s</html>".formatted(status.summary() == null ? "" : status.summary()));
 
                 String predictedName = status.predictedFunctionName();
@@ -441,12 +484,20 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
 
     private void setCode(String code) {
         String text = code;
-        textArea.setText(text);
+        textArea.removeAllLineHighlights();
+        settingCode = true;
+        try {
+            textArea.setText(text);
+        } finally {
+            settingCode = false;
+        }
+        caretLine = -1;
     }
 
     private void clear() {
         this.function = null;
         this.currentRenderModel = null;
+        clearListingHighlight();
         setCode("");
         descriptionArea.setText("");
         predictedNamePanel.setVisible(false);
@@ -504,6 +555,10 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         function = newFuncLocation;
         var functionWithID = analyzedProgram.get().getIDForFunction(function);
         functionWithID.ifPresent(this::refresh);
+
+        lastLocation = loc;
+        clearListingHighlight();
+        highlightFromListing(loc);
     }
 
     /**
@@ -517,6 +572,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             return;
         }
         cache.remove(target);
+        attributions.remove(target);
         currentRenderModel = null;
         var service = tool.getService(GhidraRevengService.class);
         var analysed = service.getAnalysedProgram(target.getProgram());
@@ -540,6 +596,7 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
             return;
         }
         cache.remove(target);
+        attributions.remove(target);
         currentRenderModel = null;
         tool.getService(ReaiLoggingService.class).info("Regenerating the AI Decompilation for function %s".formatted(target.getName()));
         setCode("");
@@ -547,6 +604,171 @@ public class AIDecompilationdWindow extends ComponentProviderAdapter {
         predictedNamePanel.setVisible(false);
         startDecompilation(functionWithID.get(), true);
         contextChanged();
+    }
+
+    // --- Line attribution highlighting ---------------------------------------------------------
+
+    /// Fetch {@code target}'s line attributions in the background, once. A failure is cached as
+    /// empty, so a decompilation re-rendered on every poll does not refetch; Refresh retries.
+    private void loadAttributions(Function target) {
+        if (target == null || attributions.containsKey(target) || !inFlightAttributions.add(target)) {
+            return;
+        }
+        FunctionID functionID = resolveFunctionId(target);
+        if (functionID == null) {
+            inFlightAttributions.remove(target);
+            return;
+        }
+        var service = tool.getService(GhidraRevengService.class);
+        tool.execute(new Task("Fetch AI decompilation line attributions", false, false, false) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                LineAttributions result = LineAttributions.EMPTY;
+                try {
+                    var raw = service.getApi().getAIDecompilationLineAttributions(functionID);
+                    if (!raw.isEmpty()) {
+                        result = LineAttributions.of(raw, service.getApi().getAssembly(functionID));
+                    }
+                } catch (Exception e) {
+                    Msg.warn(AIDecompilationdWindow.this,
+                            "Failed to fetch line attributions for %s: %s".formatted(target.getName(), e.getMessage()));
+                } finally {
+                    attributions.put(target, result);
+                    inFlightAttributions.remove(target);
+                }
+                SwingUtilities.invokeLater(() -> {
+                    if (isCurrentFunction(target)) {
+                        highlightFromListing(lastLocation);
+                    }
+                });
+            }
+        }, 0);
+    }
+
+    /// Light the decompilation lines the instruction at {@code loc} fed, and bring the first into view.
+    private void highlightFromListing(ProgramLocation loc) {
+        textArea.removeAllLineHighlights();
+        caretLine = -1;
+        RenderModel model = currentRenderModel;
+        Function target = this.function;
+        if (loc == null || model == null || target == null || !target.getBody().contains(loc.getAddress())) {
+            return;
+        }
+        LineAttributions lines = attributions.get(target);
+        if (lines == null) {
+            return;
+        }
+        CodeUnit codeUnit = loc.getProgram().getListing().getCodeUnitContaining(loc.getAddress());
+        Address instruction = codeUnit == null ? loc.getAddress() : codeUnit.getMinAddress();
+        var decompilationLines = lines.decompilationLinesFor(instruction.getOffset());
+        int first = highlightDecompilationLines(model, decompilationLines);
+        if (first >= 0) {
+            try {
+                var view = textArea.modelToView2D(textArea.getLineStartOffset(first));
+                if (view != null) {
+                    textArea.scrollRectToVisible(view.getBounds());
+                }
+            } catch (BadLocationException e) {
+                // The line went away with a re-render; nothing to scroll to.
+            }
+        }
+    }
+
+    /// Light the caret's decompilation line and the instructions that fed it, and scroll the listing
+    /// to them. The cursor stays put, so every attributed instruction shows the same colour.
+    /// A line the model attributed nothing to lights nothing.
+    private void highlightFromDecompilation(int displayLine) {
+        textArea.removeAllLineHighlights();
+        clearListingHighlight();
+        RenderModel model = currentRenderModel;
+        Function target = this.function;
+        LineAttributions lines = target == null ? null : attributions.get(target);
+        if (model == null || lines == null) {
+            return;
+        }
+        Integer sourceLine = model.sourceLine(displayLine);
+        if (sourceLine == null) {
+            return;
+        }
+        var addresses = lines.addressesFor(sourceLine - 1);
+        if (addresses.isEmpty()) {
+            return;
+        }
+        highlightDecompilationLines(model, List.of(sourceLine - 1));
+
+        Program program = target.getProgram();
+        var space = program.getAddressFactory().getDefaultAddressSpace();
+        var set = new AddressSet();
+        for (long offset : addresses) {
+            Address address = space.getAddress(offset);
+            CodeUnit codeUnit = program.getListing().getCodeUnitAt(address);
+            if (codeUnit == null) {
+                set.add(address);
+            } else {
+                set.add(codeUnit.getMinAddress(), codeUnit.getMaxAddress());
+            }
+        }
+        highlightedProgram = program;
+        tool.firePluginEvent(new ProgramHighlightPluginEvent(getName(), new ProgramSelection(set), program));
+
+        CodeViewerService codeViewer = tool.getService(CodeViewerService.class);
+        if (codeViewer != null) {
+            scrollListing(codeViewer.getListingPanel(), program, target.getEntryPoint(), set.getMinAddress());
+        }
+    }
+
+    /// Put the function's top at the top of the listing when {@code first} still fits on screen
+    /// below it; otherwise scroll to {@code first}, so the highlight is never off screen.
+    private static void scrollListing(ListingPanel listing, Program program, Address top, Address first) {
+        var indexes = listing.getAddressIndexMap();
+        BigInteger topIndex = indexes.getIndex(top);
+        BigInteger firstIndex = indexes.getIndex(first);
+        FieldPanel fieldPanel = listing.getFieldPanel();
+        if (topIndex != null && firstIndex != null && topIndex.compareTo(firstIndex) <= 0) {
+            int available = fieldPanel.getVisibleRect().height;
+            int needed = 0;
+            for (BigInteger i = topIndex; i != null && i.compareTo(firstIndex) <= 0 && needed <= available;
+                 i = fieldPanel.getLayoutModel().getIndexAfter(i)) {
+                needed += fieldPanel.getHeight(i);
+            }
+            if (needed <= available) {
+                fieldPanel.setViewerPosition(topIndex, 0, 0);
+                return;
+            }
+        }
+        listing.scrollTo(new ProgramLocation(program, first));
+    }
+
+    /// Light every code line rendered from one of the 0-based {@code decompilationLines}.
+    /// @return the first display line lit, or -1
+    private int highlightDecompilationLines(RenderModel model, List<Integer> decompilationLines) {
+        int first = -1;
+        if (decompilationLines.isEmpty()) {
+            return first;
+        }
+        for (int displayLine = 0; displayLine < model.displaySource.size(); displayLine++) {
+            if (model.isCodeLine(displayLine) && decompilationLines.contains(model.displaySource.get(displayLine) - 1)) {
+                try {
+                    textArea.addLineHighlight(displayLine, ATTRIBUTED_LINE);
+                } catch (BadLocationException e) {
+                    continue;
+                }
+                if (first < 0) {
+                    first = displayLine;
+                }
+            }
+        }
+        return first;
+    }
+
+    private void clearListingHighlight() {
+        if (highlightedProgram == null) {
+            return;
+        }
+        if (!highlightedProgram.isClosed()) {
+            tool.firePluginEvent(new ProgramHighlightPluginEvent(getName(), new ProgramSelection(), highlightedProgram));
+        }
+        highlightedProgram = null;
     }
 
     // --- Rename / comment editing -------------------------------------------------------------

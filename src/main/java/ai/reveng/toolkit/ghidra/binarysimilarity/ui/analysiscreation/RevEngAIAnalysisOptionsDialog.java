@@ -5,6 +5,7 @@ import ai.reveng.model.CurrentUser;
 import ai.reveng.toolkit.ghidra.binarysimilarity.ui.dialog.RevEngDialogComponentProvider;
 import ai.reveng.toolkit.ghidra.core.services.api.AnalysisOptionsBuilder;
 import ai.reveng.toolkit.ghidra.core.services.api.GhidraRevengService;
+import ai.reveng.toolkit.ghidra.core.services.api.OriginalBinary;
 import ai.reveng.toolkit.ghidra.core.services.api.types.AnalysisScope;
 import ai.reveng.toolkit.ghidra.plugins.ReaiPluginPackage;
 import docking.widgets.table.GTable;
@@ -23,9 +24,8 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -464,22 +464,24 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
     private void handleConfigResponse(@Nullable ConfigResponse config) {
         loadingLabel.setVisible(false);
-
-        if (config == null) {
-            // Config fetch failed, allow upload attempt (server will reject if too large)
-            fileSizeOk = true;
-            updateOkButtonState();
-            return;
-        }
-
-        long maxFileSizeBytes = config.getMaxFileSizeBytes().longValue();
-        validateFileSize(maxFileSizeBytes);
+        // Without a config, allow upload attempt (server will reject if too large)
+        validateFileSize(config == null ? Long.MAX_VALUE : config.getMaxFileSizeBytes().longValue());
     }
 
     private void validateFileSize(long maxFileSizeBytes) {
-        long fileSize = getProgramFileSize();
-        if (fileSize < 0) {
+        long fileSize;
+        try {
+            fileSize = OriginalBinary.size(program);
+        } catch (NoSuchFileException e) {
+            fileSizeWarningLabel.setText("<html><center>%s</center></html>"
+                    .formatted(OriginalBinary.notFoundMessage(OriginalBinary.importPath(program))));
+            fileSizeWarningLabel.setVisible(true);
+            fileSizeOk = false;
+            updateOkButtonState();
+            return;
+        } catch (IOException | InvalidPathException e) {
             // Could not determine file size, allow upload attempt
+            Msg.warn(this, "Could not determine file size: " + e.getMessage());
             fileSizeOk = true;
             updateOkButtonState();
             return;
@@ -502,22 +504,6 @@ public class RevEngAIAnalysisOptionsDialog extends RevEngDialogComponentProvider
 
     private void updateOkButtonState() {
         okButton.setEnabled(fileSizeOk && tierResolved);
-    }
-
-    private long getProgramFileSize() {
-        try {
-            Path filePath;
-            try {
-                filePath = Path.of(program.getExecutablePath());
-            } catch (InvalidPathException e) {
-                // Windows paths may have leading slash like "/C:/file.dll"
-                filePath = Path.of(program.getExecutablePath().substring(1));
-            }
-            return Files.size(filePath);
-        } catch (IOException | InvalidPathException e) {
-            Msg.warn(this, "Could not determine file size: " + e.getMessage());
-            return -1;
-        }
     }
 
     private static String formatBytes(long bytes) {

@@ -101,7 +101,17 @@ tasks.register('pruneStaleJars', Delete) {
 }
 copyDependencies.dependsOn pruneStaleJars
 
+// Ghidra < 12.1 loads its own Gson 2.9.0 ahead of the plugin's. Tests rerun the data-type reader
+// against it to catch code that only works on newer Gson (e.g. reflective record binding).
+configurations {
+	ghidraGson
+}
+dependencies {
+	ghidraGson 'com.google.code.gson:gson:2.9.0'
+}
+
 test {
+    systemProperty 'reveng.test.gson29', configurations.ghidraGson.singleFile.path
 	maxParallelForks = 3
 	useJUnitPlatform()
     jvmArgs '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
