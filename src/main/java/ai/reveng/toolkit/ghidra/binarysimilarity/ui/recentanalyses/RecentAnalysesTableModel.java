@@ -22,8 +22,6 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
     private final TypedApiInterface.BinaryHash hash;
     private final Address imageBase;
 
-    private static final String SUPPORTED_MODEL = "binnet-1.0";
-
     public RecentAnalysesTableModel(PluginTool tool, TypedApiInterface.BinaryHash hash, Address imageBase) {
         super("Recent Analyses Table Model", tool);
         this.hash = hash;
@@ -35,6 +33,7 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
         var revEngAIService = serviceProvider.getService(GhidraRevengService.class);
         var loggingService = serviceProvider.getService(ReaiLoggingService.class);
 
+        var supportedModels = revEngAIService.getModels();
         // The search endpoint only returns analyses we have access to so there is no need to filter them.
         revEngAIService.searchForHash(hash).forEach(
                 result -> {
@@ -44,7 +43,7 @@ public class RecentAnalysesTableModel extends ThreadedTableModelStub<AnalysisRec
                         return;
                     }
 
-                    if (!SUPPORTED_MODEL.equals(result.getModelName())) {
+                    if (!supportedModels.contains(result.getModelName())) {
                         loggingService.info("[RevEng] Skipping analysis for " + result.getBinaryId() + " as model is " + result.getModelName());
                         return;
                     }

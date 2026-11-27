@@ -197,14 +197,19 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     }
 
     @Test
-    public void testLegacyModelAnalysesAreNotListed() throws Exception {
+    public void testUnsupportedModelAnalysesAreNotListed() throws Exception {
         var tool = env.getTool();
         addMockedService(tool, new RecentAnalysesMockApi() {
             @Override
+            public List<String> getModels() {
+                return List.of("binnet-1.1");
+            }
+
+            @Override
             public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
-                var current = super.search(hash).get(0);
-                var legacy = super.search(hash).get(0).analysisId(1L).modelName("binnet-0.5");
-                return List.of(legacy, current);
+                var supported = super.search(hash).get(0).modelName("binnet-1.1");
+                var unsupported = super.search(hash).get(0).analysisId(1L);
+                return List.of(unsupported, supported);
             }
         });
 
@@ -267,6 +272,11 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
         var tool = env.getTool();
         addMockedService(tool, new UnimplementedAPI() {
             @Override
+            public List<String> getModels() {
+                return List.of("binnet-1.0");
+            }
+
+            @Override
             public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {
                 return List.of();
             }
@@ -297,6 +307,11 @@ public class RecentAnalysisDialogTest extends RevEngMockableHeadedIntegrationTes
     static class RecentAnalysesMockApi extends UnimplementedAPI {
         static final int MOCK_ANALYSIS_ID = 99999;
         static final int MOCK_BINARY_ID = 88888;
+
+        @Override
+        public List<String> getModels() {
+            return List.of("binnet-1.0");
+        }
 
         @Override
         public List<AnalysisRecordBody> search(TypedApiInterface.BinaryHash hash) {

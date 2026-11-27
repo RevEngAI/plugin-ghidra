@@ -31,7 +31,7 @@ public class SdkSchemaTest {
     @Test
     public void apiClientsExposeMethodsThePluginCalls() {
         Map<String, String[]> apis = new LinkedHashMap<>();
-        apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig"});
+        apis.put("ai.reveng.api.ConfigApi", new String[]{"getConfig", "v3GetModels"});
         apis.put("ai.reveng.api.SearchApi", new String[]{"searchBinaries"});
         apis.put("ai.reveng.api.CollectionsApi", new String[]{"v3ListCollections"});
         apis.put("ai.reveng.api.AuthenticationUsersApi", new String[]{"v3ListUsers"});
@@ -164,6 +164,9 @@ public class SdkSchemaTest {
         requireMethods(missing, "ai.reveng.model.AnalysisFunctionEntry",
                 "getFunctionId", "getFunctionName", "getMangledName", "getFunctionVaddr",
                 "getFunctionSize");
+
+        // The supported models; analyses on any other model are hidden from the Recent Analyses table.
+        requireMethods(missing, "ai.reveng.model.GetModelsOutputBody", "getModels");
 
         requireMethods(missing, "ai.reveng.model.AnalysisBasicInfoOutputBody",
                 "getBinaryName", "getSha256Hash", "getModelName");

@@ -259,6 +259,11 @@ public interface TypedApiInterface {
         throw new UnsupportedOperationException("getAssembly not implemented yet");
     }
 
+    /// GET /v3/models: the names of the models the platform supports.
+    default List<String> getModels() {
+        throw new UnsupportedOperationException("getModels not implemented yet");
+    }
+
     default ConfigResponse getConfig() throws ApiException {
         throw new UnsupportedOperationException("getConfig not implemented yet");
     }
